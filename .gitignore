@@ -1,0 +1,7 @@
+.env
+.env.local
+screener_data.json
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store

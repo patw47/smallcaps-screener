@@ -1,0 +1,176 @@
+"""
+SmallCaps Screener — API FastAPI
+Expose les données du screener au dashboard React.
+Tous les endpoints sont préfixés /api/*.
+"""
+
+import json
+import asyncio
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from screener_backend import run_scan, scan_state, FILTERS, OUTPUT_FILE
+
+app = FastAPI(title="SmallCaps Screener API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------------------------------------------------------------------------
+# État interne de l'API
+# ---------------------------------------------------------------------------
+_custom_watchlist: list[str] | None = None  # None = découverte dynamique
+_last_scan_time: datetime | None = None
+_cached_data: dict | None = None
+_scan_lock = asyncio.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _load_json_cache() -> dict | None:
+    if not OUTPUT_FILE.exists():
+        return None
+    try:
+        data = json.loads(OUTPUT_FILE.read_text())
+        scanned_at = datetime.fromisoformat(data["scanned_at"])
+        age = datetime.now(tz=timezone.utc) - scanned_at
+        if age < timedelta(minutes=FILTERS["cache_minutes"]):
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def _run_scan_sync():
+    global _cached_data, _last_scan_time
+    result = run_scan(_custom_watchlist)  # None → découverte dynamique
+    _cached_data = result
+    _last_scan_time = datetime.now(tz=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@app.get("/api/scan", summary="Lance le scan (cache 30 min) et retourne les données")
+async def get_scan():
+    global _cached_data
+
+    # Chemin rapide : cache valide, pas besoin du lock
+    cached = _load_json_cache()
+    if cached:
+        return cached
+    if _cached_data:
+        age = datetime.now(tz=timezone.utc) - datetime.fromisoformat(_cached_data["scanned_at"])
+        if age < timedelta(minutes=FILTERS["cache_minutes"]):
+            return _cached_data
+
+    # Un seul scan à la fois — les requêtes concurrentes attendent le lock
+    # puis retrouvent le cache rempli par la première
+    async with _scan_lock:
+        cached = _load_json_cache()
+        if cached:
+            return cached
+        if _cached_data:
+            age = datetime.now(tz=timezone.utc) - datetime.fromisoformat(_cached_data["scanned_at"])
+            if age < timedelta(minutes=FILTERS["cache_minutes"]):
+                return _cached_data
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _run_scan_sync)
+
+    if _cached_data:
+        return _cached_data
+
+    raise HTTPException(500, detail="Le scan n'a produit aucun résultat")
+
+
+@app.get("/api/scan/status", summary="Statut du scan en cours")
+async def get_scan_status():
+    return {
+        "scanning": scan_state["scanning"],
+        "progress": scan_state["progress"],
+        "total": scan_state["total"],
+        "last_scan": _last_scan_time.isoformat() if _last_scan_time else None,
+    }
+
+
+@app.post("/api/scan/force", summary="Force un nouveau scan (ignore le cache)")
+async def force_scan():
+    if scan_state["scanning"]:
+        raise HTTPException(409, detail="Un scan est déjà en cours")
+
+    if OUTPUT_FILE.exists():
+        OUTPUT_FILE.unlink()
+
+    global _cached_data
+    _cached_data = None
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_scan_sync)
+
+    return {"message": "Nouveau scan démarré en arrière-plan"}
+
+
+@app.get("/api/stock/{ticker}", summary="Données d'un ticker depuis le dernier scan")
+async def get_stock(ticker: str):
+    ticker = ticker.upper()
+    data = _cached_data or _load_json_cache()
+    if not data:
+        raise HTTPException(404, detail="Aucune donnée disponible. Lancez /api/scan d'abord.")
+
+    for stock in data.get("stocks", []):
+        if stock["ticker"] == ticker:
+            return stock
+
+    raise HTTPException(404, detail=f"Ticker {ticker} non trouvé dans les résultats du dernier scan")
+
+
+@app.get("/api/watchlist", summary="Retourne la watchlist personnalisée courante")
+async def get_watchlist():
+    return {
+        "mode": "custom" if _custom_watchlist else "dynamic",
+        "tickers": _custom_watchlist,
+        "count": len(_custom_watchlist) if _custom_watchlist else None,
+    }
+
+
+class WatchlistPayload(BaseModel):
+    tickers: list[str]
+
+
+@app.post("/api/watchlist", summary="Définit une watchlist personnalisée (remplace la découverte dynamique)")
+async def set_watchlist(payload: WatchlistPayload):
+    global _custom_watchlist
+    if not payload.tickers:
+        raise HTTPException(400, detail="La liste de tickers ne peut pas être vide")
+
+    _custom_watchlist = list(dict.fromkeys(t.upper().strip() for t in payload.tickers))
+
+    return {
+        "message": f"Watchlist personnalisée définie ({len(_custom_watchlist)} tickers)",
+        "tickers": _custom_watchlist,
+    }
+
+
+@app.delete("/api/watchlist", summary="Supprime la watchlist personnalisée (retour à la découverte dynamique)")
+async def reset_watchlist():
+    global _custom_watchlist
+    _custom_watchlist = None
+    return {"message": "Retour à la découverte dynamique"}
+
+
+@app.get("/api/health", summary="Health check")
+async def health():
+    return {"status": "ok", "timestamp": datetime.now(tz=timezone.utc).isoformat()}
