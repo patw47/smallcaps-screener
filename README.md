@@ -1,76 +1,85 @@
 # SmallCaps Screener
 
-Screener automatique de small caps US. Découverte dynamique des candidats via NASDAQ API + Finviz, scoring multi-critères, analyse IA par action via Claude.
+SmallCaps Screener is a Dockerized dashboard for discovering and ranking US small-cap stocks. It discovers candidates from NASDAQ and Finviz, enriches them with `yfinance`, applies hard filters, computes a setup score, and exposes the results through a FastAPI backend consumed by a React/Vite frontend.
+
+The interface is written in French and targets quick visual review of small-cap setups before a potential rally.
+
+## Documentation
+
+Complete project documentation is available in:
+
+- [Architecture](docs/architecture.md)
+- [Backend screener](docs/backend.md)
+- [API reference](docs/api.md)
+- [Frontend](docs/frontend.md)
+- [Deployment and operations](docs/deployment.md)
 
 ## Stack
 
-- **Backend** : Python 3.11, FastAPI, yfinance, BeautifulSoup
-- **Frontend** : React + Vite
-- **Orchestration** : Docker Compose
+- Backend: Python 3.11, FastAPI, yfinance, pandas, requests, BeautifulSoup
+- Frontend: React 18, Vite 5
+- Runtime: Docker Compose
+- Data cache: Docker volume mounted at `/app/data`
 
-## Prérequis
+## Quick Start
 
-Docker Desktop — c'est tout.
-
-## Lancement
+Prerequisite: Docker Desktop or Docker Engine with Compose.
 
 ```bash
 cp .env.example .env
-# Éditer .env et renseigner ANTHROPIC_API_KEY
+# Edit .env and set ANTHROPIC_API_KEY if Claude analysis is needed.
 docker-compose up --build
 ```
 
-- **Frontend** : http://localhost:5173
-- **API** : http://localhost:8000/api/scan
-- **Docs API** : http://localhost:8000/docs
+Services:
 
-Le premier lancement déclenche automatiquement un scan (~2–3 min pour 300 tickers). Les résultats sont mis en cache 30 minutes dans un volume Docker persistant.
+- Frontend: http://localhost:5173
+- API scan endpoint: http://localhost:8000/api/scan
+- FastAPI docs: http://localhost:8000/docs
+- Health check: http://localhost:8000/api/health
 
-## Filtres appliqués
+The first `/api/scan` request starts a market scan. With the default cap of 300 tickers, the scan usually takes a few minutes and writes cached results to the Docker volume for 30 minutes.
 
-**Filtres durs** (élimination immédiate) :
-
-| Critère | Seuil |
-|---------|-------|
-| Bourse | NMS, NYQ, NGM, NCM |
-| Prix | $2 – $50 |
-| Market cap | $50M – $2 000M |
-| Historique | ≥ 50 jours |
-| Perf 1 mois | -35% à +25% |
-
-**Scoring** (0–10, pas d'élimination) : ratio de volume, compression de range, consolidation 1 mois, insider buying, bilan cash, croissance revenus, IPO récente, short interest élevé.
-
-## Analyse IA
-
-Chaque fiche dispose d'un bouton "Analyser" qui interroge Claude (claude-sonnet-4-6) pour obtenir :
-- Pourquoi c'est intéressant (ou pas)
-- Niveau à surveiller
-- Risque principal
-- Verdict en une phrase
-
-Nécessite `ANTHROPIC_API_KEY` dans `.env`.
-
-## Commandes utiles
+## Useful Commands
 
 ```bash
-# Relancer un scan manuellement
-docker-compose exec backend python screener_backend.py
+# Start all services
+docker-compose up --build
 
-# Forcer un nouveau scan via l'API
+# Force a new scan through the API
 curl -X POST http://localhost:8000/api/scan/force
 
-# Logs backend en temps réel
+# Run the screener directly inside the backend container
+docker-compose exec backend python screener_backend.py
+
+# Follow backend logs
 docker-compose logs -f backend
 
-# Arrêt
+# Stop services
 docker-compose down
 
-# Arrêt + suppression du cache
+# Stop services and remove cached scan data
 docker-compose down -v
 ```
 
-## Variables d'environnement
+## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Clé API Anthropic (requise pour l'analyse IA) |
+| Variable | Used by | Required | Description |
+| --- | --- | --- | --- |
+| `ANTHROPIC_API_KEY` | Frontend container as `VITE_ANTHROPIC_API_KEY` | Only for AI analysis | Anthropic API key used by the browser-side Claude analysis button. |
+
+## Main Data Flow
+
+1. The frontend loads and calls `GET /api/scan`.
+2. The backend returns a fresh JSON cache if one exists.
+3. If the cache is stale or absent, the backend runs a scan.
+4. The screener discovers tickers from NASDAQ and Finviz unless a custom watchlist is configured.
+5. Each ticker is fetched from `yfinance`, filtered, scored, and added to the result set if it passes.
+6. Results are written to `/app/data/screener_data.json`.
+7. The frontend normalizes the result shape, applies local sector and score filters, and renders stock cards.
+
+## Important Notes
+
+- This project is a screening tool, not financial advice.
+- Market data is sourced from public endpoints and `yfinance`; availability and field quality can vary by ticker.
+- Claude analysis currently runs directly from the browser using `anthropic-dangerous-direct-browser-access`. This is convenient for local use, but it exposes the API key to the browser runtime. For production, proxy AI requests through the backend.
