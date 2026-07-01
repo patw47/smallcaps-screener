@@ -28,7 +28,7 @@ NASDAQ + Finviz  →  dedupe  →  random.shuffle  →  sample 800   (resampled 
     │     hard filters:  market cap 50M–2B · exchange
     │     fundamentals:  insider · cash/debt · revenue growth · float · short interest
     │
-    ▼  decile 0–10 score (percentile of factors)  →  sorted list  →  data/screener_data.json
+    ▼  0–10 score (see scoring modes)  →  sorted list  →  data/screener_data.json
 ```
 
 **Why scoring instead of hard filters?** Requiring "already strong" signals (high
@@ -39,10 +39,16 @@ candidates to the top.
 
 ## Scoring model
 
-Each signal is a **continuous factor**, percentile-ranked across the candidates; the
-score is a weighted average of those percentiles, shown as a **decile 0–10** (best of the
-day's pool = 10). It's a *relative* score — "how good among today's candidates". All
-weights live in `FILTERS["score_weights"]` and are tunable.
+The scoring approach is **not settled** — it is a config flag (`FILTERS["scoring_mode"]`),
+to be decided by a larger backtest:
+
+- **`binary` (default)** — the original additive "checkbox" score. Known and conservative,
+  but caps around 8 (some signals are near-unreachable).
+- **`continuous`** — each signal is a continuous factor, percentile-ranked across the
+  candidates, combined and shown as a **decile 0–10** ("how good among today's candidates").
+  Fixes the scale; edge not yet validated.
+
+Both modes use the same weights below (`FILTERS["score_weights"]`, tunable).
 
 **Technical factors** (computed in Pass A; also used to rank which survivors get enriched):
 

@@ -37,6 +37,7 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `high_window` / `near_high_pct` | `252` / `0.75` | 52-week high position (informational). |
 | `float_max` | `50_000_000` | Float < 50M shares → `low_float` (score bonus). |
 | `insider_pct_min` / `revenue_growth_min` / `short_interest_high` | `5.0` / `0.10` / `15.0` | Fundamental scoring thresholds. |
+| `scoring_mode` | `binary` | `binary` (default, ~0–8) or `continuous` (decile 0–10) — see Scoring. |
 | `score_weights` | dict | Weight of every score signal (tunable for backtesting). |
 | `allowed_exchanges` | `NMS`,`NYQ`,`NGM`,`NCM` | Accepted exchange codes (Pass B). |
 | `max_tickers` | `800` | Per-scan universe sample, reshuffled each scan. |
@@ -65,14 +66,21 @@ RS, price > MA50, and near-high are **not** hard filters — they are scoring si
 
 Signals computed: `accumulation` (OBV rising), `compressed` (ATR), `near_pivot` / `pct_recent_high` (recent base), `low_ext` (near MA50), `rs_turning` / `rs_strength` / `rs_signal`, `price_above_ma50`, `pct_52w_high` / `near_high` (informational), `dollar_volume`, `vol_ratio`, `change_1d` / `change_1m`.
 
-## Scoring — continuous factor percentiles (`_factor_composite` / `_score_candidates`)
+## Scoring — two modes (`FILTERS["scoring_mode"]`)
 
-Standard quant factor scoring, **not** binary thresholds (a binary "compression yes/no"
-that fires on ~1/146 names carries no ranking information and caps the scale). Each factor
-is a **continuous** value; it is **percentile-ranked across the candidate set** (`_rank_pct`);
-the score is a **weighted average of percentiles**, then mapped to a **decile 0–10** so the
-best of the day's pool = 10 (a percentile average alone clusters at the middle). Weights
-live in `FILTERS["score_weights"]`.
+The scoring approach is **not settled** — it is a config flag, and a larger rolling
+backtest is meant to decide it (the current small-sample backtest cannot). Both modes
+use the same weights (`FILTERS["score_weights"]`) and are computed in `_score_candidates`.
+
+- **`"binary"` (default)** — the original "checkbox" score (`_binary_score`): each signal
+  adds fixed points, normalized to 0–10. Known and conservative, but **caps around 8**
+  (some points are near-unreachable, e.g. ATR compression fires on ~1/146 names).
+- **`"continuous"`** — standard quant factor scoring: each factor is a **continuous** value,
+  **percentile-ranked across the candidate set** (`_rank_pct`), combined into a weighted
+  average (`_factor_composite`), then mapped to a **decile 0–10** so the best of the day's
+  pool = 10. Fixes the scale and loses no information, but its edge is **not yet validated**.
+
+Selection of which survivors get enriched follows the same mode (`_select_scores`).
 
 **Technical factors** (Pass A; `TECH_FACTORS`; used to rank which survivors get enriched):
 
@@ -87,14 +95,15 @@ live in `FILTERS["score_weights"]`.
 **Fundamental factors** (Pass B; `FUND_FACTORS`): `insider_pct` (2), `cash_bin` (1),
 `revenue_growth` (1), `float_shares` (1, lower better), `short_interest_pct` (1).
 
-Selection uses the **technical** composite (`_select_scores`) to pick the top `enrich_max`
-survivors for `.info`. The final displayed `score` uses technical + fundamental factors,
-computed **cross-sectionally over the candidate set** in `run_scan` (a percentile needs the
-population). Candidates are sorted by `(score, rs_strength)`.
+The two factor tables above are the **continuous-mode** factors. In continuous mode the
+final `score` is computed **cross-sectionally over the candidate set** in `run_scan` (a
+percentile needs the population). In **binary mode** (the default) the score instead comes
+from `_binary_score` (`_tech_rules` + `_fundamental_rules`, the boolean signals). Selection
+(`_select_scores`) follows the active mode. Candidates are sorted by `(score, rs_strength)`.
 
-> The old binary score (`_binary_score` / `_binary_price_score`, `_tech_rules` /
-> `_fundamental_rules`) is kept only so the backtest can compare it against the continuous
-> one. At small survivor counts the two are statistically indistinguishable.
+> The backtest (`backend/backtest.py`) scores the same survivors **both ways** and prints
+> the two quartile tables side by side, so the mode can be chosen on evidence once the
+> sample is large enough. At small survivor counts the two are statistically indistinguishable.
 
 ## Pass B — fundamentals (`enrich_ticker`)
 

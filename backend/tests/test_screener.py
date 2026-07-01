@@ -17,7 +17,7 @@ from screener_backend import (
     _sma, _ma_rising, _median_dollar_volume, _rs_metrics,
     _atr, _obv_rising, _pct_of_high, _accum_fraction,
     _rank_pct, _factor_composite, TECH_FACTORS,
-    _build_positives_flags, analyze_prices,
+    _score_candidates, _build_positives_flags, analyze_prices,
 )
 
 
@@ -154,6 +154,34 @@ def test_factor_composite_best_item_tops():
     comp = _factor_composite(items, TECH_FACTORS)
     assert comp[1] == max(comp)               # le meilleur sur tout → composite max
     assert comp[1] > comp[0]
+
+
+def test_scoring_mode_switch():
+    # le fort > le faible dans les deux modes ; en continu, décile sur 2 items → 10 et 0
+    strong = {
+        "accumulation": True, "compressed": True, "near_pivot": True, "low_ext": True,
+        "rs_turning": True, "price_above_ma50": True, "insider_buying": True,
+        "cash_positive": True, "revenue_growth": 0.5, "low_float": True, "short_interest_pct": 20.0,
+        "f_accum": 0.9, "f_atr_ratio": 0.4, "f_pct_recent": 0.99, "f_ext": 0.01, "f_rs": 0.5,
+        "cash_bin": 1.0, "insider_pct": 30.0, "float_shares": 1e6,
+    }
+    weak = {
+        "f_accum": 0.1, "f_atr_ratio": 0.9, "f_pct_recent": 0.4, "f_ext": 0.3, "f_rs": 0.0,
+        "cash_bin": None, "insider_pct": 0.0, "float_shares": 9e8,
+    }
+    old = FILTERS["scoring_mode"]
+    try:
+        FILTERS["scoring_mode"] = "binary"
+        c = [dict(strong), dict(weak)]
+        _score_candidates(c)
+        assert c[0]["score"] > c[1]["score"]
+
+        FILTERS["scoring_mode"] = "continuous"
+        c2 = [dict(strong), dict(weak)]
+        _score_candidates(c2)
+        assert c2[0]["score"] == 10 and c2[1]["score"] == 0   # rang décile sur 2 items
+    finally:
+        FILTERS["scoring_mode"] = old
 
 
 # ---------------------------------------------------------------------------

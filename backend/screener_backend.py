@@ -67,7 +67,11 @@ FILTERS = {
     "pivot_window": 50,            # plus-haut de la base RÉCENTE (~10 sem.) — le point de cassure
     "near_pivot_pct": 0.85,        # prix ≥ 85% du plus-haut récent → près du pivot de breakout
     "low_ext_pct": 0.12,           # prix ≤ MA50 × 1.12 → peu étiré (encore tôt)
-    # --- Poids de scoring (tous configurables pour le backtest) ---
+    # --- Mode de scoring : NON tranché tant que le backtest robuste n'a pas décidé ---
+    # "binary"     : ancien score « cases à cocher » (connu/conservateur ; plafonne ~8)
+    # "continuous" : facteurs continus → percentile → décile 0-10 (échelle pleine, non validé)
+    "scoring_mode": "binary",
+    # --- Poids de scoring (utilisés par les deux modes ; configurables pour le backtest) ---
     "score_weights": {
         "accumulation": 4,  # OBV↑ : l'argent rentre (LE meilleur signal pré-explosion)
         "compression": 3,   # base serrée : ressort armé
@@ -442,22 +446,30 @@ def _factor_composite(items: list[dict], factors: list[tuple]) -> list[float]:
 
 
 def _select_scores(signals_list: list[dict]) -> list[float]:
-    """Composite technique des survivants — pour choisir qui enrichir (ordre seul)."""
-    return _factor_composite(signals_list, TECH_FACTORS)
+    """
+    Score technique des survivants pour choisir qui enrichir (ordre seul).
+    Suit FILTERS['scoring_mode'] pour rester cohérent avec le score final.
+    """
+    if FILTERS["scoring_mode"] == "continuous":
+        return _factor_composite(signals_list, TECH_FACTORS)
+    return [float(_binary_price_score(s)) for s in signals_list]
 
 
 def _score_candidates(candidates: list[dict]) -> None:
     """
-    Écrit `score` (0-10) dans chaque candidat, en place.
-    La moyenne pondérée de percentiles se tasse vers le milieu (personne n'est top sur TOUS
-    les facteurs). On l'étale donc en RANG DÉCILE : le meilleur du vivier du jour = 10, le
-    moins bon = 0. Sémantique honnête : « à quel point cette pépite est bonne parmi celles
-    dispo aujourd'hui ».
+    Écrit `score` (0-10) dans chaque candidat, en place, selon FILTERS['scoring_mode'] :
+      - "binary"     : ancien score « cases à cocher » (par ticker ; plafonne ~8).
+      - "continuous" : moyenne pondérée de percentiles de facteurs continus, étalée en RANG
+        DÉCILE (le meilleur du vivier du jour = 10). Le rang évite le tassement au milieu.
     """
-    comp = _factor_composite(candidates, TECH_FACTORS + FUND_FACTORS)
-    ranks = _rank_pct(comp)
-    for stock, r in zip(candidates, ranks):
-        stock["score"] = round(10 * r)
+    if FILTERS["scoring_mode"] == "continuous":
+        comp = _factor_composite(candidates, TECH_FACTORS + FUND_FACTORS)
+        ranks = _rank_pct(comp)
+        for stock, r in zip(candidates, ranks):
+            stock["score"] = round(10 * r)
+    else:
+        for stock in candidates:
+            stock["score"] = _binary_score(stock)
 
 
 # ---------------------------------------------------------------------------
