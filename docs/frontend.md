@@ -62,6 +62,8 @@ The backend returns snake_case fields. The frontend maps them into camelCase fie
 
 Function: `scoreStock(stock)`
 
+> **Note:** this browser-side score has **diverged** from the backend `_compute_score`. The backend now scores accumulation (OBV), ATR compression, relative strength, 52-week position, low float, etc. (normalized 0–10), while `scoreStock` still uses the older rules below. Ranking/data come from the backend's `stock.score`; `scoreStock` is used for the Claude brief prompt and card display. Resync when convenient.
+
 The frontend computes a display score independently from the backend. Current points:
 
 | Signal | Points |

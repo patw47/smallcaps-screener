@@ -15,7 +15,8 @@ import pytest
 from screener_backend import (
     FILTERS,
     _sma, _ma_rising, _median_dollar_volume, _rs_metrics,
-    _compute_score, _build_positives_flags, analyze_prices,
+    _atr, _obv_rising, _pct_of_high,
+    _compute_score, _price_score, _build_positives_flags, analyze_prices,
 )
 
 
@@ -51,24 +52,61 @@ def test_sma_last_window():
 
 
 def test_rs_metrics_outperformance():
-    # titre ~+20% vs benchmark ~+5% sur la fenêtre → surperforme, RS-line monte
+    # titre ~+20% vs benchmark ~+5% sur la fenêtre → surperforme, RS-line monte, magnitude > 0
     stock = pd.Series([100 * (1.20 ** (i / 63)) for i in range(64)])
     bench = pd.Series([100 * (1.05 ** (i / 63)) for i in range(64)])
-    outperf, rising = _rs_metrics(stock, bench, 63, 21)
+    outperf, rising, strength = _rs_metrics(stock, bench, 63, 21)
     assert outperf is True
     assert rising is True
+    assert strength > 0.10          # ~+15% de surperf
 
 
 def test_rs_metrics_underperformance():
     stock = pd.Series([100 * (0.90 ** (i / 63)) for i in range(64)])  # baisse
     bench = pd.Series([100 * (1.05 ** (i / 63)) for i in range(64)])  # hausse
-    outperf, rising = _rs_metrics(stock, bench, 63, 21)
+    outperf, rising, strength = _rs_metrics(stock, bench, 63, 21)
     assert outperf is False
     assert rising is False
+    assert strength < 0
 
 
 def test_rs_metrics_no_benchmark():
-    assert _rs_metrics(pd.Series([1.0] * 100), None, 63, 21) == (None, None)
+    assert _rs_metrics(pd.Series([1.0] * 100), None, 63, 21) == (None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Palier 2 — ATR, OBV, position 52 semaines
+# ---------------------------------------------------------------------------
+
+def test_atr_needs_high_low():
+    idx = pd.date_range("2025-01-01", periods=30, freq="B")
+    df = pd.DataFrame({"Close": range(30), "Volume": [1] * 30}, index=idx)  # pas de High/Low
+    assert _atr(df, 20) is None
+
+
+def test_atr_constant_range():
+    idx = pd.date_range("2025-01-01", periods=30, freq="B")
+    close = pd.Series([10.0] * 30, index=idx)
+    df = pd.DataFrame({"High": close + 1, "Low": close - 1, "Close": close}, index=idx)
+    # range quotidien constant = 2, pas de gap → ATR = 2
+    assert abs(_atr(df, 20) - 2.0) < 1e-9
+
+
+def test_obv_rising_on_uptrend():
+    close = pd.Series([10.0 + i for i in range(30)])   # hausse continue
+    volume = pd.Series([1000] * 30)
+    assert _obv_rising(close, volume, 21) is True
+
+
+def test_obv_falling_on_downtrend():
+    close = pd.Series([40.0 - i for i in range(30)])   # baisse continue
+    volume = pd.Series([1000] * 30)
+    assert _obv_rising(close, volume, 21) is False
+
+
+def test_pct_of_high():
+    close = pd.Series([50.0, 80.0, 100.0, 90.0])       # dernier = 90, plus-haut = 100
+    assert abs(_pct_of_high(close, 252) - 0.90) < 1e-9
 
 
 # ---------------------------------------------------------------------------
@@ -89,23 +127,34 @@ def test_cash_positive_false_emits_flag():
 
 
 def test_cash_positive_none_not_scored():
+    # None (donnée absente) ne compte pas et n'est pas pénalisé — équivalent à False au score
     assert _compute_score({"cash_positive": None}) == 0
-    assert _compute_score({"cash_positive": True}) > 0
+    assert _compute_score({"cash_positive": None}) == _compute_score({"cash_positive": False})
 
 
 def test_score_perfect_is_10_not_capped():
-    """Titre cochant toutes les règles → 10 pile (ancien bug : plafond dur ambigu)."""
+    """Titre cochant toutes les règles → 10 pile (normalisé, pas de plafond dur ambigu)."""
     perfect = {
-        "vol_ratio": 1.8,           # dans [1.3, 2.5]
+        "accumulation": True,
         "compressed": True,
-        "rs_signal": True,
-        "insider_buying": True,
+        "near_pivot": True,
+        "low_ext": True,
+        "rs_turning": True,
         "price_above_ma50": True,
+        "insider_buying": True,
         "cash_positive": True,
         "revenue_growth": 0.50,
+        "low_float": True,
         "short_interest_pct": 20.0,
     }
     assert _compute_score(perfect) == 10
+
+
+def test_price_score_accumulation_heaviest():
+    # l'accumulation pèse le plus (4) — plus que compression (3)
+    assert _price_score({"accumulation": True}) == FILTERS["score_weights"]["accumulation"]
+    assert _price_score({"accumulation": True}) > _price_score({"compressed": True})
+    assert _price_score({}) == 0
 
 
 def test_score_empty_is_zero():
@@ -123,9 +172,9 @@ def _make_df(closes, volumes):
 
 
 def test_pass_a_rejects_downtrend():
-    # baisse douce 45 → 25 : reste dans la bande de prix et de perf 1m,
-    # mais pente MA50 négative → rejet tendance
-    closes = [45.0 - i * 0.1 for i in range(200)]
+    # baisse douce 35 → 15 : reste dans la bande de prix (2-25),
+    # mais pente MA50 négative → rejet tendance (garde-fou couteau qui tombe)
+    closes = [35.0 - i * 0.1 for i in range(200)]
     df = _make_df(closes, [500_000] * len(closes))
     signals, reason = analyze_prices("DOWN", df, None)
     assert signals is None
@@ -154,31 +203,44 @@ def test_pass_a_accepts_healthy_uptrend():
     assert FILTERS["price_min"] <= signals["price"] <= FILTERS["price_max"]
 
 
-def test_pass_a_rejects_price_below_rising_ma():
-    # MA50 en hausse mais dernier prix sous la MA50 (pullback) → trend:below_ma
+def test_pass_a_accepts_price_below_rising_ma():
+    # MA50 en hausse, prix repassé sous la MA50 (pullback tôt) : DÉSORMAIS accepté
+    # (prix>MA50 n'est plus un filtre dur → on capte le début, pas seulement le déjà-reparti)
     closes = [10.0 + i * 0.1 for i in range(200)]  # uptrend franc
-    closes[-1] = 22.0                              # dip final sous la MA50 (~27)
+    closes[-1] = 22.0                              # dip final sous la MA50 (~27), dans 2-25
     df = _make_df(closes, [200_000] * 200)
     signals, reason = analyze_prices("PB", df, None)
-    assert signals is None
-    assert reason == "trend:below_ma"
+    assert reason == "ok"
+    assert signals["price_above_ma50"] is False    # sous la MA50, mais gardé
 
 
-def test_pass_a_rejects_weak_rs_when_required():
-    # uptrend valide mais sous-performe un benchmark plus fort → rs:weak (filtre dur)
+def test_pass_a_weak_rs_not_rejected():
+    # RS n'est plus un filtre dur (rs_require=False) → un titre qui sous-performe passe,
+    # avec rs_turning=False (la RS ne repart pas) → il sera juste moins bien classé
     idx = pd.date_range("2025-01-01", periods=200, freq="B")
-    closes = [10.0 + i * 0.01 for i in range(200)]        # uptrend mou, prix > MA50, pente +
-    df = _make_df(closes, [300_000] * 200)                # liquide
+    closes = [10.0 + i * 0.01 for i in range(200)]        # uptrend mou
+    df = _make_df(closes, [300_000] * 200)
     bench = pd.Series([100.0 * (1.6 ** (i / 199)) for i in range(200)], index=idx)  # benchmark fort
     signals, reason = analyze_prices("WEAKRS", df, bench)
-    assert signals is None
-    assert reason == "rs:weak"
+    assert reason == "ok"
+    assert signals["rs_turning"] is False
 
 
-def test_pass_a_no_benchmark_skips_rs_filter():
-    # benchmark absent → RS non appliquée en dur (fallback gracieux) → passe
+def test_pass_a_no_benchmark_ok():
+    # benchmark absent → RS neutralisée, titre gardé
     closes = [10.0 + i * 0.05 for i in range(200)]
     df = _make_df(closes, [200_000] * 200)
     signals, reason = analyze_prices("NOBENCH", df, None)
     assert reason == "ok"
-    assert signals["rs_signal"] is False  # pas de benchmark → pas de signal, mais pas rejeté
+
+
+def test_pass_a_near_pivot_and_low_ext_signals():
+    # uptrend doux, dernier prix proche du plus-haut récent et proche de la MA50
+    closes = [10.0 + i * 0.03 for i in range(200)]  # ~10 → ~16, dans 2-25
+    df = _make_df(closes, [200_000] * 200)
+    signals, reason = analyze_prices("EARLY", df, None)
+    assert reason == "ok"
+    # dernier prix = plus-haut récent (série croissante) → près du pivot
+    assert signals["near_pivot"] is True
+    # pente douce → prix reste proche de la MA50 → peu étiré
+    assert signals["low_ext"] is True

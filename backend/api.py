@@ -31,7 +31,7 @@ app.add_middleware(
 _custom_watchlist: list[str] | None = None  # None = découverte dynamique
 _last_scan_time: datetime | None = None
 _cached_data: dict | None = None
-_scan_lock = asyncio.Lock()
+_bg_scan_inflight = False  # garde : un seul scan background à la fois (event loop mono-thread)
 
 
 # ---------------------------------------------------------------------------
@@ -59,41 +59,69 @@ def _run_scan_sync():
     _last_scan_time = datetime.now(tz=timezone.utc)
 
 
+async def _ensure_background_scan():
+    """
+    Démarre un scan en arrière-plan s'il n'y en a pas déjà un, sans bloquer la requête.
+    La vérif+pose du drapeau est atomique (event loop mono-thread) → pas de double scan.
+    """
+    global _bg_scan_inflight
+    if _bg_scan_inflight or scan_state["scanning"]:
+        return
+    _bg_scan_inflight = True
+
+    def _job():
+        global _bg_scan_inflight
+        try:
+            _run_scan_sync()
+        finally:
+            _bg_scan_inflight = False
+
+    asyncio.get_event_loop().run_in_executor(None, _job)
+
+
+def _last_result() -> dict | None:
+    """Dernier résultat connu : mémoire, sinon fichier (même périmé)."""
+    if _cached_data is not None:
+        return _cached_data
+    if OUTPUT_FILE.exists():
+        try:
+            return json.loads(OUTPUT_FILE.read_text())
+        except Exception:
+            return None
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
-@app.get("/api/scan", summary="Lance le scan (cache 30 min) et retourne les données")
-async def get_scan():
-    global _cached_data
+@app.on_event("startup")
+async def _warm_cache():
+    """Préchauffe le cache au démarrage : lance un scan background si aucun résultat frais."""
+    if _load_json_cache() is None:
+        await _ensure_background_scan()
 
-    # Chemin rapide : cache valide, pas besoin du lock
+
+@app.get("/api/scan", summary="Retourne les données (non bloquant, scan en arrière-plan)")
+async def get_scan():
+    # Cache frais → retour direct
     cached = _load_json_cache()
     if cached:
         return cached
-    if _cached_data:
-        age = datetime.now(tz=timezone.utc) - datetime.fromisoformat(_cached_data["scanned_at"])
-        if age < timedelta(minutes=FILTERS["cache_minutes"]):
-            return _cached_data
 
-    # Un seul scan à la fois — les requêtes concurrentes attendent le lock
-    # puis retrouvent le cache rempli par la première
-    async with _scan_lock:
-        cached = _load_json_cache()
-        if cached:
-            return cached
-        if _cached_data:
-            age = datetime.now(tz=timezone.utc) - datetime.fromisoformat(_cached_data["scanned_at"])
-            if age < timedelta(minutes=FILTERS["cache_minutes"]):
-                return _cached_data
+    # Résultat périmé connu → stale-while-revalidate : on le sert et on rafraîchit en fond
+    data = _last_result()
+    if data is not None:
+        await _ensure_background_scan()
+        return {**data, "scanning": scan_state["scanning"], "phase": scan_state["phase"], "stale": True}
 
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _run_scan_sync)
-
-    if _cached_data:
-        return _cached_data
-
-    raise HTTPException(500, detail="Le scan n'a produit aucun résultat")
+    # Aucune donnée encore → démarrer un scan et répondre IMMÉDIATEMENT (jamais de blocage)
+    await _ensure_background_scan()
+    return {
+        "scanned_at": None, "universe_size": 0, "candidates": 0,
+        "stocks": [], "rejection_stats": {},
+        "scanning": scan_state["scanning"], "phase": scan_state["phase"],
+    }
 
 
 @app.get("/api/scan/status", summary="Statut du scan en cours")
@@ -102,13 +130,14 @@ async def get_scan_status():
         "scanning": scan_state["scanning"],
         "progress": scan_state["progress"],
         "total": scan_state["total"],
+        "phase": scan_state["phase"],
         "last_scan": _last_scan_time.isoformat() if _last_scan_time else None,
     }
 
 
 @app.post("/api/scan/force", summary="Force un nouveau scan (ignore le cache)")
 async def force_scan():
-    if scan_state["scanning"]:
+    if _bg_scan_inflight or scan_state["scanning"]:
         raise HTTPException(409, detail="Un scan est déjà en cours")
 
     if OUTPUT_FILE.exists():
@@ -117,9 +146,7 @@ async def force_scan():
     global _cached_data
     _cached_data = None
 
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, _run_scan_sync)
-
+    await _ensure_background_scan()
     return {"message": "Nouveau scan démarré en arrière-plan"}
 
 

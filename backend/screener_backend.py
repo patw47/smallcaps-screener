@@ -35,10 +35,10 @@ FILTERS = {
     "market_cap_min_m": 50,        # millions USD
     "market_cap_max_m": 2000,
     "price_min": 2.0,              # USD
-    "price_max": 50.0,
+    "price_max": 25.0,             # fourchette resserrée 2-25$ (essai)
     "ipo_year_min": 2015,          # informatif uniquement (plus de points)
     "perf_1m_min": -0.35,
-    "perf_1m_max": 0.40,           # assoupli 0.25→0.40 : ne pas amputer les leaders RS (§9)
+    "perf_1m_max": 0.25,           # garde-fou léger « pas déjà explosé » (le scoring gère le reste)
     "vol_window_short": 10,        # jours pour vol court
     "vol_window_long": 50,         # jours pour vol long (baseline)
     "compression_window": 20,      # jours pour range compressé
@@ -47,15 +47,36 @@ FILTERS = {
     # --- Tendance (Palier 1) ---
     "ma_trend_window": 50,         # MA de tendance
     "ma_slope_lookback": 10,       # pente = MA(t) vs MA(t-10)
-    "trend_require_above_ma": True, # prix > MA50 exigé en plus de pente ≥ 0 (§9 revue quant)
-    # --- Force relative (Palier 1) ---
+    "trend_require_above_ma": False, # prix > MA50 = SCORING (plus un filtre dur) → capte le début de hausse
+    # --- Force relative ---
     "rs_benchmark": "IWM",         # ETF Russell 2000 (small caps US)
     "rs_return_window": 63,        # ~3 mois de bourse
     "rs_line_lookback": 21,        # pente RS-line sur ~1 mois
-    "rs_require": True,            # RS en filtre DUR (ultra-qualité) — sauf si benchmark indispo
+    "rs_require": False,           # RS = SCORING (plus un filtre dur) → ne pas exiger « déjà fort »
     # --- Liquidité (Palier 1) ---
     "dollar_vol_window": 20,
     "dollar_vol_min": 1_000_000,   # USD, plancher médian (hard) — §9 revue quant, vraie tradabilité
+    # --- Signaux affinés (§9) ---
+    "use_atr_compression": True,   # compression via True Range (High/Low) au lieu du Close-only
+    "obv_lookback": 21,            # OBV en hausse sur ~1 mois → accumulation (vs distribution)
+    "high_window": 252,            # fenêtre plus-haut 52 sem. (informatif : pct_52w_high)
+    "near_high_pct": 0.75,         # informatif
+    "float_max": 50_000_000,       # float < 50M actions → petit float amplifie
+    "rs_strong": 0.20,             # surperf RS ≥ 20% (informatif)
+    # --- Inflexion précoce : capter le DÉBUT de hausse, pas le sommet ---
+    "pivot_window": 50,            # plus-haut de la base RÉCENTE (~10 sem.) — le point de cassure
+    "near_pivot_pct": 0.85,        # prix ≥ 85% du plus-haut récent → près du pivot de breakout
+    "low_ext_pct": 0.12,           # prix ≤ MA50 × 1.12 → peu étiré (encore tôt)
+    # --- Poids de scoring (tous configurables pour le backtest) ---
+    "score_weights": {
+        "accumulation": 4,  # OBV↑ : l'argent rentre (LE meilleur signal pré-explosion)
+        "compression": 3,   # base serrée : ressort armé
+        "near_pivot": 2,    # proche du point de cassure de la base récente
+        "low_ext": 2,       # peu étiré : encore tôt
+        "rs_turning": 2,    # la force relative repart à la hausse
+        "above_ma": 1,      # au-dessus de la MA50
+        "insider": 2, "cash": 1, "revenue": 1, "low_float": 1, "short": 1,
+    },
     # --- Filet de sécurité : échantillon NON biaisé des survivants si trop nombreux ---
     "enrich_max": 150,             # borne dure du nb d'appels .info (coût + throttle Yahoo)
     # Soft filters — scoring uniquement
@@ -72,7 +93,7 @@ FILTERS = {
     "cache_minutes": 30,
     "max_tickers": 800,            # échantillon univers/scan, rééchantillonné à chaque clic (seed None)
     "download_chunk": 100,         # taille des lots yf.download
-    "history_period": "6mo",       # suffit pour MA50/RS63/compression90/vol50, ~2× plus léger que 1y
+    "history_period": "1y",        # 1 an : requis pour plus-haut 52 sem. + ATR90 (Palier 2)
     "enrich_workers": 2,           # threads .info en Passe B — BAS : Yahoo bannit l'IP au-delà
     "enrich_jitter_s": 0.5,        # jitter aléatoire par appel .info (anti-throttle Yahoo)
     "enrich_retries": 4,           # retries sur YFRateLimitError
@@ -206,26 +227,60 @@ def _median_dollar_volume(close: pd.Series, volume: pd.Series, window: int) -> f
     return None if math.isnan(val) else val
 
 
-def _rs_metrics(close: pd.Series, bench_close: pd.Series,
-                ret_window: int, line_lookback: int) -> tuple[bool | None, bool | None]:
+def _atr(df: pd.DataFrame, window: int) -> float | None:
+    """ATR (moyenne du True Range) sur `window` jours. Nécessite High/Low/Close."""
+    if df is None or not {"High", "Low", "Close"}.issubset(df.columns) or len(df) < window + 1:
+        return None
+    high, low, prev_close = df["High"], df["Low"], df["Close"].shift(1)
+    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    val = float(tr.iloc[-window:].mean())
+    return None if math.isnan(val) else val
+
+
+def _obv_rising(close: pd.Series, volume: pd.Series, lookback: int) -> bool | None:
     """
-    Force relative vs benchmark. Aligne les deux séries sur leurs dates communes
-    (halts / gaps). Retourne (surperforme sur ret_window, RS-line en hausse).
+    On-Balance Volume en hausse sur `lookback` jours → accumulation (acheteurs > vendeurs).
+    Distingue l'accumulation de la distribution, ce que le ratio de volume brut ne fait pas (§9).
+    """
+    if close is None or volume is None or len(close) < lookback + 2:
+        return None
+    direction = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    obv = (direction * volume).cumsum()
+    return bool(obv.iloc[-1] > obv.iloc[-lookback - 1])
+
+
+def _pct_of_high(close: pd.Series, window: int) -> float | None:
+    """Dernier prix / plus-haut sur `window` jours (position dans le range 52 sem.)."""
+    if close is None or len(close) == 0:
+        return None
+    w = min(window, len(close))
+    hi = float(close.iloc[-w:].max())
+    if hi == 0:
+        return None
+    return float(close.iloc[-1]) / hi
+
+
+def _rs_metrics(close: pd.Series, bench_close: pd.Series,
+                ret_window: int, line_lookback: int) -> tuple[bool | None, bool | None, float | None]:
+    """
+    Force relative vs benchmark. Aligne les deux séries sur leurs dates communes.
+    Retourne (surperforme, RS-line en hausse, magnitude = surperf relative sur ret_window).
     """
     if close is None or bench_close is None:
-        return None, None
+        return None, None, None
     joined = pd.concat([close, bench_close], axis=1, join="inner").dropna()
     if len(joined) < max(ret_window, line_lookback) + 1:
-        return None, None
+        return None, None, None
     s, b = joined.iloc[:, 0], joined.iloc[:, 1]
     if s.iloc[-ret_window - 1] == 0 or b.iloc[-ret_window - 1] == 0:
-        return None, None
+        return None, None, None
     s_ret = s.iloc[-1] / s.iloc[-ret_window - 1] - 1
     b_ret = b.iloc[-1] / b.iloc[-ret_window - 1] - 1
+    strength = float(s_ret - b_ret)          # magnitude continue (Palier 2 / #4)
     outperf = bool(s_ret > b_ret)
     rs_line = s / b
     rising = bool(rs_line.iloc[-1] > rs_line.iloc[-line_lookback - 1])
-    return outperf, rising
+    return outperf, rising, strength
 
 
 def _build_positives_flags(stock: dict) -> tuple[list[str], list[str]]:
@@ -237,20 +292,33 @@ def _build_positives_flags(stock: dict) -> tuple[list[str], list[str]]:
     elif vr and vr > FILTERS["score_vol_ratio_max"]:
         flags.append(f"Volume très élevé x{vr:.1f} (possible spike)")
 
-    if stock.get("compressed"):
-        positives.append("Compression de range détectée (potentiel breakout)")
+    if stock.get("accumulation"):
+        positives.append("OBV en hausse : accumulation (acheteurs > vendeurs)")
 
-    if stock.get("rs_signal"):
-        positives.append("Force relative > IWM et RS-line en hausse (leader)")
+    if stock.get("compressed"):
+        positives.append("Base serrée (compression ATR) — ressort armé")
+
+    if stock.get("near_pivot"):
+        pct = (stock.get("pct_recent_high") or 0) * 100
+        positives.append(f"Proche du pivot de sa base récente ({pct:.0f}%) — sur le point de casser")
+
+    if stock.get("low_ext"):
+        positives.append("Peu étiré (proche de la MA50) — début de mouvement, pas après")
+
+    if stock.get("rs_turning"):
+        positives.append("Force relative qui repart à la hausse (retournement)")
 
     if stock.get("price_above_ma50"):
-        positives.append("Cours au-dessus de la MA50, pente haussière (tendance saine)")
+        positives.append("Cours au-dessus de la MA50")
 
     if stock.get("change_1m") is not None and stock["change_1m"] * 100 < -15:
         flags.append(f"Correction forte 1 mois ({stock['change_1m']*100:+.1f}%)")
 
     if stock.get("insider_buying"):
         positives.append(f"Insiders détiennent {stock.get('insider_pct', 0):.1f}% du capital")
+
+    if stock.get("low_float"):
+        positives.append(f"Petit float ({(stock.get('float_shares') or 0)/1e6:.0f}M actions) — mouvements amplifiés")
 
     # cash_positive : None = donnée absente → ni positif ni flag (ne pas pénaliser)
     if stock.get("cash_positive") is True:
@@ -270,24 +338,41 @@ def _build_positives_flags(stock: dict) -> tuple[list[str], list[str]]:
     return positives, flags
 
 
-def _compute_score(stock: dict) -> int:
-    """
-    Score pondéré normalisé sur 10 (corrige l'ancien plafond dur qui écrasait
-    l'information au sommet du classement). Chaque règle : (condition, poids).
-    """
-    rules = [
-        (bool(stock.get("vol_ratio") and
-              FILTERS["score_vol_ratio_min"] <= stock["vol_ratio"] <= FILTERS["score_vol_ratio_max"]), 2),
-        (bool(stock.get("compressed")), 2),
-        (bool(stock.get("rs_signal")), 2),                 # force relative (Palier 1)
-        (bool(stock.get("insider_buying")), 2),
-        (bool(stock.get("price_above_ma50")), 1),          # tendance (Palier 1)
-        (stock.get("cash_positive") is True, 1),           # None ne compte pas
-        (bool(stock.get("revenue_growth") and
-              stock["revenue_growth"] > FILTERS["revenue_growth_min"]), 1),
-        (bool(stock.get("short_interest_pct") and
-              stock["short_interest_pct"] > FILTERS["short_interest_high"]), 1),
+def _tech_rules(sig: dict) -> list[tuple[bool, int]]:
+    """Règles TECHNIQUES (prix/volume, sans .info) — dispo dès la Passe A."""
+    W = FILTERS["score_weights"]
+    return [
+        (bool(sig.get("accumulation")), W["accumulation"]),   # OBV↑ : l'argent rentre (pilier)
+        (bool(sig.get("compressed")), W["compression"]),      # base serrée (pilier)
+        (bool(sig.get("near_pivot")), W["near_pivot"]),       # près du pivot de breakout
+        (bool(sig.get("low_ext")), W["low_ext"]),             # peu étiré : encore tôt
+        (bool(sig.get("rs_turning")), W["rs_turning"]),       # force relative qui repart
+        (bool(sig.get("price_above_ma50")), W["above_ma"]),   # au-dessus MA50
     ]
+
+
+def _fundamental_rules(stock: dict) -> list[tuple[bool, int]]:
+    """Règles FONDAMENTALES (via .info) — ajoutées en Passe B."""
+    W = FILTERS["score_weights"]
+    return [
+        (bool(stock.get("insider_buying")), W["insider"]),
+        (stock.get("cash_positive") is True, W["cash"]),      # None ne compte pas
+        (bool(stock.get("revenue_growth") and
+              stock["revenue_growth"] > FILTERS["revenue_growth_min"]), W["revenue"]),
+        (bool(stock.get("low_float")), W["low_float"]),
+        (bool(stock.get("short_interest_pct") and
+              stock["short_interest_pct"] > FILTERS["short_interest_high"]), W["short"]),
+    ]
+
+
+def _price_score(sig: dict) -> int:
+    """Score technique brut (sans .info) — sert à CLASSER les survivants avant enrichissement."""
+    return sum(w for cond, w in _tech_rules(sig) if cond)
+
+
+def _compute_score(stock: dict) -> int:
+    """Score pondéré normalisé sur 10 (technique + fondamental). Poids dans FILTERS['score_weights']."""
+    rules = _tech_rules(stock) + _fundamental_rules(stock)
     raw = sum(w for cond, w in rules if cond)
     raw_max = sum(w for _, w in rules)
     return round(10 * raw / raw_max) if raw_max else 0
@@ -311,18 +396,21 @@ def _extract_symbol(data: pd.DataFrame, sym: str) -> pd.DataFrame | None:
         return None
 
 
-def _download_prices(tickers: list[str], bench_symbol: str) -> dict[str, pd.DataFrame]:
-    """Télécharge l'OHLCV 1 an de tous les tickers (+ benchmark) en lots groupés."""
+def _download_prices(tickers: list[str], bench_symbol: str,
+                     period: str | None = None) -> dict[str, pd.DataFrame]:
+    """Télécharge l'OHLCV de tous les tickers (+ benchmark) en lots groupés.
+    `period` par défaut = FILTERS["history_period"] ; surchargé par le backtest (ex. 2y)."""
     prices: dict[str, pd.DataFrame] = {}
     all_syms = tickers + [bench_symbol]
     chunk = FILTERS["download_chunk"]
     n_chunks = (len(all_syms) + chunk - 1) // chunk
+    period = period or FILTERS["history_period"]
 
     for idx in range(0, len(all_syms), chunk):
         part = all_syms[idx:idx + chunk]
         try:
             data = yf.download(
-                part, period=FILTERS["history_period"], interval="1d",
+                part, period=period, interval="1d",
                 group_by="ticker", auto_adjust=True,
                 threads=True, progress=False,
             )
@@ -387,19 +475,39 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     vol_base = float(baseline.median()) if len(baseline) else None
     vol_ratio = vol_recent / vol_base if vol_base and vol_base > 0 else None
 
-    range_20 = _range_pct(close, FILTERS["compression_window"])
-    range_90 = _range_pct(close, FILTERS["compression_baseline"])
-    compressed = bool(
-        range_20 is not None and range_90 is not None and range_90 > 0
-        and (range_20 / range_90) < FILTERS["compression_threshold"]
-    )
+    # Compression : ATR court < seuil × ATR long (True Range High/Low) — fallback Close-only
+    compressed = False
+    if FILTERS["use_atr_compression"]:
+        atr_s = _atr(df, FILTERS["compression_window"])
+        atr_l = _atr(df, FILTERS["compression_baseline"])
+        if atr_s is not None and atr_l is not None and atr_l > 0:
+            compressed = bool((atr_s / atr_l) < FILTERS["compression_threshold"])
+    else:
+        range_20 = _range_pct(close, FILTERS["compression_window"])
+        range_90 = _range_pct(close, FILTERS["compression_baseline"])
+        compressed = bool(
+            range_20 is not None and range_90 is not None and range_90 > 0
+            and (range_20 / range_90) < FILTERS["compression_threshold"]
+        )
 
-    rs_outperf, rs_line_rising = _rs_metrics(
+    # Accumulation : OBV en hausse (§9 — remplace le ratio de volume brut au scoring)
+    accumulation = bool(_obv_rising(close, volume, FILTERS["obv_lookback"]))
+
+    # Position dans le range 52 sem. (informatif) + proche du pivot de la base RÉCENTE (scoring)
+    pct_52w = _pct_of_high(close, FILTERS["high_window"])
+    near_high = bool(pct_52w is not None and pct_52w >= FILTERS["near_high_pct"])
+    pct_recent = _pct_of_high(close, FILTERS["pivot_window"])
+    near_pivot = bool(pct_recent is not None and pct_recent >= FILTERS["near_pivot_pct"])
+
+    # Peu étiré : prix proche de la MA50 (encore tôt dans le mouvement, pas après)
+    low_ext = bool(ma50 and price <= ma50 * (1 + FILTERS["low_ext_pct"]))
+
+    rs_outperf, rs_line_rising, rs_strength = _rs_metrics(
         close, bench_close, FILTERS["rs_return_window"], FILTERS["rs_line_lookback"]
     )
     rs_signal = bool(rs_outperf and rs_line_rising)
-    # Force relative en filtre DUR (ultra-qualité). Si benchmark indispo → rs_outperf None
-    # → on ne rejette pas (fallback gracieux, RS redevient scoring only).
+    rs_turning = bool(rs_line_rising)  # la RS repart (retournement) — scoring
+    # Filtre RS dur seulement si rs_require=True (par défaut False → RS = scoring).
     if FILTERS["rs_require"] and rs_outperf is not None and not rs_signal:
         return None, "rs:weak"
 
@@ -410,10 +518,18 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         "dollar_volume": round(dollar_vol),
         "vol_ratio": round(vol_ratio, 2) if vol_ratio is not None else None,
         "compressed": compressed,
+        "accumulation": accumulation,
+        "pct_52w_high": round(pct_52w, 3) if pct_52w is not None else None,
+        "near_high": near_high,
+        "pct_recent_high": round(pct_recent, 3) if pct_recent is not None else None,
+        "near_pivot": near_pivot,
+        "low_ext": low_ext,
         "ma50": round(ma50, 2),
         "price_above_ma50": bool(price > ma50),
         "rs_outperf": bool(rs_outperf) if rs_outperf is not None else None,
         "rs_line_rising": bool(rs_line_rising) if rs_line_rising is not None else None,
+        "rs_turning": rs_turning,
+        "rs_strength": round(rs_strength, 4) if rs_strength is not None else None,
         "rs_signal": rs_signal,
     }
     return signals, "ok"
@@ -476,11 +592,13 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
     total_debt = _safe_float(info.get("totalDebt"), None)
     cash_positive = None if (total_cash is None or total_debt is None) else bool(total_cash > total_debt)
 
-    # --- Insiders / short / revenus ---
+    # --- Insiders / short / revenus / float ---
     insider_pct = (_safe_float(info.get("heldPercentInsiders"), 0) or 0) * 100
     insider_buying = bool(insider_pct > FILTERS["insider_pct_min"])
     short_interest_pct = (_safe_float(info.get("shortPercentOfFloat"), 0) or 0) * 100
     revenue_growth = _safe_float(info.get("revenueGrowth"))
+    float_shares = _safe_float(info.get("floatShares"), None)
+    low_float = bool(float_shares is not None and float_shares < FILTERS["float_max"])
 
     stock = {
         "ticker": ticker,
@@ -493,12 +611,14 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
         "insider_buying": insider_buying,
         "short_interest_pct": round(short_interest_pct, 2),
         "revenue_growth": round(revenue_growth, 4) if revenue_growth is not None else None,
+        "float_shares": int(float_shares) if float_shares is not None else None,
+        "low_float": low_float,
         "cash_positive": cash_positive,
         "ipo_year": ipo_year,
         "catalyst_type": None,
         "catalyst_date": None,
-        **signals,  # price, change_1d, change_1m, dollar_volume, vol_ratio, compressed,
-                    # ma50, price_above_ma50, rs_outperf, rs_line_rising, rs_signal
+        **signals,  # price, change_1d/1m, dollar_volume, vol_ratio, compressed, accumulation,
+                    # pct_52w_high, near_high, ma50, price_above_ma50, rs_*, rs_signal
     }
     stock["score"] = _compute_score(stock)
     stock["positives"], stock["flags"] = _build_positives_flags(stock)
@@ -546,16 +666,15 @@ def run_scan(tickers: list[str] | None = None) -> dict:
             cat = reason.split(":")[0]
             rejection_counts[cat] = rejection_counts.get(cat, 0) + 1
 
-    # Échantillonnage NON biaisé des survivants pour borner les appels .info.
-    # random.sample (seed None) → rééchantillonné à chaque scan : les clics successifs
-    # couvrent tout le pool qualifié, sans biais de sélection (pas de ranking).
+    # Classement par SCORE TECHNIQUE (accumulation en tête) pour choisir qui mérite l'appel
+    # .info coûteux. Ce n'est plus un tirage au sort : l'accumulation EST la thèse, donc
+    # classer par elle est légitime (les meilleures pépites en tête).
+    survivors.sort(key=lambda x: (_price_score(x[1]), x[1].get("dollar_volume") or 0), reverse=True)
     n_all = len(survivors)
-    if n_all > FILTERS["enrich_max"]:
-        capped = random.sample(survivors, FILTERS["enrich_max"])
-        rejection_counts["sampled_out"] = n_all - FILTERS["enrich_max"]
-    else:
-        capped = survivors
-    print(f"\n[Passe A] {n_all} survivants ultra-qualité / {total} tickers → {len(capped)} enrichis")
+    capped = survivors[:FILTERS["enrich_max"]]
+    if n_all > len(capped):
+        rejection_counts["below_cutoff"] = n_all - len(capped)
+    print(f"\n[Passe A] {n_all} survivants / {total} tickers → {len(capped)} enrichis (top score technique)")
 
     # --- Passe B : enrichissement .info sur les survivants retenus (parallèle, borné) ---
     scan_state.update({"phase": "enrich", "progress": 0, "total": len(capped)})
@@ -585,7 +704,8 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         print(f"    {cat:<20} {count:>4} tickers")
     print()
 
-    candidates.sort(key=lambda x: x["score"], reverse=True)
+    # Tri : score décroissant, puis force relative continue (magnitude) en départage (#4)
+    candidates.sort(key=lambda x: (x["score"], x.get("rs_strength") or 0), reverse=True)
 
     output = {
         "scanned_at": datetime.now(tz=timezone.utc).isoformat(),
