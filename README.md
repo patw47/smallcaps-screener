@@ -28,7 +28,7 @@ NASDAQ + Finviz  →  dedupe  →  random.shuffle  →  sample 800   (resampled 
     │     hard filters:  market cap 50M–2B · exchange
     │     fundamentals:  insider · cash/debt · revenue growth · float · short interest
     │
-    ▼  normalized 0–10 score  →  sorted list  →  data/screener_data.json
+    ▼  decile 0–10 score (percentile of factors)  →  sorted list  →  data/screener_data.json
 ```
 
 **Why scoring instead of hard filters?** Requiring "already strong" signals (high
@@ -39,22 +39,25 @@ candidates to the top.
 
 ## Scoring model
 
-Normalized to 0–10. All weights live in `FILTERS["score_weights"]` and are tunable.
+Each signal is a **continuous factor**, percentile-ranked across the candidates; the
+score is a weighted average of those percentiles, shown as a **decile 0–10** (best of the
+day's pool = 10). It's a *relative* score — "how good among today's candidates". All
+weights live in `FILTERS["score_weights"]` and are tunable.
 
-**Technical signals** (computed in Pass A; also used to rank which survivors get enriched):
+**Technical factors** (computed in Pass A; also used to rank which survivors get enriched):
 
-| Signal | Points | Meaning |
+| Factor | Weight | Meaning |
 | --- | ---: | --- |
-| Accumulation (OBV rising) | **4** | Money quietly coming in — the strongest pre-move tell |
-| Compression (ATR, tight base) | **3** | Volatility contracting — the coiled spring |
+| Accumulation (net directional volume) | **4** | Money quietly coming in — the strongest pre-move tell |
+| Compression (ATR20/ATR90) | **3** | Volatility contracting — the coiled spring |
 | Near recent-base pivot | 2 | Close to breaking out of its recent base |
 | Low extension (near MA50) | 2 | Still early in the move, not 40% extended |
-| Relative strength turning up | 2 | Starting to outperform the market again |
-| Price above MA50 | 1 | Reclaimed the 50-day average |
+| Relative-strength magnitude | 2 | Outperforming the market |
+| Price above MA50 | — | (kept as a signal for display) |
 
-**Fundamental signals** (added in Pass B, on the top-scored names):
+**Fundamental factors** (added in Pass B, on the top-scored names):
 
-| Signal | Points |
+| Factor | Weight |
 | --- | ---: |
 | Insider ownership | 2 |
 | Cash > debt | 1 |
@@ -65,15 +68,17 @@ Normalized to 0–10. All weights live in `FILTERS["score_weights"]` and are tun
 Accumulation (4) + compression (3) are the two pillars — the classic
 Wyckoff/VCP "accumulation into a tightening base" setup before a breakout.
 
-See [docs/backend.md](docs/backend.md) for the exact thresholds and functions.
+See [docs/backend.md](docs/backend.md) for the exact factors and functions.
 
 ## Validation & monitoring
 
 - **Backtest** (`backend/backtest.py`): replays the scan at a past date and compares
-  the forward returns of selected names vs the universe vs IWM, bucketed by score.
-  A snapshot run showed selected names at **+26% vs +19%** for the universe (**+7% edge**),
-  with forward return rising with score. Caveats: small sample, single period,
-  survivorship bias, price/volume signals only — promising, not yet conclusive.
+  forward returns of selected names vs the universe vs IWM, bucketed by score quartile,
+  and shows the continuous vs the old binary score side by side. **So far inconclusive**:
+  at ~14 survivors per run the numbers swing between runs (edge seen from +7% to −32%),
+  so it cannot yet confirm an edge or that continuous beats binary. A meaningful verdict
+  needs a much larger, rolling multi-period backtest. Caveats: survivorship bias,
+  price/volume signals only (no point-in-time fundamentals).
 - **Live performance tracking**: every scan writes a dated snapshot of its picks to
   `data/history/`. `GET /api/performance` then measures each pick's return **since it
   was first flagged** and compares it to IWM — an unbiased, real-time read of whether

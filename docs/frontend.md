@@ -65,9 +65,10 @@ The frontend uses the **backend score directly** (`stock.score`, `stock.positive
 the sort all read `stock.score`. There is no browser-side scoring anymore — the old
 `scoreStock` function was removed so the UI reflects the backend's assessment exactly.
 
-See [backend.md](backend.md) for the scoring model and weights. Note the score
-currently tops out around 8 (see the "score ceiling" discussion — ATR compression
-rarely co-occurs with the early-momentum signals the screener now favors).
+See [backend.md](backend.md) for the scoring model and weights. The score is a
+**decile rank of a continuous-factor percentile composite** (0–10), so it spreads the
+full range and the best candidate of the current scan shows 10. It is a *relative*
+score ("how good among today's candidates"), not an absolute rating.
 
 ## Main User Flows
 
