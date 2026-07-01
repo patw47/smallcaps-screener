@@ -119,13 +119,24 @@ Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filt
 
 ## Backtest harness — `backend/backtest.py`
 
-Replays `analyze_prices` at a past as-of date and compares forward returns of survivors vs the tested universe vs IWM, **bucketed by technical score quartile** (does a higher score predict a higher forward return?).
+Replays `analyze_prices` at a past as-of date and compares forward returns of survivors vs
+the tested universe vs IWM, **bucketed by score quartile**, showing the continuous and the
+binary score side by side (does a higher score predict a higher forward return, and does
+one scoring beat the other?).
 
 ```bash
+# single window
 DATA_DIR=/tmp/bt PYTHONPATH=backend python backtest.py --n 200 --forward 63 --seed 42
+
+# rolling weight sweep: pool survivors over several as-of windows (evaluate_ticker gains an
+# as_of_offset) to escape small-sample noise, and sweep a scoring weight
+DATA_DIR=/tmp/bt PYTHONPATH=backend python backtest.py --sweep --n 250 --forward 63
 ```
 
-**Honest limitations:** survivorship bias, no point-in-time fundamentals (validates price/volume signals only), single as-of snapshot. Small samples are not conclusive — a real verdict needs large `n` and a rolling multi-period run.
+**Honest limitations:** survivorship bias, no point-in-time fundamentals (validates
+price/volume signals only). A single window at ~14 survivors is pure noise; `--sweep` pools
+windows (hundreds of survivors) for a cleaner read, but a full verdict still needs multiple
+seeds/horizons. So far the backtest cannot confirm an edge or that continuous beats binary.
 
 ## Tests
 

@@ -32,7 +32,8 @@ External market data sources
 ├── backend/
 │   ├── api.py
 │   ├── screener_backend.py
-│   ├── backtest.py            # forward-return validation harness
+│   ├── backtest.py            # forward-return validation harness (+ --sweep rolling)
+│   ├── track.py               # live performance tracking of past selections
 │   ├── tests/                 # offline unit tests
 │   ├── Dockerfile
 │   └── requirements.txt
@@ -72,9 +73,9 @@ A **two-pass funnel** (see `docs/backend.md` for detail):
 
 - Discover tickers dynamically and take a per-scan random sample (`max_tickers`, reshuffled each scan).
 - **Pass A** (`analyze_prices`): batch-download OHLCV (`yf.download`) and apply **minimal** price/volume hard filters (price 2–25, 1-month perf, liquidity, and a falling-knife guard = MA50 slope ≥ 0). Compute technical signals (accumulation/OBV, ATR compression, near recent-base pivot, low extension, RS turning). RS and price>MA50 are **scoring**, not hard filters — so early setups aren't eliminated.
-- Rank survivors by a technical score (`_price_score`, **accumulation weighted highest**) and keep the top `enrich_max` — this decides which names get the expensive `.info` call.
-- **Pass B** (`enrich_ticker`): `.info` on the top-scored survivors only (small thread pool + backoff — Yahoo rate-limits `.info`), apply market-cap/exchange filters, add fundamentals, compute the normalized 0–10 score.
-- Write results to `/app/data/screener_data.json`, sorted by `(score, rs_strength)`.
+- Rank survivors by a technical score (`_select_scores`, **accumulation weighted highest**) and keep the top `enrich_max` — this decides which names get the expensive `.info` call.
+- **Pass B** (`enrich_ticker`): `.info` on the top-scored survivors only (small thread pool + backoff — Yahoo rate-limits `.info`), apply market-cap/exchange filters, add fundamentals.
+- Score the whole candidate set (`_score_candidates`, 0–10, per `FILTERS["scoring_mode"]` — see `docs/backend.md`) and write results to `/app/data/screener_data.json`, sorted by `(score, rs_strength)`.
 
 `backend/backtest.py` is a separate offline harness that replays `analyze_prices` at a past as-of date and measures forward returns of survivors vs the universe (validates the price/volume signals; not wired into the live API).
 
@@ -113,7 +114,9 @@ The cache is valid for `FILTERS["cache_minutes"]`, currently 30 minutes.
 
 Scans **never block a request**. `GET /api/scan` is non-blocking (stale-while-revalidate): it returns a fresh cache immediately, or a stale result while kicking a background refresh, or an empty `{"stocks": [], "scanning": true}` payload on a cold start — then a background scan runs. A FastAPI startup hook warms the cache if none exists.
 
-A single background scan runs at a time, guarded by an in-flight flag (`_bg_scan_inflight`) whose check-and-set is atomic on the single-threaded event loop, plus `scan_state["scanning"]`. `POST /api/scan/force` clears the cache and starts a background scan, returning `409` if one is already running. Clients poll `GET /api/scan/status` for `phase`/`progress`.
+A single background scan runs at a time, guarded by an in-flight flag (`_bg_scan_inflight`) whose check-and-set is atomic on the single-threaded event loop, plus `scan_state["scanning"]`. `POST /api/scan/force` starts a background scan **without** clearing the cache (previous results stay served meanwhile), returning `409` if one is already running. Clients poll `GET /api/scan/status` for `phase`/`progress`.
+
+A startup hook warms the cache, and a scheduler task re-scans every `SCAN_EVERY_HOURS` (default 24) so each scan's picks are snapshotted to `data/history/`. `GET /api/performance` reads those snapshots to track how past selections have performed since first flagged.
 
 ## Configuration Sources
 
@@ -122,5 +125,6 @@ Most screener behavior is configured in the `FILTERS` dictionary in `backend/scr
 ## Known Design Tradeoffs
 
 - The custom watchlist is stored in backend memory, so it resets when the backend container restarts.
-- The frontend recomputes a local score from normalized fields even though the backend also returns `score`, `positives`, and `flags`.
+- The frontend renders the backend `score`/`positives`/`flags` directly (the old browser-side scoring was removed).
+- The scoring mode (`binary` vs `continuous`) is not yet validated by a large backtest — it is a config flag, default `binary`.
 - Claude analysis is called directly from the browser. This should be moved behind the backend before production use.
