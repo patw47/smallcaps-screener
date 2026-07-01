@@ -31,7 +31,8 @@ import statistics
 import pandas as pd
 
 from screener_backend import (
-    FILTERS, discover_tickers, analyze_prices, _download_prices, _price_score,
+    FILTERS, discover_tickers, analyze_prices, _download_prices,
+    _factor_composite, _binary_price_score, TECH_FACTORS,
 )
 
 
@@ -69,8 +70,7 @@ def evaluate_ticker(df: pd.DataFrame, bench_close: pd.Series | None,
                    if bench_close is not None else None)
     signals, _ = analyze_prices("BT", df_trunc, bench_trunc)
     survived = signals is not None
-    score = _price_score(signals) if signals else None
-    return survived, fwd, score
+    return survived, fwd, signals            # signals=None si rejeté
 
 
 def _stats(xs: list[float]) -> dict:
@@ -103,18 +103,17 @@ def run_backtest(n_tickers: int = 200, forward_days: int = 63,
 
     survivors_fwd: list[float] = []
     all_fwd: list[float] = []
-    survivor_score: list[tuple[int, float]] = []   # (score_technique, fwd)
+    surv_pairs: list[tuple[float, dict]] = []   # (fwd, signals)
 
     for tk, df in prices.items():
         res = evaluate_ticker(df, bench_close, forward_days)
         if res is None:
             continue
-        survived, fwd, score = res
+        survived, fwd, signals = res
         all_fwd.append(fwd)
         if survived:
             survivors_fwd.append(fwd)
-            if score is not None:
-                survivor_score.append((score, fwd))
+            surv_pairs.append((fwd, signals))
 
     # Rendement forward du benchmark sur le même horizon
     bench_fwd = None
@@ -125,25 +124,36 @@ def run_backtest(n_tickers: int = 200, forward_days: int = 63,
     univ = _stats(all_fwd)
     edge = (surv["mean"] - univ["mean"]) if (surv["mean"] is not None and univ["mean"] is not None) else None
 
-    # Ventilation par quartile de SCORE technique : plus le score est haut,
-    # meilleur le rendement forward ? (le vrai test du scoring accumulation-en-tête)
-    score_buckets = []
-    if len(survivor_score) >= 4:
-        survivor_score.sort(key=lambda x: x[0])
-        q = len(survivor_score) // 4
-        for i, label in enumerate(["Q1 (score bas)", "Q2", "Q3", "Q4 (score haut)"]):
-            chunk = survivor_score[i * q:(i + 1) * q] if i < 3 else survivor_score[i * q:]
-            fwds = [f for _, f in chunk]
-            score_buckets.append((label, _stats(fwds)["mean"]))
+    # Comparaison des DEUX scorings sur le MÊME vivier de survivants :
+    #  - continu  : percentile de facteurs continus (recommandation quant)
+    #  - binaire  : ancien score « cases à cocher »
+    # On regarde lequel sépare le mieux le rendement forward (quartiles croissants ?).
+    fwds = [f for f, _ in surv_pairs]
+    sigs = [s for _, s in surv_pairs]
+    cont_q = _quartile_returns(fwds, _factor_composite(sigs, TECH_FACTORS)) if len(sigs) >= 4 else []
+    bin_q = _quartile_returns(fwds, [_binary_price_score(s) for s in sigs]) if len(sigs) >= 4 else []
 
     result = {
         "n_tested": univ["n"], "n_survivors": surv["n"],
         "survivor": surv, "universe": univ, "benchmark_fwd": bench_fwd,
-        "edge_vs_universe": edge, "score_quartiles": score_buckets,
+        "edge_vs_universe": edge,
+        "continuous_quartiles": cont_q, "binary_quartiles": bin_q,
         "forward_days": forward_days, "seed": seed,
     }
     _print_report(result)
     return result
+
+
+def _quartile_returns(fwds: list[float], scores: list) -> list[tuple[str, float | None]]:
+    """Trie par score, coupe en quartiles, renvoie le rendement forward moyen de chaque."""
+    pairs = sorted(zip(scores, fwds), key=lambda x: x[0])
+    q = len(pairs) // 4
+    out = []
+    for i, label in enumerate(["Q1 (bas)", "Q2", "Q3", "Q4 (haut)"]):
+        chunk = pairs[i * q:(i + 1) * q] if i < 3 else pairs[i * q:]
+        vals = [f for _, f in chunk]
+        out.append((label, _stats(vals)["mean"]))
+    return out
 
 
 def _pct(x):
@@ -164,10 +174,14 @@ def _print_report(r: dict) -> None:
     print(f"  {'Univers testé':<20}{_pct(u['mean']):>9}{_pct(u['median']):>9}{_hit(u['hit']):>10}")
     print(f"  {'Benchmark (IWM)':<20}{_pct(r['benchmark_fwd']):>9}")
     print(f"\n  EDGE survivants − univers : {_pct(r['edge_vs_universe'])}")
-    if r["score_quartiles"]:
-        print("\n  Rendement forward moyen par quartile de score technique :")
-        for label, mean in r["score_quartiles"]:
-            print(f"    {label:<18} {_pct(mean)}")
+    if r["continuous_quartiles"]:
+        print("\n  Rendement forward moyen par quartile — CONTINU (percentile) :")
+        for label, mean in r["continuous_quartiles"]:
+            print(f"    {label:<12} {_pct(mean)}")
+    if r["binary_quartiles"]:
+        print("\n  Rendement forward moyen par quartile — BINAIRE (ancien) :")
+        for label, mean in r["binary_quartiles"]:
+            print(f"    {label:<12} {_pct(mean)}")
     print("\n  ⚠️  Biais de survie + signaux prix/volume seuls (pas de fondamentaux point-in-time).")
     print(f"{'='*60}\n")
 
