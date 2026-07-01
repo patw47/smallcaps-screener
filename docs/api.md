@@ -10,29 +10,30 @@ All application endpoints are prefixed with `/api`.
 
 ## `GET /api/scan`
 
-Runs a scan if no valid cache exists, then returns scan data.
+**Non-blocking** (stale-while-revalidate). Never runs a scan synchronously in the request:
 
-Cache behavior:
+- **Fresh cache** (< `cache_minutes`, default 30): returned directly.
+- **Stale result** exists: returned immediately with `"stale": true` while a background refresh is kicked.
+- **No data yet** (cold start): returns an empty payload with `"scanning": true` and kicks a background scan.
 
-- Reads `/app/data/screener_data.json` when present.
-- Cache is valid for `FILTERS["cache_minutes"]`, currently 30 minutes.
-- Concurrent cache misses are serialized with an `asyncio.Lock`.
+A FastAPI startup hook also warms the cache on boot. Clients should poll `GET /api/scan/status` for progress and re-fetch when a scan completes.
 
-Response:
+Response (fresh cache):
 
 ```json
 {
-  "scanned_at": "2026-05-05T10:00:00+00:00",
-  "total_scanned": 300,
-  "candidates": 12,
+  "scanned_at": "2026-07-01T16:14:00+00:00",
+  "universe_size": 800,
+  "total_scanned": 800,
+  "survivors_price_filter": 95,
+  "enriched": 95,
+  "candidates": 94,
   "stocks": [],
   "rejection_stats": {}
 }
 ```
 
-Errors:
-
-- `500`: scan completed without producing cached data.
+Response (scan in progress, no fresh cache) adds `"scanning": true`, `"phase": "..."`, and (if a stale result exists) `"stale": true`.
 
 ## `GET /api/scan/status`
 
@@ -44,16 +45,17 @@ Response:
 {
   "scanning": true,
   "progress": 42,
-  "total": 300,
-  "last_scan": "2026-05-05T10:00:00+00:00"
+  "total": 95,
+  "phase": "enrich",
+  "last_scan": "2026-07-01T16:14:00+00:00"
 }
 ```
 
 Fields:
 
 - `scanning`: `true` when a scan is active.
-- `progress`: processed ticker count.
-- `total`: total ticker count for the active scan.
+- `progress` / `total`: processed count / total for the current phase (Pass A universe, then Pass B survivors).
+- `phase`: `idle` | `download` | `price_filter` | `enrich`.
 - `last_scan`: timestamp set when the API scan function finishes, or `null`.
 
 ## `POST /api/scan/force`

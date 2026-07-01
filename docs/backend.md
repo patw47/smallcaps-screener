@@ -3,165 +3,121 @@
 ## Files
 
 - `backend/api.py`: FastAPI application and HTTP routes.
-- `backend/screener_backend.py`: market data discovery, filtering, scoring, and JSON output.
+- `backend/screener_backend.py`: market data discovery, two-pass filtering, scoring, and JSON output.
+- `backend/backtest.py`: forward-return validation harness (offline analysis, not part of the live API).
+- `backend/tests/`: offline deterministic unit tests (`test_screener.py`, `test_backtest.py`).
 - `requirements.txt`: Python runtime dependencies used by the backend image.
 - `backend/Dockerfile`: backend container definition.
 
+## Design in one line
+
+**Minimal hard filters (tradable + not a falling knife) → rank by a technical score led by accumulation → enrich the top-scored names with fundamentals.** The thesis is to catch small caps *early* (quiet accumulation / tight base, before the move), so selection is driven by **scoring**, not by strict elimination.
+
 ## Screener Configuration
 
-The main configuration lives in `FILTERS` in `backend/screener_backend.py`.
+The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No magic numbers in the logic.
 
 | Key | Default | Purpose |
 | --- | ---: | --- |
-| `market_cap_min_m` | `50` | Minimum market cap in USD millions. |
-| `market_cap_max_m` | `2000` | Maximum market cap in USD millions. |
-| `price_min` | `2.0` | Minimum stock price. |
-| `price_max` | `50.0` | Maximum stock price. |
-| `ipo_year_min` | `2015` | IPO year threshold used for scoring. |
-| `perf_1m_min` | `-0.35` | Minimum one-month performance. |
-| `perf_1m_max` | `0.25` | Maximum one-month performance. |
-| `vol_window_short` | `10` | Short volume average window in trading days. |
-| `vol_window_long` | `50` | Long volume average window in trading days. |
-| `compression_window` | `20` | Recent range window. |
-| `compression_baseline` | `90` | Baseline range window. |
-| `compression_threshold` | `0.70` | Compression threshold. |
-| `insider_pct_min` | `5.0` | Insider ownership threshold for scoring. |
-| `revenue_growth_min` | `0.10` | Revenue growth threshold for scoring. |
-| `short_interest_high` | `15.0` | Short interest threshold for scoring. |
-| `score_vol_ratio_min` | `1.3` | Lower ideal volume-ratio score bound. |
-| `score_vol_ratio_max` | `2.5` | Upper ideal volume-ratio score bound. |
-| `score_change_1m_max` | `0.15` | Maximum absolute one-month move for consolidation scoring. |
-| `allowed_exchanges` | `NMS`, `NYQ`, `NGM`, `NCM` | Accepted exchange codes. |
-| `rate_limit_s` | `0.3` | Delay between ticker requests. |
+| `market_cap_min_m` / `market_cap_max_m` | `50` / `2000` | Market-cap band (USD millions), Pass B hard filter. |
+| `price_min` / `price_max` | `2.0` / `25.0` | Price band (Pass A hard filter). |
+| `perf_1m_min` / `perf_1m_max` | `-0.35` / `0.25` | 1-month perf band — light "not already exploded" guard. |
+| `vol_window_short` / `vol_window_long` | `10` / `50` | Volume-ratio windows (display only; scoring uses OBV). |
+| `compression_window` / `compression_baseline` | `20` / `90` | ATR compression windows. |
+| `compression_threshold` / `use_atr_compression` | `0.70` / `True` | `ATR20 < 0.70 × ATR90` (True Range, High/Low). |
+| `ma_trend_window` / `ma_slope_lookback` | `50` / `10` | Trend MA + slope lookback. |
+| `trend_require_above_ma` | `False` | Price > MA50 is **scoring**, not a hard filter (catch the start of the move). |
+| `rs_benchmark` | `IWM` | Relative-strength benchmark (Russell 2000 ETF). |
+| `rs_return_window` / `rs_line_lookback` | `63` / `21` | RS return window and RS-line slope lookback. |
+| `rs_require` | `False` | RS is **scoring**, not a hard filter (don't require "already strong"). |
+| `dollar_vol_window` / `dollar_vol_min` | `20` / `1_000_000` | Median dollar-volume liquidity floor (hard). |
+| `obv_lookback` | `21` | OBV-rising window → `accumulation`. |
+| `pivot_window` / `near_pivot_pct` | `50` / `0.85` | Near the high of the **recent** base → about to break out. |
+| `low_ext_pct` | `0.12` | Price ≤ MA50 × 1.12 → not extended (still early). |
+| `high_window` / `near_high_pct` | `252` / `0.75` | 52-week high position (informational). |
+| `float_max` | `50_000_000` | Float < 50M shares → `low_float` (score bonus). |
+| `insider_pct_min` / `revenue_growth_min` / `short_interest_high` | `5.0` / `0.10` / `15.0` | Fundamental scoring thresholds. |
+| `score_weights` | dict | Weight of every score signal (tunable for backtesting). |
+| `allowed_exchanges` | `NMS`,`NYQ`,`NGM`,`NCM` | Accepted exchange codes (Pass B). |
+| `max_tickers` | `800` | Per-scan universe sample, reshuffled each scan. |
+| `history_period` | `1y` | OHLCV depth (needs 252 for 52w + ATR90). |
+| `enrich_max` | `150` | Cap on `.info` calls — the **top-scored** survivors are enriched. |
+| `enrich_workers` / `enrich_jitter_s` / `enrich_retries` / `enrich_backoff_s` | `2` / `0.5` / `4` / `3.0` | Pass B pool + anti-throttle backoff (Yahoo bans the IP if hammered). |
 | `cache_minutes` | `30` | Cache lifetime. |
-| `max_tickers` | `300` | Dynamic discovery cap. |
+| `shuffle_seed` | `None` | `int` → deterministic scan; `None` → resample each scan. |
 
 ## Ticker Discovery
 
-Function: `discover_tickers()`
+`discover_tickers()` — NASDAQ (`Small`+`Micro`) + Finviz, deduplicated, shuffled, capped at `max_tickers` (800). With `shuffle_seed=None` each scan resamples a different 800; successive dashboard "Scan" clicks sweep the universe. A custom watchlist bypasses discovery.
 
-Discovery uses two sources:
+## Pass A — price/volume (`analyze_prices`)
 
-- NASDAQ screener API for `Small` and `Micro` market-cap groups.
-- Finviz screener page for US NASDAQ small caps.
+Pure function on a batch-downloaded OHLCV DataFrame (no network). **Hard filters** (kept minimal):
 
-Symbols containing `.` or `/` are skipped. The combined set is deduplicated, shuffled, capped by `FILTERS["max_tickers"]`, and returned as a list.
+| Filter | Condition | Reason |
+| --- | --- | --- |
+| Price | `price_min ≤ last close ≤ price_max` (2–25) | `price:…` |
+| 1-month perf | within `perf_1m_min..max` | `change_1m:…` |
+| Liquidity | median 20d dollar-volume ≥ `dollar_vol_min` | `liquidity:…` |
+| Falling-knife guard | **MA50 slope ≥ 0** (flat or rising) | `trend:down` |
 
-If a custom watchlist is set through the API, `run_scan()` receives that list and skips dynamic discovery.
+RS, price > MA50, and near-high are **not** hard filters — they are scoring signals (so early setups aren't eliminated). Optional hard gates exist behind `rs_require` / `trend_require_above_ma` (both `False` by default).
 
-## Per-Ticker Analysis
+Signals computed: `accumulation` (OBV rising), `compressed` (ATR), `near_pivot` / `pct_recent_high` (recent base), `low_ext` (near MA50), `rs_turning` / `rs_strength` / `rs_signal`, `price_above_ma50`, `pct_52w_high` / `near_high` (informational), `dollar_volume`, `vol_ratio`, `change_1d` / `change_1m`.
 
-Function: `analyze_ticker(ticker)`
+## Scoring — `_compute_score` / `_price_score`
 
-For each ticker, the screener:
+**Normalized** to 0–10 via `round(10 × raw / raw_max)`. Weights live in `FILTERS["score_weights"]`.
 
-1. Builds a `yfinance.Ticker`.
-2. Reads `Ticker.info`.
-3. Applies hard exchange, price, market-cap, history, and one-month performance filters.
-4. Loads one year of daily history.
-5. Computes one-day and one-month price changes.
-6. Computes 10-day versus 50-day average volume ratio.
-7. Computes 20-day range compression against a 90-day baseline.
-8. Reads balance-sheet, insider, short-interest, revenue-growth, and IPO-year fields from `Ticker.info`.
-9. Computes score, positives, and warning flags.
-
-Return shape:
-
-```python
-(stock_dict, "ok")
-```
-
-or:
-
-```python
-(None, rejection_reason)
-```
-
-Rejection reasons use a `category:detail` convention where possible, for example `price:1.45` or `market_cap:2400M`.
-
-## Hard Filters
-
-The ticker is eliminated immediately when any hard filter fails:
-
-| Filter | Condition |
-| --- | --- |
-| Exchange | Must be in `allowed_exchanges`. |
-| Price | Must be between `price_min` and `price_max`. |
-| Market cap | Must be between `market_cap_min_m` and `market_cap_max_m`. |
-| History | Must have at least `vol_window_long` daily rows. |
-| One-month performance | Must be between `perf_1m_min` and `perf_1m_max`. |
-
-IPO year, volume ratio, insider ownership, cash position, revenue growth, and short interest are scoring inputs, not hard eliminators.
-
-## Scoring
-
-Function: `_compute_score(stock)`
-
-The score is capped at 10.
+**Technical signals** (`_tech_rules` — available from Pass A, used to rank survivors):
 
 | Signal | Points |
 | --- | ---: |
-| Volume ratio between `score_vol_ratio_min` and `score_vol_ratio_max` | 2 |
-| Range compression detected | 2 |
-| Absolute one-month move below `score_change_1m_max` | 2 |
-| Insider ownership above `insider_pct_min` | 2 |
-| Total cash greater than total debt | 1 |
-| Revenue growth above `revenue_growth_min` | 1 |
-| IPO year greater than or equal to `ipo_year_min` | 1 |
-| Short interest above `short_interest_high` | 1 |
+| Accumulation (OBV rising) | **4** |
+| Compression (ATR, tight base) | **3** |
+| Near recent-base pivot | 2 |
+| Low extension (near MA50) | 2 |
+| Relative strength turning up | 2 |
+| Price > MA50 | 1 |
+
+**Fundamental signals** (`_fundamental_rules` — added in Pass B):
+
+| Signal | Points |
+| --- | ---: |
+| Insider ownership > `insider_pct_min` | 2 |
+| Cash > debt (only when data present) | 1 |
+| Revenue growth > `revenue_growth_min` | 1 |
+| Low float | 1 |
+| Short interest > `short_interest_high` | 1 |
+
+`_price_score` (technical only) ranks Pass A survivors to decide **which get the expensive `.info` call** — accumulation-led, thesis-justified. Candidates are finally sorted by `(score, rs_strength)`.
+
+## Pass B — fundamentals (`enrich_ticker`)
+
+`.info` on the **top-scored** survivors only (bounded by `enrich_max`). `_fetch_info` wraps `.info` with retries + exponential backoff on `YFRateLimitError`; `enrich_workers` is small (Yahoo rate-limits `.info`). Hard filters: exchange, market-cap band. Fundamentals: `cash_positive` (`None` when missing — not penalized), insider, short interest, revenue growth, `float_shares`/`low_float`, `ipo_year`.
+
+## Orchestration — `run_scan(tickers=None)`
+
+Discover → sample → `_download_prices` → **Pass A** (hard filters + signals) → **rank survivors by `_price_score`, keep top `enrich_max`** → **Pass B** (`.info` + final score) → sort → write `/app/data/screener_data.json`. `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
 
 ## Output JSON
 
-`run_scan()` writes this structure to `/app/data/screener_data.json`:
+Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter`, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, `positives`, `flags`, and `catalyst_type`/`catalyst_date` (`null`).
 
-```json
-{
-  "scanned_at": "2026-05-05T10:00:00+00:00",
-  "total_scanned": 300,
-  "candidates": 12,
-  "stocks": [],
-  "rejection_stats": {
-    "price": 42,
-    "market_cap": 30
-  }
-}
+## Backtest harness — `backend/backtest.py`
+
+Replays `analyze_prices` at a past as-of date and compares forward returns of survivors vs the tested universe vs IWM, **bucketed by technical score quartile** (does a higher score predict a higher forward return?).
+
+```bash
+DATA_DIR=/tmp/bt PYTHONPATH=backend python backtest.py --n 200 --forward 63 --seed 42
 ```
 
-Each stock contains:
+**Honest limitations:** survivorship bias, no point-in-time fundamentals (validates price/volume signals only), single as-of snapshot. Small samples are not conclusive — a real verdict needs large `n` and a rolling multi-period run.
 
-```json
-{
-  "ticker": "ABCD",
-  "name": "Example Corp",
-  "sector": "Technology",
-  "industry": "Software",
-  "exchange": "NMS",
-  "price": 12.34,
-  "change_1d": 0.0123,
-  "change_1m": -0.0456,
-  "market_cap_m": 450.1,
-  "vol_ratio": 1.42,
-  "compressed": true,
-  "cash_positive": true,
-  "insider_buying": false,
-  "insider_pct": 1.25,
-  "short_interest_pct": 8.3,
-  "revenue_growth": 0.18,
-  "ipo_year": 2021,
-  "catalyst_type": null,
-  "catalyst_date": null,
-  "score": 7,
-  "positives": [],
-  "flags": []
-}
+## Tests
+
+```bash
+DATA_DIR=/tmp/screener_test PYTHONPATH=backend python -m pytest backend/tests/
 ```
 
-## Scan State
-
-Global `scan_state` exposes:
-
-- `scanning`: whether a scan is active.
-- `progress`: number of tickers processed.
-- `total`: number of tickers in the current scan.
-
-The API exposes this through `GET /api/scan/status`.
+Deterministic, offline. The module honors `DATA_DIR` so it imports outside the container.

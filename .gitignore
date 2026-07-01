@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 node_modules/
 .DS_Store
+
+# Python test/tool caches
+.pytest_cache/
+.ruff_cache/
