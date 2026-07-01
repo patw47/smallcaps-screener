@@ -67,10 +67,14 @@ FILTERS = {
     "pivot_window": 50,            # plus-haut de la base RÉCENTE (~10 sem.) — le point de cassure
     "near_pivot_pct": 0.85,        # prix ≥ 85% du plus-haut récent → près du pivot de breakout
     "low_ext_pct": 0.12,           # prix ≤ MA50 × 1.12 → peu étiré (encore tôt)
-    # --- Poids de scoring (tous configurables pour le backtest) ---
+    # --- Mode de scoring : NON tranché tant que le backtest robuste n'a pas décidé ---
+    # "binary"     : ancien score « cases à cocher » (connu/conservateur ; plafonne ~8)
+    # "continuous" : facteurs continus → percentile → décile 0-10 (échelle pleine, non validé)
+    "scoring_mode": "binary",
+    # --- Poids de scoring (utilisés par les deux modes ; configurables pour le backtest) ---
     "score_weights": {
         "accumulation": 4,  # OBV↑ : l'argent rentre (LE meilleur signal pré-explosion)
-        "compression": 3,   # base serrée : ressort armé
+        "compression": 2,   # base serrée — baissé 3→2 : signal quasi mort (0,8%), impact cosmétique (backtest)
         "near_pivot": 2,    # proche du point de cassure de la base récente
         "low_ext": 2,       # peu étiré : encore tôt
         "rs_turning": 2,    # la force relative repart à la hausse
@@ -104,6 +108,7 @@ FILTERS = {
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 OUTPUT_FILE = Path(DATA_DIR) / "screener_data.json"
+HISTORY_DIR = Path(DATA_DIR) / "history"   # instantanés datés pour le suivi de performance
 
 scan_state = {
     "scanning": False,
@@ -249,6 +254,21 @@ def _obv_rising(close: pd.Series, volume: pd.Series, lookback: int) -> bool | No
     return bool(obv.iloc[-1] > obv.iloc[-lookback - 1])
 
 
+def _accum_fraction(close: pd.Series, volume: pd.Series, lookback: int) -> float | None:
+    """
+    Accumulation CONTINUE : fraction de volume directionnel net sur `lookback` jours,
+    dans [-1, 1] (comparable entre tickers). +1 = tout le volume est acheteur, -1 = vendeur.
+    Version continue de l'OBV, pour le scoring en percentile.
+    """
+    if close is None or volume is None or len(close) < lookback + 1:
+        return None
+    d = close.diff().iloc[-lookback:]
+    v = volume.iloc[-lookback:]
+    signed = float((v * d.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))).sum())
+    total = float(v.sum())
+    return signed / total if total else None
+
+
 def _pct_of_high(close: pd.Series, window: int) -> float | None:
     """Dernier prix / plus-haut sur `window` jours (position dans le range 52 sem.)."""
     if close is None or len(close) == 0:
@@ -365,17 +385,91 @@ def _fundamental_rules(stock: dict) -> list[tuple[bool, int]]:
     ]
 
 
-def _price_score(sig: dict) -> int:
-    """Score technique brut (sans .info) — sert à CLASSER les survivants avant enrichissement."""
+def _binary_price_score(sig: dict) -> int:
+    """[Ancienne version binaire — conservée pour comparaison au backtest.]"""
     return sum(w for cond, w in _tech_rules(sig) if cond)
 
 
-def _compute_score(stock: dict) -> int:
-    """Score pondéré normalisé sur 10 (technique + fondamental). Poids dans FILTERS['score_weights']."""
+def _binary_score(stock: dict) -> int:
+    """[Ancienne version binaire — conservée pour comparaison au backtest.]"""
     rules = _tech_rules(stock) + _fundamental_rules(stock)
     raw = sum(w for cond, w in rules if cond)
     raw_max = sum(w for _, w in rules)
     return round(10 * raw / raw_max) if raw_max else 0
+
+
+# ---------------------------------------------------------------------------
+# Scoring PERCENTILE de facteurs continus (recommandation quant)
+# Chaque facteur → valeur continue → percentile parmi les candidats → moyenne pondérée.
+# (key_de_la_valeur, nom_du_poids, higher_is_better)
+# ---------------------------------------------------------------------------
+TECH_FACTORS = [
+    ("f_accum",      "accumulation", True),   # fraction volume directionnel net
+    ("f_atr_ratio",  "compression",  False),  # ATR20/ATR90 : plus bas = plus comprimé
+    ("f_pct_recent", "near_pivot",   True),   # proximité du plus-haut récent
+    ("f_ext",        "low_ext",      False),  # écart à la MA50 : plus bas = plus tôt
+    ("f_rs",         "rs_turning",   True),   # magnitude de force relative
+]
+FUND_FACTORS = [
+    ("insider_pct",        "insider",   True),
+    ("cash_bin",           "cash",      True),   # 1 / 0 / None(neutre)
+    ("revenue_growth",     "revenue",   True),
+    ("float_shares",       "low_float", False),  # plus petit float = mieux
+    ("short_interest_pct", "short",     True),
+]
+
+
+def _rank_pct(values: list) -> list[float]:
+    """Percentile [0,1] de chaque valeur (plus grand = plus proche de 1). None → 0.5 (neutre)."""
+    present = [(i, v) for i, v in enumerate(values) if v is not None]
+    out = [0.5] * len(values)
+    n = len(present)
+    if n <= 1:
+        return out
+    for rank, (i, _) in enumerate(sorted(present, key=lambda x: x[1])):
+        out[i] = rank / (n - 1)
+    return out
+
+
+def _factor_composite(items: list[dict], factors: list[tuple]) -> list[float]:
+    """Composite ∈ [0,1] par item = moyenne pondérée des percentiles de chaque facteur."""
+    W = FILTERS["score_weights"]
+    pct = {}
+    for key, wname, higher in factors:
+        vals = [it.get(key) for it in items]
+        if not higher:
+            vals = [(-v if v is not None else None) for v in vals]
+        pct[wname] = _rank_pct(vals)
+    total_w = sum(W[wname] for _, wname, _ in factors) or 1
+    return [sum(W[wname] * pct[wname][i] for _, wname, _ in factors) / total_w
+            for i in range(len(items))]
+
+
+def _select_scores(signals_list: list[dict]) -> list[float]:
+    """
+    Score technique des survivants pour choisir qui enrichir (ordre seul).
+    Suit FILTERS['scoring_mode'] pour rester cohérent avec le score final.
+    """
+    if FILTERS["scoring_mode"] == "continuous":
+        return _factor_composite(signals_list, TECH_FACTORS)
+    return [float(_binary_price_score(s)) for s in signals_list]
+
+
+def _score_candidates(candidates: list[dict]) -> None:
+    """
+    Écrit `score` (0-10) dans chaque candidat, en place, selon FILTERS['scoring_mode'] :
+      - "binary"     : ancien score « cases à cocher » (par ticker ; plafonne ~8).
+      - "continuous" : moyenne pondérée de percentiles de facteurs continus, étalée en RANG
+        DÉCILE (le meilleur du vivier du jour = 10). Le rang évite le tassement au milieu.
+    """
+    if FILTERS["scoring_mode"] == "continuous":
+        comp = _factor_composite(candidates, TECH_FACTORS + FUND_FACTORS)
+        ranks = _rank_pct(comp)
+        for stock, r in zip(candidates, ranks):
+            stock["score"] = round(10 * r)
+    else:
+        for stock in candidates:
+            stock["score"] = _binary_score(stock)
 
 
 # ---------------------------------------------------------------------------
@@ -475,20 +569,22 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     vol_base = float(baseline.median()) if len(baseline) else None
     vol_ratio = vol_recent / vol_base if vol_base and vol_base > 0 else None
 
-    # Compression : ATR court < seuil × ATR long (True Range High/Low) — fallback Close-only
+    # Compression : ratio ATR court / ATR long (True Range High/Low) — fallback Close-only.
+    # atr_ratio = valeur CONTINUE (plus bas = plus comprimé) ; compressed = seuil booléen (affichage).
     compressed = False
+    atr_ratio = None
     if FILTERS["use_atr_compression"]:
         atr_s = _atr(df, FILTERS["compression_window"])
         atr_l = _atr(df, FILTERS["compression_baseline"])
         if atr_s is not None and atr_l is not None and atr_l > 0:
-            compressed = bool((atr_s / atr_l) < FILTERS["compression_threshold"])
+            atr_ratio = atr_s / atr_l
     else:
         range_20 = _range_pct(close, FILTERS["compression_window"])
         range_90 = _range_pct(close, FILTERS["compression_baseline"])
-        compressed = bool(
-            range_20 is not None and range_90 is not None and range_90 > 0
-            and (range_20 / range_90) < FILTERS["compression_threshold"]
-        )
+        if range_20 is not None and range_90 is not None and range_90 > 0:
+            atr_ratio = range_20 / range_90
+    if atr_ratio is not None:
+        compressed = bool(atr_ratio < FILTERS["compression_threshold"])
 
     # Accumulation : OBV en hausse (§9 — remplace le ratio de volume brut au scoring)
     accumulation = bool(_obv_rising(close, volume, FILTERS["obv_lookback"]))
@@ -511,6 +607,10 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     if FILTERS["rs_require"] and rs_outperf is not None and not rs_signal:
         return None, "rs:weak"
 
+    # --- Facteurs CONTINUS pour le scoring percentile ---
+    f_accum = _accum_fraction(close, volume, FILTERS["obv_lookback"])
+    f_ext = (price / ma50 - 1) if ma50 else None
+
     signals = {
         "price": round(price, 2),
         "change_1d": round(change_1d, 4) if change_1d is not None else None,
@@ -531,6 +631,12 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         "rs_turning": rs_turning,
         "rs_strength": round(rs_strength, 4) if rs_strength is not None else None,
         "rs_signal": rs_signal,
+        # Facteurs continus (scoring percentile) :
+        "f_accum": f_accum,
+        "f_atr_ratio": atr_ratio,
+        "f_pct_recent": pct_recent,
+        "f_ext": f_ext,
+        "f_rs": rs_strength,
     }
     return signals, "ok"
 
@@ -614,13 +720,14 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
         "float_shares": int(float_shares) if float_shares is not None else None,
         "low_float": low_float,
         "cash_positive": cash_positive,
+        "cash_bin": (1.0 if cash_positive is True else (0.0 if cash_positive is False else None)),
         "ipo_year": ipo_year,
         "catalyst_type": None,
         "catalyst_date": None,
-        **signals,  # price, change_1d/1m, dollar_volume, vol_ratio, compressed, accumulation,
-                    # pct_52w_high, near_high, ma50, price_above_ma50, rs_*, rs_signal
+        **signals,  # inclut les facteurs continus f_accum / f_atr_ratio / f_pct_recent / f_ext / f_rs
     }
-    stock["score"] = _compute_score(stock)
+    # Le score (percentile) est calculé sur l'ENSEMBLE des candidats dans run_scan,
+    # pas ici (un percentile n'a de sens que par rapport au vivier). On pose positives/flags.
     stock["positives"], stock["flags"] = _build_positives_flags(stock)
     return stock, "ok"
 
@@ -666,10 +773,13 @@ def run_scan(tickers: list[str] | None = None) -> dict:
             cat = reason.split(":")[0]
             rejection_counts[cat] = rejection_counts.get(cat, 0) + 1
 
-    # Classement par SCORE TECHNIQUE (accumulation en tête) pour choisir qui mérite l'appel
-    # .info coûteux. Ce n'est plus un tirage au sort : l'accumulation EST la thèse, donc
-    # classer par elle est légitime (les meilleures pépites en tête).
-    survivors.sort(key=lambda x: (_price_score(x[1]), x[1].get("dollar_volume") or 0), reverse=True)
+    # Classement par SCORE TECHNIQUE PERCENTILE (accumulation en tête) pour choisir qui
+    # mérite l'appel .info coûteux. Le percentile est cross-sectionnel : « les meilleures
+    # parmi le vivier du jour ». L'accumulation EST la thèse → classer par elle est légitime.
+    tech_scores = _select_scores([sig for _, sig in survivors])
+    ranked = sorted(zip(survivors, tech_scores),
+                    key=lambda x: (x[1], x[0][1].get("dollar_volume") or 0), reverse=True)
+    survivors = [s for s, _ in ranked]
     n_all = len(survivors)
     capped = survivors[:FILTERS["enrich_max"]]
     if n_all > len(capped):
@@ -704,7 +814,9 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         print(f"    {cat:<20} {count:>4} tickers")
     print()
 
-    # Tri : score décroissant, puis force relative continue (magnitude) en départage (#4)
+    # Score PERCENTILE final (technique + fondamental) calculé sur l'ENSEMBLE des candidats,
+    # puis tri décroissant (magnitude RS en départage).
+    _score_candidates(candidates)
     candidates.sort(key=lambda x: (x["score"], x.get("rs_strength") or 0), reverse=True)
 
     output = {
@@ -719,8 +831,37 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     }
 
     OUTPUT_FILE.write_text(json.dumps(output, indent=2, ensure_ascii=False))
+    _write_snapshot(output)   # historique daté pour le suivi de performance
     scan_state.update({"scanning": False, "phase": "idle"})
     return output
+
+
+def _write_snapshot(output: dict) -> None:
+    """
+    Enregistre un instantané daté des candidats dans data/history/ pour le suivi de
+    performance dans le temps. Chaque scan = un fichier. Ne fait jamais échouer le scan.
+    """
+    try:
+        HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        picks = [
+            {
+                "ticker": s["ticker"], "score": s["score"], "price": s["price"],
+                "sector": s.get("sector"),
+                "accumulation": s.get("accumulation"), "compressed": s.get("compressed"),
+                "near_pivot": s.get("near_pivot"), "rs_strength": s.get("rs_strength"),
+            }
+            for s in output.get("stocks", [])
+        ]
+        snap = {
+            "scanned_at": output["scanned_at"],
+            "candidates": len(picks),
+            "picks": picks,
+        }
+        ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+        (HISTORY_DIR / f"{ts}.json").write_text(json.dumps(snap, indent=2, ensure_ascii=False))
+        print(f"[snapshot] {len(picks)} sélections → history/{ts}.json")
+    except Exception as e:
+        print(f"[snapshot] erreur (ignorée): {e}")
 
 
 if __name__ == "__main__":

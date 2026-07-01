@@ -37,6 +37,7 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `high_window` / `near_high_pct` | `252` / `0.75` | 52-week high position (informational). |
 | `float_max` | `50_000_000` | Float < 50M shares → `low_float` (score bonus). |
 | `insider_pct_min` / `revenue_growth_min` / `short_interest_high` | `5.0` / `0.10` / `15.0` | Fundamental scoring thresholds. |
+| `scoring_mode` | `binary` | `binary` (default, ~0–8) or `continuous` (decile 0–10) — see Scoring. |
 | `score_weights` | dict | Weight of every score signal (tunable for backtesting). |
 | `allowed_exchanges` | `NMS`,`NYQ`,`NGM`,`NCM` | Accepted exchange codes (Pass B). |
 | `max_tickers` | `800` | Per-scan universe sample, reshuffled each scan. |
@@ -65,32 +66,44 @@ RS, price > MA50, and near-high are **not** hard filters — they are scoring si
 
 Signals computed: `accumulation` (OBV rising), `compressed` (ATR), `near_pivot` / `pct_recent_high` (recent base), `low_ext` (near MA50), `rs_turning` / `rs_strength` / `rs_signal`, `price_above_ma50`, `pct_52w_high` / `near_high` (informational), `dollar_volume`, `vol_ratio`, `change_1d` / `change_1m`.
 
-## Scoring — `_compute_score` / `_price_score`
+## Scoring — two modes (`FILTERS["scoring_mode"]`)
 
-**Normalized** to 0–10 via `round(10 × raw / raw_max)`. Weights live in `FILTERS["score_weights"]`.
+The scoring approach is **not settled** — it is a config flag, and a larger rolling
+backtest is meant to decide it (the current small-sample backtest cannot). Both modes
+use the same weights (`FILTERS["score_weights"]`) and are computed in `_score_candidates`.
 
-**Technical signals** (`_tech_rules` — available from Pass A, used to rank survivors):
+- **`"binary"` (default)** — the original "checkbox" score (`_binary_score`): each signal
+  adds fixed points, normalized to 0–10. Known and conservative, but **caps around 8**
+  (some points are near-unreachable, e.g. ATR compression fires on ~1/146 names).
+- **`"continuous"`** — standard quant factor scoring: each factor is a **continuous** value,
+  **percentile-ranked across the candidate set** (`_rank_pct`), combined into a weighted
+  average (`_factor_composite`), then mapped to a **decile 0–10** so the best of the day's
+  pool = 10. Fixes the scale and loses no information, but its edge is **not yet validated**.
 
-| Signal | Points |
-| --- | ---: |
-| Accumulation (OBV rising) | **4** |
-| Compression (ATR, tight base) | **3** |
-| Near recent-base pivot | 2 |
-| Low extension (near MA50) | 2 |
-| Relative strength turning up | 2 |
-| Price > MA50 | 1 |
+Selection of which survivors get enriched follows the same mode (`_select_scores`).
 
-**Fundamental signals** (`_fundamental_rules` — added in Pass B):
+**Technical factors** (Pass A; `TECH_FACTORS`; used to rank which survivors get enriched):
 
-| Signal | Points |
-| --- | ---: |
-| Insider ownership > `insider_pct_min` | 2 |
-| Cash > debt (only when data present) | 1 |
-| Revenue growth > `revenue_growth_min` | 1 |
-| Low float | 1 |
-| Short interest > `short_interest_high` | 1 |
+| Factor (continuous) | Weight | Direction |
+| --- | ---: | --- |
+| `f_accum` — net directional volume fraction (∈[-1,1]) | 4 | higher better |
+| `f_atr_ratio` — ATR20 / ATR90 | 2 | lower better |
+| `f_pct_recent` — proximity to recent-base high | 2 | higher better |
+| `f_ext` — price/MA50 − 1 (extension) | 2 | lower better |
+| `f_rs` — relative-strength magnitude vs IWM | 2 | higher better |
 
-`_price_score` (technical only) ranks Pass A survivors to decide **which get the expensive `.info` call** — accumulation-led, thesis-justified. Candidates are finally sorted by `(score, rs_strength)`.
+**Fundamental factors** (Pass B; `FUND_FACTORS`): `insider_pct` (2), `cash_bin` (1),
+`revenue_growth` (1), `float_shares` (1, lower better), `short_interest_pct` (1).
+
+The two factor tables above are the **continuous-mode** factors. In continuous mode the
+final `score` is computed **cross-sectionally over the candidate set** in `run_scan` (a
+percentile needs the population). In **binary mode** (the default) the score instead comes
+from `_binary_score` (`_tech_rules` + `_fundamental_rules`, the boolean signals). Selection
+(`_select_scores`) follows the active mode. Candidates are sorted by `(score, rs_strength)`.
+
+> The backtest (`backend/backtest.py`) scores the same survivors **both ways** and prints
+> the two quartile tables side by side, so the mode can be chosen on evidence once the
+> sample is large enough. At small survivor counts the two are statistically indistinguishable.
 
 ## Pass B — fundamentals (`enrich_ticker`)
 
@@ -98,7 +111,7 @@ Signals computed: `accumulation` (OBV rising), `compressed` (ATR), `near_pivot` 
 
 ## Orchestration — `run_scan(tickers=None)`
 
-Discover → sample → `_download_prices` → **Pass A** (hard filters + signals) → **rank survivors by `_price_score`, keep top `enrich_max`** → **Pass B** (`.info` + final score) → sort → write `/app/data/screener_data.json`. `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
+Discover → sample → `_download_prices` → **Pass A** (hard filters + continuous factors) → **rank survivors by technical composite (`_select_scores`), keep top `enrich_max`** → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10 over the whole set)** → sort → write `/app/data/screener_data.json`. `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
 
 ## Output JSON
 
@@ -106,13 +119,24 @@ Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filt
 
 ## Backtest harness — `backend/backtest.py`
 
-Replays `analyze_prices` at a past as-of date and compares forward returns of survivors vs the tested universe vs IWM, **bucketed by technical score quartile** (does a higher score predict a higher forward return?).
+Replays `analyze_prices` at a past as-of date and compares forward returns of survivors vs
+the tested universe vs IWM, **bucketed by score quartile**, showing the continuous and the
+binary score side by side (does a higher score predict a higher forward return, and does
+one scoring beat the other?).
 
 ```bash
+# single window
 DATA_DIR=/tmp/bt PYTHONPATH=backend python backtest.py --n 200 --forward 63 --seed 42
+
+# rolling weight sweep: pool survivors over several as-of windows (evaluate_ticker gains an
+# as_of_offset) to escape small-sample noise, and sweep a scoring weight
+DATA_DIR=/tmp/bt PYTHONPATH=backend python backtest.py --sweep --n 250 --forward 63
 ```
 
-**Honest limitations:** survivorship bias, no point-in-time fundamentals (validates price/volume signals only), single as-of snapshot. Small samples are not conclusive — a real verdict needs large `n` and a rolling multi-period run.
+**Honest limitations:** survivorship bias, no point-in-time fundamentals (validates
+price/volume signals only). A single window at ~14 survivors is pure noise; `--sweep` pools
+windows (hundreds of survivors) for a cleaner read, but a full verdict still needs multiple
+seeds/horizons. So far the backtest cannot confirm an edge or that continuous beats binary.
 
 ## Tests
 

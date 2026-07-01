@@ -1,87 +1,208 @@
 # SmallCaps Screener
 
-SmallCaps Screener is a Dockerized dashboard for discovering and ranking US small-cap stocks. It discovers candidates from NASDAQ and Finviz, runs a **two-pass funnel** (minimal price/volume hard filters, then a technical score led by accumulation to pick which names get enriched with `yfinance` fundamentals), and exposes the ranked results through a FastAPI backend consumed by a React/Vite frontend.
+A Dockerized dashboard that discovers and ranks US small-cap stocks. The goal is
+to surface promising names **early** — quiet accumulation and tight bases, *before*
+the move — rather than stocks that have already run.
 
-The interface is written in French. The goal is to surface small caps **early** — quiet accumulation and tight bases, before the move — rather than stocks that have already run. See the [scoring model](docs/backend.md) for the exact signals and weights.
+It is a decision-support tool: it discovers, scores, and ranks. It does not trade.
+The final call stays human. The interface is in French; this documentation is in
+English.
 
-## Documentation
+## How it works
 
-Complete project documentation is available in:
+The scan is a **two-pass funnel** driven by **scoring, not strict elimination**.
 
-- [Architecture](docs/architecture.md)
-- [Backend screener](docs/backend.md)
-- [API reference](docs/api.md)
-- [Frontend](docs/frontend.md)
-- [Deployment and operations](docs/deployment.md)
+```
+NASDAQ + Finviz  →  dedupe  →  random.shuffle  →  sample 800   (resampled each scan)
+    │
+    ▼  Pass A  (analyze_prices) — batch yf.download, no per-ticker cost
+    │     minimal hard filters:  price 2–25 · 1-month perf · liquidity ≥ $1M ·
+    │                            falling-knife guard (MA50 slope ≥ 0)
+    │     technical signals:     accumulation (OBV) · compression (ATR) ·
+    │                            near recent-base pivot · low extension · RS turning
+    │
+    ▼  rank survivors by technical score (accumulation weighted highest)
+    │     → keep the top ~150 (bounds the expensive .info calls)
+    │
+    ▼  Pass B  (enrich_ticker) — yfinance .info on the top-scored names only
+    │     hard filters:  market cap 50M–2B · exchange
+    │     fundamentals:  insider · cash/debt · revenue growth · float · short interest
+    │
+    ▼  0–10 score (see scoring modes)  →  sorted list  →  data/screener_data.json
+```
+
+**Why scoring instead of hard filters?** Requiring "already strong" signals (high
+relative strength, near the 52-week high) selects stocks that have *already moved* —
+you arrive after the party. Keeping the hard filters minimal and letting the **score**
+rank means early setups aren't eliminated; the accumulation-led score floats the best
+candidates to the top.
+
+## Scoring model
+
+The scoring approach is **not settled** — it is a config flag (`FILTERS["scoring_mode"]`),
+to be decided by a larger backtest:
+
+- **`binary` (default)** — the original additive "checkbox" score. Known and conservative,
+  but caps around 8 (some signals are near-unreachable).
+- **`continuous`** — each signal is a continuous factor, percentile-ranked across the
+  candidates, combined and shown as a **decile 0–10** ("how good among today's candidates").
+  Fixes the scale; edge not yet validated.
+
+Both modes use the same weights below (`FILTERS["score_weights"]`, tunable).
+
+**Technical factors** (computed in Pass A; also used to rank which survivors get enriched):
+
+| Factor | Weight | Meaning |
+| --- | ---: | --- |
+| Accumulation (net directional volume) | **4** | Money quietly coming in — the strongest pre-move tell |
+| Compression (ATR20/ATR90) | 2 | Volatility contracting — rarely fires in this momentum-first screen |
+| Near recent-base pivot | 2 | Close to breaking out of its recent base |
+| Low extension (near MA50) | 2 | Still early in the move, not 40% extended |
+| Relative-strength magnitude | 2 | Outperforming the market |
+| Price above MA50 | — | (kept as a signal for display) |
+
+**Fundamental factors** (added in Pass B, on the top-scored names):
+
+| Factor | Weight |
+| --- | ---: |
+| Insider ownership | 2 |
+| Cash > debt | 1 |
+| Revenue growth | 1 |
+| Low float | 1 |
+| High short interest (squeeze) | 1 |
+
+Accumulation (4) is the top signal. Compression was down-weighted (3→2): a backtest
+showed it fires on <1% of candidates in this momentum-first screen, so it barely affects
+the ranking — lowering it only frees the 0–10 scale (lets top names reach 9).
+
+See [docs/backend.md](docs/backend.md) for the exact factors and functions.
+
+## Validation & monitoring
+
+- **Backtest** (`backend/backtest.py`): replays the scan at a past date and compares
+  forward returns of selected names vs the universe vs IWM, bucketed by score quartile,
+  and shows the continuous vs the old binary score side by side. **So far inconclusive**:
+  at ~14 survivors per run the numbers swing between runs (edge seen from +7% to −32%),
+  so it cannot yet confirm an edge or that continuous beats binary. A meaningful verdict
+  needs a much larger, rolling multi-period backtest. Caveats: survivorship bias,
+  price/volume signals only (no point-in-time fundamentals).
+- **Live performance tracking**: every scan writes a dated snapshot of its picks to
+  `data/history/`. `GET /api/performance` then measures each pick's return **since it
+  was first flagged** and compares it to IWM — an unbiased, real-time read of whether
+  the screener works. It becomes meaningful as history accumulates.
+- **Automatic scans**: the backend re-scans every `SCAN_EVERY_HOURS` (default 24) so
+  the snapshot history builds up on its own.
+
+```bash
+# Backtest (offline analysis)
+docker compose exec backend python backtest.py --n 200 --forward 63 --seed 42
+
+# Performance of past selections
+curl http://localhost:8000/api/performance
+```
+
+## Things to know
+
+- **Yahoo rate-limits `.info` hard.** Hitting it with many parallel requests bans the
+  IP (`YFRateLimitError`). Pass B therefore uses a small thread pool (2) + backoff, and
+  only enriches the top ~150 survivors. This is by design — do not raise `enrich_workers`.
+- **`GET /api/scan` is non-blocking.** It returns the current cache immediately (or an
+  empty `scanning: true` payload on a cold start) and scans in the background. Poll
+  `GET /api/scan/status` for `phase`/`progress`. No multi-minute freeze on first load.
+- A scan samples 800 tickers (resampled each scan), takes ~2–4 minutes, and caches
+  results for 30 minutes.
+- Market data comes from public endpoints and `yfinance`; field quality varies by
+  ticker (small caps especially). The reliable signals are price/volume based.
+- **Do not modify `frontend/smallcap-screener.jsx`** — it is the canonical UI.
+- This is a screening tool, **not financial advice**.
 
 ## Stack
 
 - Backend: Python 3.11, FastAPI, yfinance, pandas, requests, BeautifulSoup
 - Frontend: React 18, Vite 5
-- Runtime: Docker Compose
-- Data cache: Docker volume mounted at `/app/data`
+- Runtime: Docker Compose; scan cache and history on a Docker volume at `/app/data`
 
-## Quick Start
+## Quick start
 
 Prerequisite: Docker Desktop or Docker Engine with Compose.
 
 ```bash
 cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY if Claude analysis is needed.
-docker-compose up --build
+# Set ANTHROPIC_API_KEY in .env only if you want the per-stock Claude analysis button.
+docker compose up --build
 ```
 
 Services:
 
 - Frontend: http://localhost:5173
-- API scan endpoint: http://localhost:8000/api/scan
-- FastAPI docs: http://localhost:8000/docs
-- Health check: http://localhost:8000/api/health
+- API scan: http://localhost:8000/api/scan
+- Performance: http://localhost:8000/api/performance
+- API docs: http://localhost:8000/docs
+- Health: http://localhost:8000/api/health
 
-`GET /api/scan` is **non-blocking**: it returns the current cache immediately (or an empty payload with `scanning: true` on a cold start) and runs the scan in the background. A scan samples 800 tickers from the universe (resampled each scan), takes ~2-4 minutes, and caches results to the Docker volume for 30 minutes. Poll `GET /api/scan/status` for `phase`/`progress`.
-
-## Useful Commands
+## Commands
 
 ```bash
-# Start all services
-docker-compose up --build
+docker compose up --build                                  # start everything
+curl -X POST http://localhost:8000/api/scan/force          # force a fresh scan
+docker compose exec backend python screener_backend.py     # run a scan directly
+docker compose exec backend python backtest.py --n 200     # backtest
+docker compose logs -f backend                             # follow logs
+docker compose down                                        # stop
+docker compose down -v                                     # stop + wipe cache/history
 
-# Force a new scan through the API
-curl -X POST http://localhost:8000/api/scan/force
-
-# Run the screener directly inside the backend container
-docker-compose exec backend python screener_backend.py
-
-# Follow backend logs
-docker-compose logs -f backend
-
-# Stop services
-docker-compose down
-
-# Stop services and remove cached scan data
-docker-compose down -v
+# Tests (offline, deterministic, no network)
+DATA_DIR=/tmp/screener_test PYTHONPATH=backend pytest backend/tests/
 ```
 
-## Environment Variables
+## Configuration
+
+Screener thresholds and weights live in the `FILTERS` dict at the top of
+`backend/screener_backend.py` (no magic numbers in the logic).
 
 | Variable | Used by | Required | Description |
 | --- | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | Frontend container as `VITE_ANTHROPIC_API_KEY` | Only for AI analysis | Anthropic API key used by the browser-side Claude analysis button. |
+| `ANTHROPIC_API_KEY` | Frontend (`VITE_ANTHROPIC_API_KEY`) | Only for AI analysis | Key for the browser-side Claude analysis button. |
+| `SCAN_EVERY_HOURS` | Backend | No (default 24) | Interval between automatic background scans. |
+| `DATA_DIR` | Backend | No (default `/app/data`) | Where the cache and history are written (used by tests). |
 
-## Main Data Flow
+## API endpoints
 
-1. The frontend loads and calls `GET /api/scan`, which returns the current cache immediately (non-blocking) and triggers a background scan if the cache is stale or absent.
-2. The screener discovers tickers from NASDAQ and Finviz (unless a custom watchlist is set) and samples 800.
-3. **Pass A** batch-downloads price/volume data and applies minimal hard filters (price 2–25, liquidity, falling-knife guard) plus technical signals (accumulation, compression, near-pivot, low extension, relative strength).
-4. Survivors are ranked by their technical score (accumulation weighted highest); the top ~150 go to **Pass B**.
-5. **Pass B** fetches `yfinance` fundamentals for those names, applies market-cap/exchange filters, and computes the final 0–10 score.
-6. Results are sorted by score and written to `/app/data/screener_data.json`.
-7. The frontend normalizes the result shape, applies local sector and score filters, and renders stock cards.
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/api/scan` | GET | Ranked results (non-blocking; triggers a background scan if stale). |
+| `/api/scan/status` | GET | `scanning` / `phase` / `progress`. |
+| `/api/scan/force` | POST | Force a fresh background scan. |
+| `/api/performance` | GET | Return of past selections since first flagged, vs IWM. |
+| `/api/stock/{ticker}` | GET | One ticker from the latest result. |
+| `/api/watchlist` | GET/POST/DELETE | Read / set / clear a custom watchlist (POST overrides discovery). |
+| `/api/health` | GET | Health check. |
 
-An offline backtest harness (`backend/backtest.py`) validates that higher-scored names have historically produced higher forward returns.
+## Project structure
 
-## Important Notes
+```
+backend/
+├── screener_backend.py   # discovery, two-pass funnel, scoring, snapshots
+├── api.py                # FastAPI app (non-blocking scan, daily scheduler, endpoints)
+├── backtest.py           # offline forward-return validation
+├── track.py              # live performance tracking of past selections
+└── tests/                # offline deterministic unit tests
+frontend/
+├── smallcap-screener.jsx # canonical dashboard (do not modify)
+└── src/main.jsx
+docs/                     # architecture, backend, api, frontend, deployment
+```
 
-- This project is a screening tool, not financial advice.
-- Market data is sourced from public endpoints and `yfinance`; availability and field quality can vary by ticker.
-- Claude analysis currently runs directly from the browser using `anthropic-dangerous-direct-browser-access`. This is convenient for local use, but it exposes the API key to the browser runtime. For production, proxy AI requests through the backend.
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Backend screener & scoring](docs/backend.md)
+- [API reference](docs/api.md)
+- [Frontend](docs/frontend.md)
+- [Deployment and operations](docs/deployment.md)
+
+## Security note
+
+The per-stock Claude analysis currently calls the Anthropic API **directly from the
+browser**, which exposes the API key to browser code. This is convenient for local use
+only. For production, proxy AI requests through the backend.

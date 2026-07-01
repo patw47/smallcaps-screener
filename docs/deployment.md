@@ -69,26 +69,36 @@ The frontend image:
 npm run dev -- --host
 ```
 
-## Cache Management
+## Cache and history
 
-The scanner writes:
+The scanner writes the latest results to `/app/data/screener_data.json`, and a dated
+snapshot of each scan's picks to `/app/data/history/*.json` (used by `GET /api/performance`
+to track past selections over time). Both live on the Compose named volume `data`, so they
+survive container restarts.
 
-```text
-/app/data/screener_data.json
-```
-
-Because `/app/data` is mounted to the Compose named volume `data`, cached results survive container restarts.
-
-Remove the cache by deleting the volume:
+Remove everything (cache + history) by deleting the volume:
 
 ```bash
 docker-compose down -v
 ```
 
-Or force a scan without removing the volume:
+Or force a fresh scan without removing the volume (previous results stay served meanwhile):
 
 ```bash
 curl -X POST http://localhost:8000/api/scan/force
+```
+
+## Backtest and performance tooling (offline)
+
+```bash
+# Forward-return backtest (single window; continuous vs binary score)
+docker-compose exec backend python backtest.py --n 200 --forward 63 --seed 42
+
+# Rolling weight sweep (pools several windows to escape small-sample noise)
+docker-compose exec backend python backtest.py --sweep --n 250 --forward 63
+
+# Performance of past selections since first flagged
+curl http://localhost:8000/api/performance
 ```
 
 ## Environment
@@ -99,7 +109,11 @@ curl -X POST http://localhost:8000/api/scan/force
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 
-The key is only required for the frontend Claude analysis button. The stock screener and backend API can run without it.
+| Variable | Required | Description |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | Only for the frontend Claude button | Passed to the frontend as `VITE_ANTHROPIC_API_KEY`. The screener and API run without it. |
+| `SCAN_EVERY_HOURS` | No (default 24) | Interval between automatic background scans (history accumulation). |
+| `DATA_DIR` | No (default `/app/data`) | Where cache + history are written (used by tests outside the container). |
 
 ## Operational Checks
 
