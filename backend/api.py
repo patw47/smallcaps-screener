@@ -4,6 +4,7 @@ Expose les données du screener au dashboard React.
 Tous les endpoints sont préfixés /api/*.
 """
 
+import os
 import json
 import asyncio
 from datetime import datetime, timezone, timedelta
@@ -14,6 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from screener_backend import run_scan, scan_state, FILTERS, OUTPUT_FILE
+from track import run_tracker
+
+# Scan automatique périodique (heures) — les snapshots s'accumulent pour le suivi de perf
+SCAN_EVERY_HOURS = float(os.environ.get("SCAN_EVERY_HOURS", "24"))
 
 app = FastAPI(title="SmallCaps Screener API", version="1.0.0")
 
@@ -102,6 +107,16 @@ async def _warm_cache():
         await _ensure_background_scan()
 
 
+@app.on_event("startup")
+async def _daily_scanner():
+    """Scan automatique toutes les SCAN_EVERY_HOURS → l'historique (snapshots) s'accumule seul."""
+    async def loop():
+        while True:
+            await asyncio.sleep(SCAN_EVERY_HOURS * 3600)
+            await _ensure_background_scan()
+    asyncio.create_task(loop())
+
+
 @app.get("/api/scan", summary="Retourne les données (non bloquant, scan en arrière-plan)")
 async def get_scan():
     # Cache frais → retour direct
@@ -148,6 +163,16 @@ async def force_scan():
 
     await _ensure_background_scan()
     return {"message": "Nouveau scan démarré en arrière-plan"}
+
+
+@app.get("/api/performance", summary="Suivi de performance des sélections dans le temps")
+async def get_performance(high: int = 7):
+    """
+    Rendement des sélections réelles depuis leur première apparition, agrégé par
+    score et comparé à IWM. Se remplit au fil des scans (historique data/history/).
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: run_tracker(high_score=high, quiet=True))
 
 
 @app.get("/api/stock/{ticker}", summary="Données d'un ticker depuis le dernier scan")

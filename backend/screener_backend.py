@@ -104,6 +104,7 @@ FILTERS = {
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 OUTPUT_FILE = Path(DATA_DIR) / "screener_data.json"
+HISTORY_DIR = Path(DATA_DIR) / "history"   # instantanés datés pour le suivi de performance
 
 scan_state = {
     "scanning": False,
@@ -719,8 +720,37 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     }
 
     OUTPUT_FILE.write_text(json.dumps(output, indent=2, ensure_ascii=False))
+    _write_snapshot(output)   # historique daté pour le suivi de performance
     scan_state.update({"scanning": False, "phase": "idle"})
     return output
+
+
+def _write_snapshot(output: dict) -> None:
+    """
+    Enregistre un instantané daté des candidats dans data/history/ pour le suivi de
+    performance dans le temps. Chaque scan = un fichier. Ne fait jamais échouer le scan.
+    """
+    try:
+        HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        picks = [
+            {
+                "ticker": s["ticker"], "score": s["score"], "price": s["price"],
+                "sector": s.get("sector"),
+                "accumulation": s.get("accumulation"), "compressed": s.get("compressed"),
+                "near_pivot": s.get("near_pivot"), "rs_strength": s.get("rs_strength"),
+            }
+            for s in output.get("stocks", [])
+        ]
+        snap = {
+            "scanned_at": output["scanned_at"],
+            "candidates": len(picks),
+            "picks": picks,
+        }
+        ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+        (HISTORY_DIR / f"{ts}.json").write_text(json.dumps(snap, indent=2, ensure_ascii=False))
+        print(f"[snapshot] {len(picks)} sélections → history/{ts}.json")
+    except Exception as e:
+        print(f"[snapshot] erreur (ignorée): {e}")
 
 
 if __name__ == "__main__":
