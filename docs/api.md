@@ -60,19 +60,48 @@ Fields:
 
 ## `POST /api/scan/force`
 
-Deletes the cache file if present, clears in-memory cached data, starts a new scan in a background executor, and returns immediately.
+Starts a new scan in a background executor and returns immediately. It does **not** delete
+the cache — the previous results stay served by `GET /api/scan` (stale-while-revalidate)
+until the new scan finishes, so the dashboard is never blank while re-scanning.
 
 Response:
 
 ```json
 {
-  "message": "Nouveau scan démarré en arrière-plan"
+  "message": "Nouveau scan démarré en arrière-plan (les résultats actuels restent affichés)"
 }
 ```
 
 Errors:
 
 - `409`: a scan is already in progress.
+
+Besides this endpoint, the backend runs an **automatic scan every `SCAN_EVERY_HOURS`**
+(default 24, env var) and warms the cache on startup, so the scan history accumulates on
+its own.
+
+## `GET /api/performance`
+
+Tracks how past selections have performed over time. For each ticker it takes the first
+scan that flagged it (entry date/price from `data/history/` snapshots), fetches the current
+price, computes the return since flagged, and aggregates by score bucket and vs IWM.
+
+Query params: `high` (int, default 7) — the "high score" threshold for the bucket split.
+
+Runs in a background executor (it downloads recent prices, so it can take ~10–30 s).
+Returns `{"n_picks": 0, ...}` until the scan history has entries.
+
+```json
+{
+  "n_picks": 137,
+  "n_tracked": 137,
+  "overall": { "n": 137, "mean": 0.02, "median": 0.01, "hit": 0.55 },
+  "excess_mean": 0.01,
+  "high_score": { "n": 40, "mean": 0.05 },
+  "low_score": { "n": 97, "mean": 0.01 },
+  "rows": []
+}
+```
 
 ## `GET /api/stock/{ticker}`
 

@@ -9,3 +9,6 @@ node_modules/
 # Python test/tool caches
 .pytest_cache/
 .ruff_cache/
+
+# Local Claude Code guidance (canonical docs are in README.md / docs/)
+CLAUDE.md

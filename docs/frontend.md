@@ -52,31 +52,23 @@ The backend returns snake_case fields. The frontend maps them into camelCase fie
 | `insider_buying` | `insiderBuying` |
 | `catalyst_date` | `catalystDate` |
 | `catalyst_type` | `catalystType` |
+| `score` | `score` (backend score, 0–10) |
+| `positives` | `positives` |
+| `flags` | `flags` |
 
-`compressed` is converted into `volatility`:
+`compressed` is converted into `volatility` (`true` → `"low"`, `false` → `"normal"`).
 
-- `true`: `"low"`
-- `false`: `"normal"`
+## Scoring
 
-## Local Scoring
+The frontend uses the **backend score directly** (`stock.score`, `stock.positives`,
+`stock.flags`). The score bar, the "Score moyen" stat, the minimum-score filter, and
+the sort all read `stock.score`. There is no browser-side scoring anymore — the old
+`scoreStock` function was removed so the UI reflects the backend's assessment exactly.
 
-Function: `scoreStock(stock)`
-
-> **Note:** this browser-side score has **diverged** from the backend `_compute_score`. The backend now scores accumulation (OBV), ATR compression, relative strength, 52-week position, low float, etc. (normalized 0–10), while `scoreStock` still uses the older rules below. Ranking/data come from the backend's `stock.score`; `scoreStock` is used for the Claude brief prompt and card display. Resync when convenient.
-
-The frontend computes a display score independently from the backend. Current points:
-
-| Signal | Points |
-| --- | ---: |
-| Volume ratio between 1.3 and 2.5 | 2 |
-| Low volatility / compressed price | 2 |
-| One-month performance between -20% and +15% | 2 |
-| Insider buying | 2 |
-| Cash positive | 1 |
-| Catalyst date available | 1 |
-| IPO year 2020 or later | 1 |
-
-The score is capped at 10. The function also returns positive labels and warning flags shown on each stock card.
+See [backend.md](backend.md) for the scoring model. The score comes from the backend and
+depends on `FILTERS["scoring_mode"]`: **binary** (default, ~0–8) or **continuous** (a decile
+0–10 rank of a factor percentile composite). The UI renders whatever `stock.score` the
+backend sends, so switching the mode changes the numbers with no frontend change.
 
 ## Main User Flows
 
