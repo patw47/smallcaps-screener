@@ -48,16 +48,16 @@ def _forward_return(close: pd.Series, as_of_idx: int, forward_days: int) -> floa
 
 
 def evaluate_ticker(df: pd.DataFrame, bench_close: pd.Series | None,
-                    forward_days: int) -> tuple[bool, float, int | None] | None:
+                    forward_days: int, as_of_offset: int = 0) -> tuple[bool, float, dict | None] | None:
     """
-    Évalue un ticker à as_of = dernier jour - forward_days.
-    Retourne (survécu, rendement_forward, score_technique) ou None si données insuffisantes.
-    Le score technique est celui utilisé pour classer (accumulation en tête).
+    Évalue un ticker à as_of = dernier jour - forward_days - as_of_offset.
+    `as_of_offset` permet de balayer PLUSIEURS fenêtres passées (backtest rolling → + de données).
+    Retourne (survécu, rendement_forward, signals) ou None si données insuffisantes.
     """
     if df is None or "Close" not in df:
         return None
     close = df["Close"].dropna()
-    as_of_idx = len(close) - 1 - forward_days
+    as_of_idx = len(close) - 1 - forward_days - as_of_offset
     if as_of_idx < FILTERS["vol_window_long"] + FILTERS["ma_slope_lookback"]:
         return None
     fwd = _forward_return(close, as_of_idx, forward_days)
@@ -186,11 +186,74 @@ def _print_report(r: dict) -> None:
     print(f"{'='*60}\n")
 
 
+def run_weight_sweep(n_tickers: int = 250, forward_days: int = 63, seed: int = 42,
+                     period: str = "2y", offsets=(0, 30, 60, 90, 120, 150),
+                     comp_weights=(3, 2, 1)) -> dict:
+    """
+    Backtest ROLLING : pool les survivants sur PLUSIEURS fenêtres passées (offsets) pour
+    sortir du bruit, puis teste plusieurs poids de compression sur le score BINAIRE.
+    Montre si baisser le poids change le classement (quartiles) ou seulement l'échelle.
+    """
+    prev_seed = FILTERS["shuffle_seed"]
+    FILTERS["shuffle_seed"] = seed
+    try:
+        universe = discover_tickers()[:n_tickers]
+    finally:
+        FILTERS["shuffle_seed"] = prev_seed
+
+    print(f"\n{'='*60}\n  SWEEP POIDS COMPRESSION — {len(universe)} tickers × {len(offsets)} fenêtres\n{'='*60}")
+    prices = _download_prices(universe, FILTERS["rs_benchmark"], period=period)
+    bench_df = prices.pop(FILTERS["rs_benchmark"], None)
+    bench_close = bench_df["Close"].dropna() if bench_df is not None and "Close" in bench_df else None
+
+    # Pool des survivants sur toutes les fenêtres
+    pool: list[tuple[float, dict]] = []
+    for tk, df in prices.items():
+        for off in offsets:
+            res = evaluate_ticker(df, bench_close, forward_days, off)
+            if res is None:
+                continue
+            survived, fwd, signals = res
+            if survived:
+                pool.append((fwd, signals))
+
+    fwds = [f for f, _ in pool]
+    sigs = [s for _, s in pool]
+    n_compressed = sum(1 for s in sigs if s.get("compressed"))
+    print(f"  Survivants poolés : {len(pool)}   dont 'compressed' : {n_compressed} "
+          f"({100*n_compressed/max(len(sigs),1):.1f}%)")
+    print(f"  Rendement forward moyen (pool) : {_pct(_stats(fwds)['mean'])}")
+
+    orig = FILTERS["score_weights"]["compression"]
+    results = {}
+    try:
+        for w in comp_weights:
+            FILTERS["score_weights"]["compression"] = w
+            scores = [_binary_price_score(s) for s in sigs]
+            q = _quartile_returns(fwds, scores) if len(sigs) >= 4 else []
+            spread = (q[-1][1] - q[0][1]) if q and q[-1][1] is not None and q[0][1] is not None else None
+            results[w] = {"quartiles": q, "spread_Q4_Q1": spread}
+            print(f"\n  compression = {w}  (séparation Q4−Q1 = {_pct(spread)})")
+            for label, mean in q:
+                print(f"    {label:<12} {_pct(mean)}")
+    finally:
+        FILTERS["score_weights"]["compression"] = orig
+
+    print("\n  Lecture : si les quartiles/séparation bougent peu entre poids → le changement")
+    print("  est surtout COSMÉTIQUE (l'ordre ne change quasi pas, seule l'échelle change).")
+    print(f"{'='*60}\n")
+    return results
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Backtest forward du screener (signaux prix/volume)")
     ap.add_argument("--n", type=int, default=200, help="nombre de tickers échantillonnés")
     ap.add_argument("--forward", type=int, default=63, help="horizon forward en jours de bourse")
     ap.add_argument("--seed", type=int, default=42, help="seed de reproductibilité")
     ap.add_argument("--period", type=str, default="2y", help="profondeur d'historique (yfinance)")
+    ap.add_argument("--sweep", action="store_true", help="balayer le poids de compression (rolling)")
     args = ap.parse_args()
-    run_backtest(n_tickers=args.n, forward_days=args.forward, seed=args.seed, period=args.period)
+    if args.sweep:
+        run_weight_sweep(n_tickers=args.n, forward_days=args.forward, seed=args.seed, period=args.period)
+    else:
+        run_backtest(n_tickers=args.n, forward_days=args.forward, seed=args.seed, period=args.period)

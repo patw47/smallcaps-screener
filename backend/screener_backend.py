@@ -74,7 +74,7 @@ FILTERS = {
     # --- Poids de scoring (utilisés par les deux modes ; configurables pour le backtest) ---
     "score_weights": {
         "accumulation": 4,  # OBV↑ : l'argent rentre (LE meilleur signal pré-explosion)
-        "compression": 3,   # base serrée : ressort armé
+        "compression": 2,   # base serrée — baissé 3→2 : signal quasi mort (0,8%), impact cosmétique (backtest)
         "near_pivot": 2,    # proche du point de cassure de la base récente
         "low_ext": 2,       # peu étiré : encore tôt
         "rs_turning": 2,    # la force relative repart à la hausse

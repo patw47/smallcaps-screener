@@ -55,7 +55,7 @@ Both modes use the same weights below (`FILTERS["score_weights"]`, tunable).
 | Factor | Weight | Meaning |
 | --- | ---: | --- |
 | Accumulation (net directional volume) | **4** | Money quietly coming in — the strongest pre-move tell |
-| Compression (ATR20/ATR90) | **3** | Volatility contracting — the coiled spring |
+| Compression (ATR20/ATR90) | 2 | Volatility contracting — rarely fires in this momentum-first screen |
 | Near recent-base pivot | 2 | Close to breaking out of its recent base |
 | Low extension (near MA50) | 2 | Still early in the move, not 40% extended |
 | Relative-strength magnitude | 2 | Outperforming the market |
@@ -71,8 +71,9 @@ Both modes use the same weights below (`FILTERS["score_weights"]`, tunable).
 | Low float | 1 |
 | High short interest (squeeze) | 1 |
 
-Accumulation (4) + compression (3) are the two pillars — the classic
-Wyckoff/VCP "accumulation into a tightening base" setup before a breakout.
+Accumulation (4) is the top signal. Compression was down-weighted (3→2): a backtest
+showed it fires on <1% of candidates in this momentum-first screen, so it barely affects
+the ranking — lowering it only frees the 0–10 scale (lets top names reach 9).
 
 See [docs/backend.md](docs/backend.md) for the exact factors and functions.
 

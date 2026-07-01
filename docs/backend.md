@@ -87,7 +87,7 @@ Selection of which survivors get enriched follows the same mode (`_select_scores
 | Factor (continuous) | Weight | Direction |
 | --- | ---: | --- |
 | `f_accum` — net directional volume fraction (∈[-1,1]) | 4 | higher better |
-| `f_atr_ratio` — ATR20 / ATR90 | 3 | lower better |
+| `f_atr_ratio` — ATR20 / ATR90 | 2 | lower better |
 | `f_pct_recent` — proximity to recent-base high | 2 | higher better |
 | `f_ext` — price/MA50 − 1 (extension) | 2 | lower better |
 | `f_rs` — relative-strength magnitude vs IWM | 2 | higher better |
