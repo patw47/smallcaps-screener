@@ -150,19 +150,16 @@ async def get_scan_status():
     }
 
 
-@app.post("/api/scan/force", summary="Force un nouveau scan (ignore le cache)")
+@app.post("/api/scan/force", summary="Lance un nouveau scan en arrière-plan")
 async def force_scan():
+    # On NE supprime PAS le cache : le scan tourne en fond et les résultats précédents
+    # restent affichés (stale-while-revalidate) jusqu'à ce que le nouveau soit prêt.
+    # Sinon /api/scan renverrait vide pendant les ~3 min du scan → dashboard vide.
     if _bg_scan_inflight or scan_state["scanning"]:
         raise HTTPException(409, detail="Un scan est déjà en cours")
 
-    if OUTPUT_FILE.exists():
-        OUTPUT_FILE.unlink()
-
-    global _cached_data
-    _cached_data = None
-
     await _ensure_background_scan()
-    return {"message": "Nouveau scan démarré en arrière-plan"}
+    return {"message": "Nouveau scan démarré en arrière-plan (les résultats actuels restent affichés)"}
 
 
 @app.get("/api/performance", summary="Suivi de performance des sélections dans le temps")
