@@ -1,8 +1,8 @@
 # SmallCaps Screener
 
-SmallCaps Screener is a Dockerized dashboard for discovering and ranking US small-cap stocks. It discovers candidates from NASDAQ and Finviz, enriches them with `yfinance`, applies hard filters, computes a setup score, and exposes the results through a FastAPI backend consumed by a React/Vite frontend.
+SmallCaps Screener is a Dockerized dashboard for discovering and ranking US small-cap stocks. It discovers candidates from NASDAQ and Finviz, runs a **two-pass funnel** (minimal price/volume hard filters, then a technical score led by accumulation to pick which names get enriched with `yfinance` fundamentals), and exposes the ranked results through a FastAPI backend consumed by a React/Vite frontend.
 
-The interface is written in French and targets quick visual review of small-cap setups before a potential rally.
+The interface is written in French. The goal is to surface small caps **early** — quiet accumulation and tight bases, before the move — rather than stocks that have already run. See the [scoring model](docs/backend.md) for the exact signals and weights.
 
 ## Documentation
 
@@ -38,7 +38,7 @@ Services:
 - FastAPI docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/api/health
 
-The first `/api/scan` request starts a market scan. With the default cap of 300 tickers, the scan usually takes a few minutes and writes cached results to the Docker volume for 30 minutes.
+`GET /api/scan` is **non-blocking**: it returns the current cache immediately (or an empty payload with `scanning: true` on a cold start) and runs the scan in the background. A scan samples 800 tickers from the universe (resampled each scan), takes ~2-4 minutes, and caches results to the Docker volume for 30 minutes. Poll `GET /api/scan/status` for `phase`/`progress`.
 
 ## Useful Commands
 
@@ -70,13 +70,15 @@ docker-compose down -v
 
 ## Main Data Flow
 
-1. The frontend loads and calls `GET /api/scan`.
-2. The backend returns a fresh JSON cache if one exists.
-3. If the cache is stale or absent, the backend runs a scan.
-4. The screener discovers tickers from NASDAQ and Finviz unless a custom watchlist is configured.
-5. Each ticker is fetched from `yfinance`, filtered, scored, and added to the result set if it passes.
-6. Results are written to `/app/data/screener_data.json`.
+1. The frontend loads and calls `GET /api/scan`, which returns the current cache immediately (non-blocking) and triggers a background scan if the cache is stale or absent.
+2. The screener discovers tickers from NASDAQ and Finviz (unless a custom watchlist is set) and samples 800.
+3. **Pass A** batch-downloads price/volume data and applies minimal hard filters (price 2–25, liquidity, falling-knife guard) plus technical signals (accumulation, compression, near-pivot, low extension, relative strength).
+4. Survivors are ranked by their technical score (accumulation weighted highest); the top ~150 go to **Pass B**.
+5. **Pass B** fetches `yfinance` fundamentals for those names, applies market-cap/exchange filters, and computes the final 0–10 score.
+6. Results are sorted by score and written to `/app/data/screener_data.json`.
 7. The frontend normalizes the result shape, applies local sector and score filters, and renders stock cards.
+
+An offline backtest harness (`backend/backtest.py`) validates that higher-scored names have historically produced higher forward returns.
 
 ## Important Notes
 
