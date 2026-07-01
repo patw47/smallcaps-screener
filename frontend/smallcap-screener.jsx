@@ -18,26 +18,11 @@ function normalizeStocks(raw) {
     insiderBuying: s.insider_buying,
     catalystDate: s.catalyst_date,
     catalystType: s.catalyst_type,
+    // Score, points positifs et flags viennent DIRECTEMENT du backend (source de vérité).
+    score: s.score ?? 0,
+    positives: s.positives ?? [],
+    flags: s.flags ?? [],
   }));
-}
-
-function scoreStock(stock) {
-  let score = 0;
-  const flags = [];
-  const positives = [];
-
-  if (stock.volumeRatio >= 1.3 && stock.volumeRatio <= 2.5) { score += 2; positives.push("Volume accumulation discrète"); }
-  if (stock.volatility === "low") { score += 2; positives.push("Prix compressé"); }
-  if (stock.change1m < 15 && stock.change1m > -20) { score += 2; positives.push("Pas encore rallié"); }
-  if (stock.insiderBuying) { score += 2; positives.push("Insider buying détecté"); }
-  if (stock.cashPositive) { score += 1; positives.push("Cash positif"); }
-  if (stock.catalystDate) { score += 1; positives.push(`Catalyseur: ${stock.catalystType}`); }
-  if (stock.ipoYear >= 2020) { score += 1; positives.push("IPO récente"); }
-  if (!stock.cashPositive) flags.push("Cash négatif — surveiller le burn rate");
-  if (stock.change1m > 12) flags.push("Déjà en mouvement");
-  if (stock.volumeRatio > 2.5) flags.push("Volume trop spike — peut-être déjà découvert");
-
-  return { score: Math.min(score, 10), positives, flags };
 }
 
 function ScoreBar({ score }) {
@@ -53,7 +38,7 @@ function ScoreBar({ score }) {
 }
 
 function StockCard({ stock, onAnalyze, analysis, isLoading }) {
-  const { score, positives, flags } = scoreStock(stock);
+  const { score = 0, positives = [], flags = [] } = stock;   // score backend
   const changeColor = (v) => v >= 0 ? "#00ff9d" : "#ff6b6b";
 
   return (
@@ -188,7 +173,7 @@ export default function App() {
 
   const analyzeStock = useCallback(async (stock) => {
     setLoadingTickers(prev => ({ ...prev, [stock.ticker]: true }));
-    const { score, positives, flags } = scoreStock(stock);
+    const { score = 0, positives = [], flags = [] } = stock;   // score backend
 
     const prompt = `Tu es un analyste spécialisé small caps US. Analyse ce profil d'action et donne un brief concis en 4-5 lignes.
 
@@ -235,10 +220,10 @@ Réponds en français. Structure:
   const filtered = stocks
     .filter(s => {
       if (sector !== "All" && s.sector !== sector) return false;
-      if (scoreStock(s).score < minScore) return false;
+      if ((s.score ?? 0) < minScore) return false;
       return true;
     })
-    .sort((a, b) => scoreStock(b).score - scoreStock(a).score);
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
   if (loading) {
     return (
@@ -311,7 +296,7 @@ Réponds en français. Structure:
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, margin: "24px 0" }}>
           {[
             { label: "Candidates", value: filtered.length, color: "#8888ff" },
-            { label: "Score moyen", value: (filtered.reduce((a, s) => a + scoreStock(s).score, 0) / (filtered.length || 1)).toFixed(1) + "/10", color: "#f0c040" },
+            { label: "Score moyen", value: (filtered.reduce((a, s) => a + (s.score ?? 0), 0) / (filtered.length || 1)).toFixed(1) + "/10", color: "#f0c040" },
             { label: "Avec catalyseur", value: filtered.filter(s => s.catalystDate).length, color: "#00cc7a" },
             { label: "Insider buying", value: filtered.filter(s => s.insiderBuying).length, color: "#ff9966" },
           ].map(({ label, value, color }) => (
