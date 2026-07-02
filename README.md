@@ -55,8 +55,8 @@ Both modes use the same weights below (`FILTERS["score_weights"]`, tunable).
 
 | Factor | Weight | Meaning |
 | --- | ---: | --- |
-| Accumulation (net directional volume) | **4** | Money quietly coming in — the strongest pre-move tell |
-| Compression (ATR20/ATR90) | 2 | Volatility contracting — rarely fires in this momentum-first screen |
+| Accumulation (Chaikin Money Flow + up/down volume) | **4** | Money quietly coming in — the strongest pre-move tell |
+| Compression (ATR20/ATR90 self-percentile) | 2 | Volatility contracting *relative to the stock's own history* |
 | Near recent-base pivot | 2 | Close to breaking out of its recent base |
 | Low extension (near MA50) | 2 | Still early in the move, not 40% extended |
 | Relative-strength magnitude | 2 | Outperforming the market |
@@ -72,9 +72,12 @@ Both modes use the same weights below (`FILTERS["score_weights"]`, tunable).
 | Low float | 1 |
 | High short interest (squeeze) | 1 |
 
-Accumulation (4) is the top signal. Compression was down-weighted (3→2): a backtest
-showed it fires on <1% of candidates in this momentum-first screen, so it barely affects
-the ranking — lowering it only frees the 0–10 scale (lets top names reach 9).
+Accumulation (4) is the top signal. **Sensors v2** (Sprint 4) reworked the two pillars
+without changing any weight: **compression** is now the self-percentile of ATR20/ATR90
+against the stock's *own* 252-day history (v1's raw `< 0.70` threshold fired on ~0.8 % of
+names — effectively dead), and **accumulation** is Chaikin Money Flow + the up/down volume
+ratio (more robust than v1's binary OBV on gappy names). The v1 sensors stay switchable via
+`FILTERS["sensors_version"]` for the Sprint 6 backtest. Weight calibration is Sprint 8.
 
 See [docs/backend.md](docs/backend.md) for the exact factors and functions.
 
