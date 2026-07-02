@@ -1,0 +1,12 @@
+{
+  "cik": "111",
+  "name": "Test Company Inc.",
+  "filings": {
+    "recent": {
+      "form":            ["4",                     "4",                     "8-K"],
+      "accessionNumber": ["0000000111-26-000002",  "0000000111-26-000001",  "0000000111-25-000009"],
+      "filingDate":      ["2026-06-10",            "2026-05-02",            "2025-12-01"],
+      "primaryDocument": ["xslF345X06/wk-form4_0002.xml", "xslF345X06/wk-form4_0001.xml", "eightk.htm"]
+    }
+  }
+}
