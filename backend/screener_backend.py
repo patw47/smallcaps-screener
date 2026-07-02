@@ -111,6 +111,13 @@ FILTERS = {
     "edgar_cache_ttl_hours": 24,    # TTL cache des listes de filings (soumissions par CIK)
     "edgar_rate_limit_s": 0.12,     # ≥0.11 → ≤ ~9 req/s (SEC exige ≤ 10 req/s)
     "edgar_max_filings": 40,        # garde-fou : nb max de Form 4 parsés par ticker
+    # --- Backtest study (Sprint 6) : l'instrument de mesure (aucun ajustement de poids ici) ---
+    "study_cost_roundtrip": 0.01,   # décote aller-retour (1%) appliquée aux rendements nets
+    "study_position_usd": 10_000,   # position notionnelle pour la contrainte de capacité
+    "study_adv_max_frac": 0.01,     # position ≤ 1% du dollar-volume quotidien (sinon obs exclue)
+    "study_step_days": 21,          # pas entre dates as-of (≈ mensuel)
+    "study_horizons": (21, 63),     # horizons forward (jours de bourse)
+    "study_ic_min_names": 5,        # nb min de survivants/date pour calculer une IC de date
     # Scoring
     "score_vol_ratio_min": 1.3,
     "score_vol_ratio_max": 2.5,
