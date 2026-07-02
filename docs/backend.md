@@ -42,7 +42,9 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `alert_min_score` / `alert_dedup_days` | `7` / `5` | Telegram: min `setup_score` to alert; no re-alert of a ticker within N days. |
 | `high_window` / `near_high_pct` | `252` / `0.75` | 52-week high position (informational). |
 | `float_max` | `50_000_000` | Float < 50M shares → `low_float` (score bonus). |
-| `insider_pct_min` / `revenue_growth_min` / `short_interest_high` | `5.0` / `0.10` / `15.0` | Fundamental scoring thresholds. |
+| `insider_pct_min` / `revenue_growth_min` / `short_interest_high` | `5.0` / `0.10` / `15.0` | Fundamental thresholds. `insider_pct_min` is **display only** now (score uses net buying). |
+| `insider_window_days` | `180` | EDGAR Form 4: net-purchase aggregation window (3–6 months). |
+| `edgar_cache_ttl_hours` / `edgar_rate_limit_s` / `edgar_max_filings` | `24` / `0.12` / `40` | EDGAR submissions cache TTL, throttle (≤10 req/s), Form 4 parse cap per ticker. |
 | `scoring_mode` | `binary` | `binary` (default, ~0–8) or `continuous` (decile 0–10) — see Scoring. |
 | `score_weights` | dict | Weight of every score signal (tunable for backtesting). |
 | `allowed_exchanges` | `NMS`,`NYQ`,`NGM`,`NCM` | Accepted exchange codes (Pass B). |
@@ -161,8 +163,9 @@ Selection of which survivors get enriched follows the same mode (`_select_scores
 | `f_ext` — price/MA50 − 1 (extension) | 2 | lower better |
 | `f_rs` — relative-strength magnitude vs IWM | 2 | higher better |
 
-**Fundamental factors** (Pass B; `FUND_FACTORS`): `insider_pct` (2), `cash_bin` (1),
-`revenue_growth` (1), `float_shares` (1, lower better), `short_interest_pct` (1).
+**Fundamental factors** (Pass B; `FUND_FACTORS`): **`insider_net_buying`** (2 — net Form 4
+purchases $, see Insiders), `cash_bin` (1), `revenue_growth` (1), `float_shares` (1, lower
+better), `short_interest_pct` (1).
 
 The two factor tables above are the **continuous-mode** factors. In continuous mode the
 final `score` is computed **cross-sectionally over the candidate set** in `run_scan` (a
@@ -176,7 +179,26 @@ from `_binary_score` (`_tech_rules` + `_fundamental_rules`, the boolean signals)
 
 ## Pass B — fundamentals (`enrich_ticker`)
 
-`.info` on the **top-scored** survivors only (bounded by `enrich_max`). `_fetch_info` wraps `.info` with retries + exponential backoff on `YFRateLimitError`; `enrich_workers` is small (Yahoo rate-limits `.info`). Hard filters: exchange, market-cap band. Fundamentals: `cash_positive` (`None` when missing — not penalized), insider, short interest, revenue growth, `float_shares`/`low_float`, `ipo_year`.
+`.info` on the **top-scored** survivors only (bounded by `enrich_max`). `_fetch_info` wraps `.info` with retries + exponential backoff on `YFRateLimitError`; `enrich_workers` is small (Yahoo rate-limits `.info`). Hard filters: exchange, market-cap band. Fundamentals: `cash_positive` (`None` when missing — not penalized), insider net buying (see below), short interest, revenue growth, `float_shares`/`low_float`, `ipo_year`.
+
+## Insiders — net Form 4 purchases (`edgar.py`, Sprint 5)
+
+The scored insider signal is **net open-market purchases**, not ownership %. `net_insider_buying(ticker)`
+maps the ticker → CIK (SEC `company_tickers.json`), reads the recent filings list
+(`data.sec.gov/submissions/CIK…json`), parses each **Form 4** and sums the **open-market
+buys minus sells** (`insider_net_buying` = Σ code-`P` $ − Σ code-`S` $) over
+`insider_window_days`, filtered by **transaction date** (dated → point-in-time reusable by
+the Sprint 6 backtest). Award/option/tax codes (`A`/`M`/`F`/`G`…) are ignored.
+
+- **Score**: the insider point is awarded on `insider_net_buying_pos` (`net > 0`); the
+  continuous factor is `insider_net_buying` ($). The old `insider_pct` (`heldPercentInsiders`)
+  is **kept for display only** — no longer scored.
+- **SEC compliance**: identifying `User-Agent` from **`EDGAR_USER_AGENT` env** (email); without
+  it EDGAR is **disabled → signal `None`** (neutral, non-penalizing, scan still completes).
+  Global throttle ≤ 10 req/s. Local cache (`data/edgar_cache/`): submissions have a TTL,
+  **filings are immutable and never re-downloaded** → a second scan makes no repeat EDGAR call.
+- Called only on the enriched Pass B survivors (≤ `enrich_max`), so cost stays bounded. Never
+  fatal (wrapped in `enrich_ticker`).
 
 ## Orchestration — `run_scan(tickers=None)`
 
@@ -184,7 +206,7 @@ Discover (full universe, no sampling) → `_download_prices` → **Pass A** (har
 
 ## Output JSON
 
-Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter`, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, the v2 sensor diagnostics **`compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`**, `positives`, `flags`, and `catalyst_type`/`catalyst_date` (`null`). Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger`.
+Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter`, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, the v2 sensor diagnostics **`compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`**, the insider fields **`insider_net_buying` / `insider_net_buying_pos`** (net Form 4 $, scored) and `insider_pct` / `insider_buying` (display only), `positives`, `flags`, and `catalyst_type`/`catalyst_date` (`null`). Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger`.
 
 ## Backtest harness — `backend/backtest.py`
 

@@ -117,6 +117,7 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 | `SCAN_EVERY_HOURS` | No (default 24) | Interval between automatic background scans (history accumulation). |
 | `SCAN_TRADING_DAYS_ONLY` | No (default `true`) | Only auto-scan on trading days (Mon–Fri); skip weekends. |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | No | Breakout alerts (Sprint 3). Absent → alerting silently disabled. |
+| `EDGAR_USER_AGENT` | No | SEC Form 4 insider data (Sprint 5). Identifying UA (name + email). Absent → EDGAR disabled (neutral). |
 | `DATA_DIR` | No (default `/app/data`) | Where cache + history are written (used by tests outside the container). |
 
 ## Operational Checks

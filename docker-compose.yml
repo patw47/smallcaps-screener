@@ -12,6 +12,7 @@ services:
       - SCAN_TRADING_DAYS_ONLY=${SCAN_TRADING_DAYS_ONLY:-true}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - EDGAR_USER_AGENT=${EDGAR_USER_AGENT:-}
     restart: always
 
   frontend:
