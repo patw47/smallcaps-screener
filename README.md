@@ -83,13 +83,18 @@ See [docs/backend.md](docs/backend.md) for the exact factors and functions.
 
 ## Validation & monitoring
 
-- **Backtest** (`backend/backtest.py`): replays the scan at a past date and compares
-  forward returns of selected names vs the universe vs IWM, bucketed by score quartile,
-  and shows the continuous vs the old binary score side by side. **So far inconclusive**:
-  at ~14 survivors per run the numbers swing between runs (edge seen from +7% to −32%),
-  so it cannot yet confirm an edge or that continuous beats binary. A meaningful verdict
-  needs a much larger, rolling multi-period backtest. Caveats: survivorship bias,
-  price/volume signals only (no point-in-time fundamentals).
+- **The study** (`backend/backtest.py --study`): a **rolling multi-date cross-section** over
+  the full universe — at each monthly as-of date it replays `analyze_prices` on data known at
+  `t` and records forward returns (21d/63d) vs IWM. It reports the **Spearman IC** (score →
+  return) with a **t-stat on non-overlapping windows**, a **decile table in excess of IWM**
+  (means + medians), a **per-year breakdown**, results **with and without costs** (−1 %
+  round-trip + a 1 %-of-ADV capacity filter), and baselines (**binary vs continuous vs best
+  single factor vs random**). It follows a **pre-registered protocol** —
+  [docs/backtest_protocol.md](docs/backtest_protocol.md) — with a **calibration / validation
+  split** and success criteria fixed *before* the first run. This study, and it alone,
+  authorizes the Sprint 8 weight calibration. Every report prints the **survivorship-bias**
+  warning (results are an upper bound). The older single-window `--sweep` / default modes
+  remain for quick checks.
 - **Live performance tracking**: every scan writes a dated snapshot of its picks to
   `data/history/` (ticker, entry price, score, key signals). `GET /api/performance` then
   measures each pick's return **since it was first flagged** and compares it to IWM — an
@@ -103,7 +108,10 @@ See [docs/backend.md](docs/backend.md) for the exact factors and functions.
   everything**; a longer history only makes the tracker more meaningful.
 
 ```bash
-# Backtest (offline analysis)
+# The study — rolling multi-date cross-section (Sprint 6). --n 0 = full universe.
+docker compose exec backend python backtest.py --study --n 0 --period 3y
+
+# Quick single-window backtest
 docker compose exec backend python backtest.py --n 200 --forward 63 --seed 42
 
 # Performance of past selections
