@@ -20,7 +20,7 @@ Frontend container :5173
   v
 Backend container :8000
   |
-  | NASDAQ API, Finviz, yfinance
+  | NASDAQ screener API (NASDAQ+NYSE+AMEX), yfinance
   v
 External market data sources
 ```
@@ -71,7 +71,7 @@ File: `backend/screener_backend.py`
 
 A **two-pass funnel** (see `docs/backend.md` for detail):
 
-- Discover tickers dynamically and take a per-scan random sample (`max_tickers`, reshuffled each scan).
+- Discover the **complete** eligible universe dynamically (NASDAQ+NYSE+AMEX, Small+Micro cap via the NASDAQ screener API) — identical every scan, no random sampling (`max_tickers` is an optional safety cap, `None` by default).
 - **Pass A** (`analyze_prices`): batch-download OHLCV (`yf.download`) and apply **minimal** price/volume hard filters (price 2–25, 1-month perf, liquidity, and a falling-knife guard = MA50 slope ≥ 0). Compute technical signals (accumulation/OBV, ATR compression, near recent-base pivot, low extension, RS turning). RS and price>MA50 are **scoring**, not hard filters — so early setups aren't eliminated.
 - Rank survivors by a technical score (`_select_scores`, **accumulation weighted highest**) and keep the top `enrich_max` — this decides which names get the expensive `.info` call.
 - **Pass B** (`enrich_ticker`): `.info` on the top-scored survivors only (small thread pool + backoff — Yahoo rate-limits `.info`), apply market-cap/exchange filters, add fundamentals.

@@ -12,3 +12,6 @@ node_modules/
 
 # Local Claude Code guidance (canonical docs are in README.md / docs/)
 CLAUDE.md
+
+# Sprint handoff summaries (live in Obsidian, not in the repo)
+.sprint-*-summary.md
