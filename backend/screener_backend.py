@@ -58,6 +58,18 @@ FILTERS = {
     # --- Signaux affinés (§9) ---
     "use_atr_compression": True,   # compression via True Range (High/Low) au lieu du Close-only
     "obv_lookback": 21,            # OBV en hausse sur ~1 mois → accumulation (vs distribution)
+    # --- Capteurs v2 (Sprint 4) : compression & accumulation refondues ---
+    "sensors_version": "v2",           # "v2" (défaut) | "v1" (ancien, conservé pour le backtest S6)
+    # Compression v2 : percentile du ratio ATR20/ATR90 vs la propre distribution du TITRE
+    # (« ce titre est-il inhabituellement calme PAR RAPPORT À LUI-MÊME ? » = vrai ressort VCP).
+    "compression_pct_lookback": 252,   # fenêtre (jours) de la distribution auto-référencée
+    "compression_pct_threshold": 0.25, # percentile < seuil → comprimé (indicatif)
+    "compression_pct_min_obs": 60,     # nb min d'obs de ratio, sinon neutre (IPO récentes ; pas d'exception)
+    # Accumulation v2 : Chaikin Money Flow 20j + ratio volume hausse/baisse 50j
+    "cmf_window": 20,                  # fenêtre CMF (close-location × volume)
+    "updown_vol_window": 50,           # fenêtre du ratio volume jours-hausse / jours-baisse
+    "cmf_pos_threshold": 0.0,          # CMF > seuil → afflux net (accumulation)
+    "updown_ratio_min": 1.0,           # ratio volume up/down > seuil → acheteurs dominants
     "high_window": 252,            # fenêtre plus-haut 52 sem. (informatif : pct_52w_high)
     "near_high_pct": 0.75,         # informatif
     "float_max": 50_000_000,       # float < 50M actions → petit float amplifie
@@ -274,6 +286,78 @@ def _accum_fraction(close: pd.Series, volume: pd.Series, lookback: int) -> float
     signed = float((v * d.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))).sum())
     total = float(v.sum())
     return signed / total if total else None
+
+
+def _atr_series(df: pd.DataFrame, window: int) -> pd.Series | None:
+    """Série ATR (moyenne mobile du True Range) sur `window` jours. Nécessite High/Low/Close."""
+    if df is None or not {"High", "Low", "Close"}.issubset(df.columns) or len(df) < window + 1:
+        return None
+    high, low, prev_close = df["High"], df["Low"], df["Close"].shift(1)
+    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    return tr.rolling(window).mean()
+
+
+def _compression_self_pct(df: pd.DataFrame, short: int, long: int,
+                          lookback: int, min_obs: int) -> float | None:
+    """
+    Compression v2 (Sprint 4) : percentile du ratio ATR`short`/ATR`long` du JOUR vs la
+    distribution des `lookback` derniers jours de ce MÊME ratio, pour CE titre (série
+    temporelle auto-référencée — PAS un percentile cross-sectionnel entre titres).
+
+    Plus bas = titre inhabituellement calme par rapport à lui-même (ressort VCP armé).
+    Retourne un percentile ∈ [0,1], ou None si trop peu d'observations (IPO récente) — jamais
+    d'exception (bord fenêtre 252 j vs history_period≈250 barres → distribution réduite mais
+    exploitable ; distribution quasi vide → None neutre).
+    """
+    atr_s = _atr_series(df, short)
+    atr_l = _atr_series(df, long)
+    if atr_s is None or atr_l is None:
+        return None
+    ratio = (atr_s / atr_l).replace([float("inf"), float("-inf")], float("nan")).dropna()
+    if len(ratio) < min_obs:
+        return None
+    window = ratio.iloc[-lookback:]
+    current = float(window.iloc[-1])
+    return float((window <= current).sum() / len(window))
+
+
+def _cmf(df: pd.DataFrame, window: int) -> float | None:
+    """
+    Chaikin Money Flow sur `window` jours (accumulation v2, Sprint 4).
+    MFM = ((close-low) - (high-close)) / (high-low) ∈ [-1,1] (position de clôture dans le range) ;
+    CMF = Σ(MFM × volume) / Σ(volume). > 0 = afflux net (acheteurs), < 0 = distribution.
+    Jour où high==low → MFM=0 (pas d'information directionnelle).
+    """
+    if (df is None or not {"High", "Low", "Close", "Volume"}.issubset(df.columns)
+            or len(df) < window):
+        return None
+    high, low, close, vol = df["High"], df["Low"], df["Close"], df["Volume"]
+    rng = high - low
+    mfm = ((close - low) - (high - close)) / rng.where(rng != 0)
+    mfm = mfm.fillna(0.0)  # high==low → 0
+    w_mfv = float((mfm * vol).iloc[-window:].sum())
+    w_vol = float(vol.iloc[-window:].sum())
+    if w_vol == 0:
+        return None
+    val = w_mfv / w_vol
+    return None if math.isnan(val) else val
+
+
+def _updown_vol_ratio(close: pd.Series, volume: pd.Series, window: int) -> float | None:
+    """
+    Ratio volume des jours HAUSSE / volume des jours BAISSE sur `window` jours (accumulation v2).
+    > 1 = le volume se concentre les jours de hausse (acheteurs dominants).
+    Aucun jour de baisse (down=0) : +inf si du volume haussier existe, sinon None.
+    """
+    if close is None or volume is None or len(close) < window + 1:
+        return None
+    d = close.diff().iloc[-window:]
+    v = volume.iloc[-window:]
+    up = float(v[d > 0].sum())
+    down = float(v[d < 0].sum())
+    if down == 0:
+        return float("inf") if up > 0 else None
+    return up / down
 
 
 def _pct_of_high(close: pd.Series, window: int) -> float | None:
@@ -625,9 +709,8 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     vol_base = float(baseline.median()) if len(baseline) else None
     vol_ratio = vol_recent / vol_base if vol_base and vol_base > 0 else None
 
-    # Compression : ratio ATR court / ATR long (True Range High/Low) — fallback Close-only.
-    # atr_ratio = valeur CONTINUE (plus bas = plus comprimé) ; compressed = seuil booléen (affichage).
-    compressed = False
+    # --- Compression (capteur v2 par défaut ; v1 conservée derrière FILTERS["sensors_version"]) ---
+    # atr_ratio = ATR20/ATR90 courant (affichage, commun v1/v2 ; fallback range Close-only).
     atr_ratio = None
     if FILTERS["use_atr_compression"]:
         atr_s = _atr(df, FILTERS["compression_window"])
@@ -639,11 +722,34 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         range_90 = _range_pct(close, FILTERS["compression_baseline"])
         if range_20 is not None and range_90 is not None and range_90 > 0:
             atr_ratio = range_20 / range_90
-    if atr_ratio is not None:
-        compressed = bool(atr_ratio < FILTERS["compression_threshold"])
 
-    # Accumulation : OBV en hausse (§9 — remplace le ratio de volume brut au scoring)
-    accumulation = bool(_obv_rising(close, volume, FILTERS["obv_lookback"]))
+    if FILTERS["sensors_version"] == "v2":
+        # v2 : percentile du ratio vs la propre distribution 252j du titre (vrai ressort VCP).
+        compression_pct = _compression_self_pct(
+            df, FILTERS["compression_window"], FILTERS["compression_baseline"],
+            FILTERS["compression_pct_lookback"], FILTERS["compression_pct_min_obs"])
+        compressed = bool(compression_pct is not None
+                          and compression_pct < FILTERS["compression_pct_threshold"])
+        f_compression = compression_pct           # facteur continu (plus bas = plus comprimé)
+    else:
+        # v1 : seuil brut sur le ratio ATR20/ATR90.
+        compression_pct = None
+        compressed = bool(atr_ratio is not None and atr_ratio < FILTERS["compression_threshold"])
+        f_compression = atr_ratio
+
+    # --- Accumulation (capteur v2 par défaut ; v1 = OBV en hausse) ---
+    if FILTERS["sensors_version"] == "v2":
+        cmf = _cmf(df, FILTERS["cmf_window"])
+        updown_ratio = _updown_vol_ratio(close, volume, FILTERS["updown_vol_window"])
+        accumulation = bool(
+            cmf is not None and cmf > FILTERS["cmf_pos_threshold"]
+            and updown_ratio is not None and updown_ratio > FILTERS["updown_ratio_min"])
+        f_accum = cmf                              # facteur continu (plus haut = plus d'afflux)
+    else:
+        cmf = None
+        updown_ratio = None
+        accumulation = bool(_obv_rising(close, volume, FILTERS["obv_lookback"]))
+        f_accum = _accum_fraction(close, volume, FILTERS["obv_lookback"])
 
     # Position dans le range 52 sem. (informatif) + proche du pivot de la base RÉCENTE (scoring)
     pct_52w = _pct_of_high(close, FILTERS["high_window"])
@@ -667,7 +773,7 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     triggered, days_since_trigger, pivot_level = _breakout(df, close, volume)
 
     # --- Facteurs CONTINUS pour le scoring percentile ---
-    f_accum = _accum_fraction(close, volume, FILTERS["obv_lookback"])
+    # (f_accum et f_compression sont calculés plus haut selon sensors_version)
     f_ext = (price / ma50 - 1) if ma50 else None
 
     signals = {
@@ -678,6 +784,11 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         "vol_ratio": round(vol_ratio, 2) if vol_ratio is not None else None,
         "compressed": compressed,
         "accumulation": accumulation,
+        # Capteurs v2 (affichage/diagnostic) :
+        "atr_ratio": round(atr_ratio, 3) if atr_ratio is not None else None,
+        "compression_pct": round(compression_pct, 3) if compression_pct is not None else None,
+        "cmf": round(cmf, 3) if cmf is not None else None,
+        "updown_vol_ratio": _safe_float(updown_ratio),  # None si +inf (aucun jour de baisse)
         "pct_52w_high": round(pct_52w, 3) if pct_52w is not None else None,
         "near_high": near_high,
         "pct_recent_high": round(pct_recent, 3) if pct_recent is not None else None,
@@ -694,9 +805,9 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         "triggered": triggered,
         "days_since_trigger": days_since_trigger,
         "pivot_level": pivot_level,
-        # Facteurs continus (scoring percentile) :
-        "f_accum": f_accum,
-        "f_atr_ratio": atr_ratio,
+        # Facteurs continus (scoring percentile) — valeurs selon sensors_version :
+        "f_accum": f_accum,                 # v2: CMF ; v1: fraction volume net
+        "f_atr_ratio": f_compression,       # v2: percentile auto-référencé ; v1: ATR20/ATR90
         "f_pct_recent": pct_recent,
         "f_ext": f_ext,
         "f_rs": rs_strength,
