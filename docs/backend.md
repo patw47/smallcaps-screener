@@ -34,6 +34,8 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `obv_lookback` | `21` | OBV-rising window → `accumulation`. |
 | `pivot_window` / `near_pivot_pct` | `50` / `0.85` | Near the high of the **recent** base → about to break out. |
 | `low_ext_pct` | `0.12` | Price ≤ MA50 × 1.12 → not extended (still early). |
+| `trigger_vol_window` / `trigger_vol_mult` | `50` / `1.5` | Breakout: today's volume > `1.5 ×` the 50-day average. |
+| `alert_min_score` / `alert_dedup_days` | `7` / `5` | Telegram: min `setup_score` to alert; no re-alert of a ticker within N days. |
 | `high_window` / `near_high_pct` | `252` / `0.75` | 52-week high position (informational). |
 | `float_max` | `50_000_000` | Float < 50M shares → `low_float` (score bonus). |
 | `insider_pct_min` / `revenue_growth_min` / `short_interest_high` | `5.0` / `0.10` / `15.0` | Fundamental scoring thresholds. |
@@ -76,7 +78,32 @@ Pure function on a batch-downloaded OHLCV DataFrame (no network). **Hard filters
 
 RS, price > MA50, and near-high are **not** hard filters — they are scoring signals (so early setups aren't eliminated). Optional hard gates exist behind `rs_require` / `trend_require_above_ma` (both `False` by default).
 
-Signals computed: `accumulation` (OBV rising), `compressed` (ATR), `near_pivot` / `pct_recent_high` (recent base), `low_ext` (near MA50), `rs_turning` / `rs_strength` / `rs_signal`, `price_above_ma50`, `pct_52w_high` / `near_high` (informational), `dollar_volume`, `vol_ratio`, `change_1d` / `change_1m`.
+Signals computed: `accumulation` (OBV rising), `compressed` (ATR), `near_pivot` / `pct_recent_high` (recent base), `low_ext` (near MA50), `rs_turning` / `rs_strength` / `rs_signal`, `price_above_ma50`, `pct_52w_high` / `near_high` (informational), `dollar_volume`, `vol_ratio`, `change_1d` / `change_1m`, and the **trigger** fields below.
+
+## Setup vs trigger (`_breakout`)
+
+Two distinct notions, so the screener can *watch beforehand* and *ping at departure*:
+
+- **`setup_score`** — the current score (technical + fundamental), **logic unchanged**; a
+  canonical alias of `score`. It says *"the spring is coiled"* (watchlist candidate). The
+  original `score` field is kept as-is (the current UI reads it); `setup_score` equals it.
+- **`triggered`** (bool) — the breakout is happening **now**: `close > pivot`
+  (pivot = highest High of the last `pivot_window` days, **current session excluded**)
+  **AND** today's volume `> trigger_vol_mult ×` the `trigger_vol_window`-day average volume.
+- **`days_since_trigger`** — sessions since price crossed the pivot (breakout day = `0`);
+  `None` when price is not above the pivot. `pivot_level` carries the pivot price.
+
+`_breakout` is a pure function (offline-testable). These fields ride on every Pass A signal
+set, so every candidate in the JSON/snapshots carries them.
+
+## Telegram alerts (`alerts.py`)
+
+On each scan, `notify_new_triggers` pings **newly `triggered`** names with
+`setup_score ≥ alert_min_score`. **Dedup**: a ticker is not re-notified within
+`alert_dedup_days` (state persisted in `data/alerts_state.json`; recorded **only on
+successful send**, so a failure/absent token retries next scan). Secrets come from env only
+(`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) — **without them, alerting is silently disabled
+and the scan runs normally**. Never fatal (wrapped in `run_scan`).
 
 ## Scoring — two modes (`FILTERS["scoring_mode"]`)
 
@@ -123,11 +150,11 @@ from `_binary_score` (`_tech_rules` + `_fundamental_rules`, the boolean signals)
 
 ## Orchestration — `run_scan(tickers=None)`
 
-Discover (full universe, no sampling) → `_download_prices` → **Pass A** (hard filters + continuous factors) → **rank survivors by technical composite (`_select_scores`), keep top `enrich_max`** → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10 over the whole set)** → sort → write `/app/data/screener_data.json`. `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
+Discover (full universe, no sampling) → `_download_prices` → **Pass A** (hard filters + continuous factors + trigger) → **rank survivors by technical composite (`_select_scores`), keep top `enrich_max`** → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10 over the whole set)** → set `setup_score` alias → sort → write `/app/data/screener_data.json` → **`notify_new_triggers`** (Telegram, best-effort). `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
 
 ## Output JSON
 
-Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter`, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, `positives`, `flags`, and `catalyst_type`/`catalyst_date` (`null`).
+Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter`, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, `positives`, `flags`, and `catalyst_type`/`catalyst_date` (`null`). Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger`.
 
 ## Backtest harness — `backend/backtest.py`
 

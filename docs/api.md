@@ -35,6 +35,17 @@ Response (fresh cache):
 
 Response (scan in progress, no fresh cache) adds `"scanning": true`, `"phase": "..."`, and (if a stale result exists) `"stale": true`.
 
+Each entry in `stocks` carries, besides `score`/`positives`/`flags`: **`setup_score`** (canonical
+alias of `score` — "the spring is coiled"), **`triggered`** (bool — the breakout is happening
+now), **`days_since_trigger`** (breakout day = `0`, `None` if not above pivot) and **`pivot_level`**.
+`GET /api/stock/{ticker}` returns the same fields. The frontend currently ignores the trigger
+fields; a future UI will surface them.
+
+**Telegram alerts** (server-side, no endpoint): each scan pings newly `triggered` names with
+`setup_score ≥ alert_min_score`, deduplicated for `alert_dedup_days`. Configured via
+`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` env vars; **absent → silently disabled**, the scan is
+unaffected.
+
 ## `GET /api/scan/status`
 
 Returns the current scanner state.

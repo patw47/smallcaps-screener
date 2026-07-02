@@ -109,6 +109,11 @@ curl http://localhost:8000/api/performance
 
 ## Things to know
 
+- **Setup vs trigger.** `setup_score` (alias of `score`) says *"the spring is coiled"* —
+  a watchlist candidate. `triggered` says *"the breakout is happening now"* (close above the
+  recent pivot **and** a volume surge). Every candidate carries both plus `days_since_trigger`.
+  A **Telegram alert** pings newly triggered names (`setup_score ≥ alert_min_score`,
+  deduped); set `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` to enable — absent, it's silently off.
 - **Yahoo rate-limits `.info` hard.** Hitting it with many parallel requests bans the
   IP (`YFRateLimitError`). Pass B therefore uses a small thread pool (2) + backoff, and
   only enriches the top ~150 survivors. This is by design — do not raise `enrich_workers`.
@@ -173,6 +178,7 @@ Screener thresholds and weights live in the `FILTERS` dict at the top of
 | `ANTHROPIC_API_KEY` | Frontend (`VITE_ANTHROPIC_API_KEY`) | Only for AI analysis | Key for the browser-side Claude analysis button. |
 | `SCAN_EVERY_HOURS` | Backend | No (default 24) | Interval between automatic background scans. |
 | `SCAN_TRADING_DAYS_ONLY` | Backend | No (default `true`) | Skip weekend auto-scans (market closed → redundant snapshots). |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Backend | No | Enable breakout alerts. Absent → alerting silently disabled. |
 | `DATA_DIR` | Backend | No (default `/app/data`) | Where the cache and history are written (used by tests). |
 
 ## API endpoints
