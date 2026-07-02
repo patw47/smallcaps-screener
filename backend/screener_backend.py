@@ -66,6 +66,12 @@ FILTERS = {
     "pivot_window": 50,            # plus-haut de la base RÉCENTE (~10 sem.) — le point de cassure
     "near_pivot_pct": 0.85,        # prix ≥ 85% du plus-haut récent → près du pivot de breakout
     "low_ext_pct": 0.12,           # prix ≤ MA50 × 1.12 → peu étiré (encore tôt)
+    # --- Trigger (Sprint 3) : la cassure a lieu MAINTENANT (distinct du setup/score) ---
+    "trigger_vol_window": 50,      # moyenne de volume (jours) servant de baseline à la cassure
+    "trigger_vol_mult": 1.5,       # volume du jour > 1.5× la moyenne 50j → confirme la cassure
+    # --- Alerte Telegram (Sprint 3) — secrets via .env, jamais en dur ---
+    "alert_min_score": 7,          # setup_score minimal d'un NOUVEAU déclenché pour alerter
+    "alert_dedup_days": 5,         # pas de re-notification d'un même ticker avant N jours
     # --- Mode de scoring : NON tranché tant que le backtest robuste n'a pas décidé ---
     # "binary"     : ancien score « cases à cocher » (connu/conservateur ; plafonne ~8)
     # "continuous" : facteurs continus → percentile → décile 0-10 (échelle pleine, non validé)
@@ -279,6 +285,55 @@ def _pct_of_high(close: pd.Series, window: int) -> float | None:
     if hi == 0:
         return None
     return float(close.iloc[-1]) / hi
+
+
+def _breakout(df: pd.DataFrame, close: pd.Series,
+              volume: pd.Series) -> tuple[bool, int | None, float | None]:
+    """
+    Cassure EN COURS (Sprint 3) — fonction pure, hors ligne. Distincte du setup/score :
+    le score dit « le ressort est armé », le trigger dit « la cassure a lieu maintenant ».
+
+    Retourne (triggered, days_since_trigger, pivot_level) :
+      - pivot = plus-haut des `pivot_window` jours PRÉCÉDENTS, séance courante EXCLUE
+        (via High si dispo, sinon Close).
+      - triggered = close > pivot ET volume du jour > `trigger_vol_mult` × moyenne du
+        volume sur `trigger_vol_window` jours (séance courante exclue).
+      - days_since_trigger = nb de séances depuis le franchissement du pivot (cassure = 0) ;
+        None si le prix n'est pas au-dessus du pivot.
+    """
+    win = FILTERS["pivot_window"]
+    if close is None or len(close) < win + 1:
+        return False, None, None
+    high = df["High"].dropna() if df is not None and "High" in df else close
+    prior = high.iloc[-(win + 1):-1]  # exclut la séance courante
+    if len(prior) == 0:
+        return False, None, None
+    pivot = float(prior.max())
+    price = float(close.iloc[-1])
+    price_ok = price > pivot
+
+    vw = FILTERS["trigger_vol_window"]
+    vbase = volume.iloc[-(vw + 1):-1] if volume is not None else None
+    vol_avg = float(vbase.mean()) if vbase is not None and len(vbase) else None
+    vol_ok = bool(vol_avg and float(volume.iloc[-1]) > FILTERS["trigger_vol_mult"] * vol_avg)
+
+    triggered = bool(price_ok and vol_ok)
+
+    # days_since_trigger : compté contre le pivot « tel qu'il était » CHAQUE jour
+    # (rolling max des `win` jours PRÉCÉDENTS via .shift(1)). Comparer au pivot FIXE du jour
+    # dégénérerait toujours à 0 : toute clôture passée ≤ son propre high ≤ pivot d'aujourd'hui.
+    days_since = None
+    if price_ok:
+        pivot_asof = high.rolling(win).max().shift(1).reindex(close.index)
+        above = (close > pivot_asof).tolist()
+        count = 0
+        for a in reversed(above):
+            if a:
+                count += 1
+            else:
+                break
+        days_since = count - 1  # la séance de cassure elle-même = 0
+    return triggered, days_since, round(pivot, 2)
 
 
 def _rs_metrics(close: pd.Series, bench_close: pd.Series,
@@ -608,6 +663,9 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     if FILTERS["rs_require"] and rs_outperf is not None and not rs_signal:
         return None, "rs:weak"
 
+    # --- Trigger : la cassure a lieu MAINTENANT (Sprint 3), distinct du setup/score ---
+    triggered, days_since_trigger, pivot_level = _breakout(df, close, volume)
+
     # --- Facteurs CONTINUS pour le scoring percentile ---
     f_accum = _accum_fraction(close, volume, FILTERS["obv_lookback"])
     f_ext = (price / ma50 - 1) if ma50 else None
@@ -632,6 +690,10 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         "rs_turning": rs_turning,
         "rs_strength": round(rs_strength, 4) if rs_strength is not None else None,
         "rs_signal": rs_signal,
+        # Trigger (Sprint 3) : cassure en cours (distinct du score de setup)
+        "triggered": triggered,
+        "days_since_trigger": days_since_trigger,
+        "pivot_level": pivot_level,
         # Facteurs continus (scoring percentile) :
         "f_accum": f_accum,
         "f_atr_ratio": atr_ratio,
@@ -818,6 +880,10 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     # Score PERCENTILE final (technique + fondamental) calculé sur l'ENSEMBLE des candidats,
     # puis tri décroissant (magnitude RS en départage).
     _score_candidates(candidates)
+    # Sprint 3 : setup_score = nom canonique du score de setup (technique + fondamental).
+    # `score` est CONSERVÉ tel quel (l'UI actuelle le lit) ; setup_score en est l'alias.
+    for s in candidates:
+        s["setup_score"] = s["score"]
     candidates.sort(key=lambda x: (x["score"], x.get("rs_strength") or 0), reverse=True)
 
     output = {
@@ -833,6 +899,17 @@ def run_scan(tickers: list[str] | None = None) -> dict:
 
     OUTPUT_FILE.write_text(json.dumps(output, indent=2, ensure_ascii=False))
     _write_snapshot(output)   # historique daté pour le suivi de performance
+
+    # --- Alerte Telegram sur les NOUVEAUX déclenchés (Sprint 3) — jamais fatal ---
+    # Import paresseux : évite un cycle d'import (alerts importe FILTERS d'ici).
+    try:
+        from alerts import notify_new_triggers
+        alerted = notify_new_triggers(candidates)
+        if alerted:
+            print(f"[alert] {len(alerted)} déclenché(s) notifié(s) : {', '.join(alerted)}")
+    except Exception as e:
+        print(f"[alert] erreur (ignorée) : {e}")
+
     scan_state.update({"scanning": False, "phase": "idle"})
     return output
 
@@ -847,6 +924,9 @@ def _write_snapshot(output: dict) -> None:
         picks = [
             {
                 "ticker": s["ticker"], "score": s["score"], "price": s["price"],
+                "setup_score": s.get("setup_score", s.get("score")),
+                "triggered": s.get("triggered"),
+                "days_since_trigger": s.get("days_since_trigger"),
                 "sector": s.get("sector"),
                 "accumulation": s.get("accumulation"), "compressed": s.get("compressed"),
                 "near_pivot": s.get("near_pivot"), "rs_strength": s.get("rs_strength"),

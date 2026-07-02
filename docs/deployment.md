@@ -116,6 +116,7 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 | `ANTHROPIC_API_KEY` | Only for the frontend Claude button | Passed to the frontend as `VITE_ANTHROPIC_API_KEY`. The screener and API run without it. |
 | `SCAN_EVERY_HOURS` | No (default 24) | Interval between automatic background scans (history accumulation). |
 | `SCAN_TRADING_DAYS_ONLY` | No (default `true`) | Only auto-scan on trading days (Mon–Fri); skip weekends. |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | No | Breakout alerts (Sprint 3). Absent → alerting silently disabled. |
 | `DATA_DIR` | No (default `/app/data`) | Where cache + history are written (used by tests outside the container). |
 
 ## Operational Checks
