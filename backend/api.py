@@ -15,10 +15,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from screener_backend import run_scan, scan_state, FILTERS, OUTPUT_FILE
-from track import run_tracker
+from track import run_tracker, _empty_result
 
 # Scan automatique périodique (heures) — les snapshots s'accumulent pour le suivi de perf
 SCAN_EVERY_HOURS = float(os.environ.get("SCAN_EVERY_HOURS", "24"))
+# Ne scanner que les jours de bourse (lun-ven) : évite des snapshots week-end redondants
+# (marché fermé → mêmes prix que vendredi). Pas de calendrier de fériés (hors scope).
+SCAN_TRADING_DAYS_ONLY = os.environ.get("SCAN_TRADING_DAYS_ONLY", "true").lower() in ("1", "true", "yes")
 
 app = FastAPI(title="SmallCaps Screener API", version="1.0.0")
 
@@ -84,6 +87,12 @@ async def _ensure_background_scan():
     asyncio.get_event_loop().run_in_executor(None, _job)
 
 
+def _is_trading_day(dt: datetime | None = None) -> bool:
+    """Jour de bourse = lun-ven. Week-ends ignorés (marché fermé)."""
+    d = dt or datetime.now(tz=timezone.utc)
+    return d.weekday() < 5
+
+
 def _last_result() -> dict | None:
     """Dernier résultat connu : mémoire, sinon fichier (même périmé)."""
     if _cached_data is not None:
@@ -109,10 +118,13 @@ async def _warm_cache():
 
 @app.on_event("startup")
 async def _daily_scanner():
-    """Scan automatique toutes les SCAN_EVERY_HOURS → l'historique (snapshots) s'accumule seul."""
+    """Scan automatique toutes les SCAN_EVERY_HOURS → l'historique (snapshots) s'accumule seul.
+    Un scan par jour de bourse (week-ends ignorés si SCAN_TRADING_DAYS_ONLY)."""
     async def loop():
         while True:
             await asyncio.sleep(SCAN_EVERY_HOURS * 3600)
+            if SCAN_TRADING_DAYS_ONLY and not _is_trading_day():
+                continue  # week-end : marché fermé, on saute ce cycle
             await _ensure_background_scan()
     asyncio.create_task(loop())
 
@@ -169,7 +181,12 @@ async def get_performance(high: int = 7):
     score et comparé à IWM. Se remplit au fil des scans (historique data/history/).
     """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: run_tracker(high_score=high, quiet=True))
+    try:
+        return await loop.run_in_executor(None, lambda: run_tracker(high_score=high, quiet=True))
+    except Exception as e:
+        # run_tracker est déjà durci ; ce filet ultime garantit qu'on ne renvoie jamais 500,
+        # avec la MÊME forme homogène que run_tracker (contrat de réponse unique).
+        return _empty_result(0, high, datetime.now(tz=timezone.utc), f"Suivi indisponible: {e}")
 
 
 @app.get("/api/stock/{ticker}", summary="Données d'un ticker depuis le dernier scan")

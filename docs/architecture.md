@@ -116,7 +116,7 @@ Scans **never block a request**. `GET /api/scan` is non-blocking (stale-while-re
 
 A single background scan runs at a time, guarded by an in-flight flag (`_bg_scan_inflight`) whose check-and-set is atomic on the single-threaded event loop, plus `scan_state["scanning"]`. `POST /api/scan/force` starts a background scan **without** clearing the cache (previous results stay served meanwhile), returning `409` if one is already running. Clients poll `GET /api/scan/status` for `phase`/`progress`.
 
-A startup hook warms the cache, and a scheduler task re-scans every `SCAN_EVERY_HOURS` (default 24) so each scan's picks are snapshotted to `data/history/`. `GET /api/performance` reads those snapshots to track how past selections have performed since first flagged.
+A startup hook warms the cache, and a scheduler task re-scans every `SCAN_EVERY_HOURS` (default 24) — on trading days only (`SCAN_TRADING_DAYS_ONLY`, weekends skipped) — so each scan's picks are snapshotted to `data/history/` (retention: keep everything, files are tiny). `GET /api/performance` reads those snapshots to track how past selections have performed since first flagged; it is hardened to never fail (delisted tickers / data outages degrade to a well-formed empty payload).
 
 ## Configuration Sources
 
