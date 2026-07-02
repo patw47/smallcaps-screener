@@ -66,7 +66,7 @@ Both modes use the same weights below (`FILTERS["score_weights"]`, tunable).
 
 | Factor | Weight |
 | --- | ---: |
-| Insider ownership | 2 |
+| Insider net buying (Form 4 open-market purchases) | 2 |
 | Cash > debt | 1 |
 | Revenue growth | 1 |
 | Low float | 1 |
@@ -182,6 +182,7 @@ Screener thresholds and weights live in the `FILTERS` dict at the top of
 | `SCAN_EVERY_HOURS` | Backend | No (default 24) | Interval between automatic background scans. |
 | `SCAN_TRADING_DAYS_ONLY` | Backend | No (default `true`) | Skip weekend auto-scans (market closed → redundant snapshots). |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Backend | No | Enable breakout alerts. Absent → alerting silently disabled. |
+| `EDGAR_USER_AGENT` | Backend | No | SEC-compliant identifying UA (name + email) for Form 4 insider data. Absent → EDGAR disabled (neutral). |
 | `DATA_DIR` | Backend | No (default `/app/data`) | Where the cache and history are written (used by tests). |
 
 ## API endpoints

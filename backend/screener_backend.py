@@ -103,9 +103,14 @@ FILTERS = {
     # Soft filters — scoring uniquement
     "vol_ratio_min": 1.2,
     "vol_ratio_max": 3.0,
-    "insider_pct_min": 5.0,
+    "insider_pct_min": 5.0,         # % détention (AFFICHAGE informatif ; plus au scoring depuis S5)
     "revenue_growth_min": 0.10,
     "short_interest_high": 15.0,
+    # --- Insiders EDGAR Form 4 (Sprint 5) : achats nets datés, point-in-time ---
+    "insider_window_days": 180,     # fenêtre d'agrégation des achats nets (3-6 mois)
+    "edgar_cache_ttl_hours": 24,    # TTL cache des listes de filings (soumissions par CIK)
+    "edgar_rate_limit_s": 0.12,     # ≥0.11 → ≤ ~9 req/s (SEC exige ≤ 10 req/s)
+    "edgar_max_filings": 40,        # garde-fou : nb max de Form 4 parsés par ticker
     # Scoring
     "score_vol_ratio_min": 1.3,
     "score_vol_ratio_max": 2.5,
@@ -474,7 +479,11 @@ def _build_positives_flags(stock: dict) -> tuple[list[str], list[str]]:
     if stock.get("change_1m") is not None and stock["change_1m"] * 100 < -15:
         flags.append(f"Correction forte 1 mois ({stock['change_1m']*100:+.1f}%)")
 
-    if stock.get("insider_buying"):
+    if stock.get("insider_net_buying") and stock["insider_net_buying"] > 0:
+        positives.append(
+            f"Achats nets d'insiders +{stock['insider_net_buying']/1e3:.0f}k$ "
+            f"(Form 4, {FILTERS['insider_window_days']}j)")
+    if stock.get("insider_buying"):   # informatif : % de détention (n'est plus au scoring)
         positives.append(f"Insiders détiennent {stock.get('insider_pct', 0):.1f}% du capital")
 
     if stock.get("low_float"):
@@ -515,7 +524,7 @@ def _fundamental_rules(stock: dict) -> list[tuple[bool, int]]:
     """Règles FONDAMENTALES (via .info) — ajoutées en Passe B."""
     W = FILTERS["score_weights"]
     return [
-        (bool(stock.get("insider_buying")), W["insider"]),
+        (bool(stock.get("insider_net_buying_pos")), W["insider"]),  # S5 : achats nets Form 4 (> 0)
         (stock.get("cash_positive") is True, W["cash"]),      # None ne compte pas
         (bool(stock.get("revenue_growth") and
               stock["revenue_growth"] > FILTERS["revenue_growth_min"]), W["revenue"]),
@@ -551,7 +560,7 @@ TECH_FACTORS = [
     ("f_rs",         "rs_turning",   True),   # magnitude de force relative
 ]
 FUND_FACTORS = [
-    ("insider_pct",        "insider",   True),
+    ("insider_net_buying", "insider",   True),   # S5 : $ nets Form 4 (remplace le % détention)
     ("cash_bin",           "cash",      True),   # 1 / 0 / None(neutre)
     ("revenue_growth",     "revenue",   True),
     ("float_shares",       "low_float", False),  # plus petit float = mieux
@@ -873,8 +882,21 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
     cash_positive = None if (total_cash is None or total_debt is None) else bool(total_cash > total_debt)
 
     # --- Insiders / short / revenus / float ---
+    # insider_pct (% détention) : AFFICHAGE informatif seulement — plus au scoring depuis S5.
     insider_pct = (_safe_float(info.get("heldPercentInsiders"), 0) or 0) * 100
     insider_buying = bool(insider_pct > FILTERS["insider_pct_min"])
+
+    # Achats nets d'insiders (EDGAR Form 4) — remplace le % au scoring. None = neutre (jamais fatal).
+    insider_net = None
+    try:
+        from edgar import net_insider_buying
+        edgar_info = net_insider_buying(ticker)
+        if edgar_info is not None:
+            insider_net = edgar_info.get("net_buying")
+    except Exception as e:
+        print(f"[edgar] {ticker} erreur (ignorée) : {type(e).__name__}")
+    insider_net_buying_pos = bool(insider_net is not None and insider_net > 0)
+
     short_interest_pct = (_safe_float(info.get("shortPercentOfFloat"), 0) or 0) * 100
     revenue_growth = _safe_float(info.get("revenueGrowth"))
     float_shares = _safe_float(info.get("floatShares"), None)
@@ -888,7 +910,9 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
         "exchange": exchange,
         "market_cap_m": round(mc_m, 1),
         "insider_pct": round(insider_pct, 2),
-        "insider_buying": insider_buying,
+        "insider_buying": insider_buying,          # informatif (basé sur le % détention)
+        "insider_net_buying": insider_net,         # $ nets EDGAR Form 4 (P−S) ; None = neutre
+        "insider_net_buying_pos": insider_net_buying_pos,  # bool utilisé au scoring (achats nets > 0)
         "short_interest_pct": round(short_interest_pct, 2),
         "revenue_growth": round(revenue_growth, 4) if revenue_growth is not None else None,
         "float_shares": int(float_shares) if float_shares is not None else None,
