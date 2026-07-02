@@ -7,6 +7,11 @@ services:
       - "8000:8000"
     volumes:
       - data:/app/data
+    environment:
+      - SCAN_EVERY_HOURS=${SCAN_EVERY_HOURS:-24}
+      - SCAN_TRADING_DAYS_ONLY=${SCAN_TRADING_DAYS_ONLY:-true}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     restart: always
 
   frontend:
