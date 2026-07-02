@@ -13,7 +13,8 @@ English.
 The scan is a **two-pass funnel** driven by **scoring, not strict elimination**.
 
 ```
-NASDAQ + Finviz  →  dedupe  →  random.shuffle  →  sample 800   (resampled each scan)
+NASDAQ + NYSE + AMEX (NASDAQ screener API)  →  dedupe  →  full universe (~2–3k)
+    (Small + Micro cap · identical every scan · shuffle only sets download order)
     │
     ▼  Pass A  (analyze_prices) — batch yf.download, no per-ticker cost
     │     minimal hard filters:  price 2–25 · 1-month perf · liquidity ≥ $1M ·
@@ -109,8 +110,10 @@ curl http://localhost:8000/api/performance
 - **`GET /api/scan` is non-blocking.** It returns the current cache immediately (or an
   empty `scanning: true` payload on a cold start) and scans in the background. Poll
   `GET /api/scan/status` for `phase`/`progress`. No multi-minute freeze on first load.
-- A scan samples 800 tickers (resampled each scan), takes ~2–4 minutes, and caches
-  results for 30 minutes.
+- A scan sweeps the **entire eligible universe** (~2,000–3,000 tickers across NASDAQ,
+  NYSE and AMEX, identical from one scan to the next — no random sampling), takes
+  ~5–10 minutes, and caches results for 30 minutes. Pass A downloads price/volume in
+  batches (free); only the top ~150 survivors reach the costly `.info` calls.
 - Market data comes from public endpoints and `yfinance`; field quality varies by
   ticker (small caps especially). The reliable signals are price/volume based.
 - **Do not modify `frontend/smallcap-screener.jsx`** — it is the canonical UI.
@@ -118,7 +121,7 @@ curl http://localhost:8000/api/performance
 
 ## Stack
 
-- Backend: Python 3.11, FastAPI, yfinance, pandas, requests, BeautifulSoup
+- Backend: Python 3.11, FastAPI, yfinance, pandas, requests
 - Frontend: React 18, Vite 5
 - Runtime: Docker Compose; scan cache and history on a Docker volume at `/app/data`
 

@@ -23,11 +23,11 @@ Response (fresh cache):
 ```json
 {
   "scanned_at": "2026-07-01T16:14:00+00:00",
-  "universe_size": 800,
-  "total_scanned": 800,
-  "survivors_price_filter": 95,
-  "enriched": 95,
-  "candidates": 94,
+  "universe_size": 2487,
+  "total_scanned": 2487,
+  "survivors_price_filter": 210,
+  "enriched": 150,
+  "candidates": 148,
   "stocks": [],
   "rejection_stats": {}
 }
