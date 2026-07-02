@@ -25,7 +25,6 @@ from pathlib import Path
 
 import yfinance as yf
 import pandas as pd
-from bs4 import BeautifulSoup
 
 # ---------------------------------------------------------------------------
 # FILTRES — tous les seuils configurables ici
@@ -95,14 +94,18 @@ FILTERS = {
     "allowed_exchanges": {"NMS", "NYQ", "NGM", "NCM"},
     "rate_limit_s": 0.3,           # entre lots yf.download (Passe A)
     "cache_minutes": 30,
-    "max_tickers": 800,            # échantillon univers/scan, rééchantillonné à chaque clic (seed None)
+    # --- Découverte de l'univers (Sprint 1 : univers COMPLET et stable) ---
+    "discovery_exchanges": ("nasdaq", "nyse", "amex"),  # 3 places US via l'API NASDAQ screener
+    "discovery_marketcaps": ("Small", "Micro"),          # catégories cap pré-filtrées côté API
+    "max_tickers": None,           # None → univers COMPLET (aucun échantillonnage) ; int → soupape (tests/debug)
     "download_chunk": 100,         # taille des lots yf.download
     "history_period": "1y",        # 1 an : requis pour plus-haut 52 sem. + ATR90 (Palier 2)
     "enrich_workers": 2,           # threads .info en Passe B — BAS : Yahoo bannit l'IP au-delà
     "enrich_jitter_s": 0.5,        # jitter aléatoire par appel .info (anti-throttle Yahoo)
     "enrich_retries": 4,           # retries sur YFRateLimitError
     "enrich_backoff_s": 3.0,       # base du backoff exponentiel (3, 6, 12, 24s + jitter)
-    "shuffle_seed": None,          # int → scan déterministe ; None → aléatoire
+    "shuffle_seed": None,          # int → ordre de téléchargement reproductible ; None → ordre aléatoire
+                                   # (n'affecte PLUS la composition de l'univers, seulement l'ordre)
 }
 
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
@@ -124,55 +127,53 @@ scan_state = {
 
 def discover_tickers() -> list[str]:
     """
-    Récupère les tickers depuis le NASDAQ API (pré-filtré small/micro cap) et Finviz.
-    Dédoublonne, mélange (seed optionnel pour reproductibilité), cappe à max_tickers.
+    Univers COMPLET des small/micro caps US via l'API NASDAQ screener, interrogée sur
+    les trois places (NASDAQ + NYSE + AMEX) et les catégories Small + Micro cap, puis
+    dédoublonnée.
+
+    L'univers est STABLE d'un scan à l'autre : aucun échantillonnage aléatoire. Le
+    mélange (`shuffle_seed`) ne change QUE l'ordre de téléchargement, pas la composition
+    du vivier. `max_tickers` (None par défaut) ne tronque plus l'univers — c'est une
+    soupape de sécurité optionnelle (int) réservée aux tests / au debug.
+
+    Finviz a été retiré (Sprint 1) : sans pagination il n'apportait qu'une vingtaine de
+    tickers d'une seule place (NASDAQ), désormais entièrement couverte par l'API NASDAQ.
     """
     tickers: set[str] = set()
     headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
 
-    # Source 1 : NASDAQ API — pré-filtré sur small + micro caps
-    for marketcap in ("Small", "Micro"):
-        try:
-            resp = requests.get(
-                "https://api.nasdaq.com/api/screener/stocks"
-                f"?tableonly=true&limit=5000&exchange=nasdaq&marketcap={marketcap}",
-                headers=headers,
-                timeout=20,
-            )
-            rows = resp.json().get("data", {}).get("table", {}).get("rows") or []
-            before = len(tickers)
-            for row in rows:
-                symbol = (row.get("symbol") or "").strip().upper()
-                if symbol and "." not in symbol and "/" not in symbol:
-                    tickers.add(symbol)
-            print(f"[discovery] NASDAQ {marketcap}: +{len(tickers) - before} tickers")
-        except Exception as e:
-            print(f"[discovery] NASDAQ {marketcap} erreur: {e}")
+    # API NASDAQ screener — pré-filtrée small + micro cap, sur les 3 places US.
+    for exchange in FILTERS["discovery_exchanges"]:
+        for marketcap in FILTERS["discovery_marketcaps"]:
+            try:
+                resp = requests.get(
+                    "https://api.nasdaq.com/api/screener/stocks"
+                    f"?tableonly=true&limit=5000&exchange={exchange}&marketcap={marketcap}",
+                    headers=headers,
+                    timeout=20,
+                )
+                rows = resp.json().get("data", {}).get("table", {}).get("rows") or []
+                before = len(tickers)
+                for row in rows:
+                    symbol = (row.get("symbol") or "").strip().upper()
+                    if symbol and "." not in symbol and "/" not in symbol:
+                        tickers.add(symbol)
+                print(f"[discovery] NASDAQ {exchange}/{marketcap}: +{len(tickers) - before} "
+                      f"(total {len(tickers)})")
+            except Exception as e:
+                print(f"[discovery] NASDAQ {exchange}/{marketcap} erreur: {e}")
 
-    # Source 2 : Finviz scraping
-    try:
-        resp = requests.get(
-            "https://finviz.com/screener.ashx?v=111&f=cap_small,exch_nasd,geo_usa",
-            headers=headers,
-            timeout=20,
-        )
-        soup = BeautifulSoup(resp.text, "html.parser")
-        before = len(tickers)
-        for a in soup.select("a.screener-link-primary"):
-            symbol = a.text.strip().upper()
-            if symbol:
-                tickers.add(symbol)
-        print(f"[discovery] Finviz: +{len(tickers) - before} tickers")
-    except Exception as e:
-        print(f"[discovery] Finviz erreur: {e}")
-
-    result = list(tickers)
+    result = sorted(tickers)  # ordre déterministe → univers reproductible avant mélange
     if FILTERS["shuffle_seed"] is not None:
-        random.seed(FILTERS["shuffle_seed"])  # scan reproductible (backtest / diff)
-    random.shuffle(result)
+        random.seed(FILTERS["shuffle_seed"])  # ordre de téléchargement reproductible
+    random.shuffle(result)  # n'affecte QUE l'ordre de téléchargement, pas la composition
+
     cap = FILTERS["max_tickers"]
-    print(f"[discovery] Pool total: {len(result)} tickers → cap à {cap}")
-    return result[:cap]
+    if cap is not None and len(result) > cap:
+        print(f"[discovery] Pool total: {len(result)} tickers → tronqué à {cap} (soupape max_tickers)")
+        return result[:cap]
+    print(f"[discovery] Univers complet: {len(result)} tickers (NASDAQ+NYSE+AMEX, small+micro)")
+    return result
 
 
 # ---------------------------------------------------------------------------

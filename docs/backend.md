@@ -40,16 +40,28 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `scoring_mode` | `binary` | `binary` (default, ~0–8) or `continuous` (decile 0–10) — see Scoring. |
 | `score_weights` | dict | Weight of every score signal (tunable for backtesting). |
 | `allowed_exchanges` | `NMS`,`NYQ`,`NGM`,`NCM` | Accepted exchange codes (Pass B). |
-| `max_tickers` | `800` | Per-scan universe sample, reshuffled each scan. |
+| `discovery_exchanges` | `nasdaq`,`nyse`,`amex` | US exchanges queried on the NASDAQ screener API. |
+| `discovery_marketcaps` | `Small`,`Micro` | Market-cap buckets pulled per exchange. |
+| `max_tickers` | `None` | `None` → **full universe** (no sampling); `int` → optional safety cap (tests/debug). |
 | `history_period` | `1y` | OHLCV depth (needs 252 for 52w + ATR90). |
 | `enrich_max` | `150` | Cap on `.info` calls — the **top-scored** survivors are enriched. |
 | `enrich_workers` / `enrich_jitter_s` / `enrich_retries` / `enrich_backoff_s` | `2` / `0.5` / `4` / `3.0` | Pass B pool + anti-throttle backoff (Yahoo bans the IP if hammered). |
 | `cache_minutes` | `30` | Cache lifetime. |
-| `shuffle_seed` | `None` | `int` → deterministic scan; `None` → resample each scan. |
+| `shuffle_seed` | `None` | `int` → reproducible **download order**; `None` → random order. Never changes universe membership. |
 
 ## Ticker Discovery
 
-`discover_tickers()` — NASDAQ (`Small`+`Micro`) + Finviz, deduplicated, shuffled, capped at `max_tickers` (800). With `shuffle_seed=None` each scan resamples a different 800; successive dashboard "Scan" clicks sweep the universe. A custom watchlist bypasses discovery.
+`discover_tickers()` queries the **NASDAQ screener API** across the three US exchanges
+(`nasdaq` + `nyse` + `amex`), each for the `Small` and `Micro` cap buckets, then
+deduplicates into the **complete eligible universe** (~2,000–3,000 names). The result is
+**stable from one scan to the next** — there is no random sampling. `shuffle_seed`/shuffle
+only set the *download order*, never which tickers are in the universe. `max_tickers` is
+`None` by default (no truncation); an `int` is an optional safety cap for tests/debug. A
+custom watchlist bypasses discovery.
+
+**Finviz was removed** (Sprint 1): without pagination it contributed only ~20 tickers from
+a single exchange (NASDAQ), now fully covered by the NASDAQ screener API. Discovery stays
+**dynamic** — no static ticker list.
 
 ## Pass A — price/volume (`analyze_prices`)
 
@@ -111,7 +123,7 @@ from `_binary_score` (`_tech_rules` + `_fundamental_rules`, the boolean signals)
 
 ## Orchestration — `run_scan(tickers=None)`
 
-Discover → sample → `_download_prices` → **Pass A** (hard filters + continuous factors) → **rank survivors by technical composite (`_select_scores`), keep top `enrich_max`** → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10 over the whole set)** → sort → write `/app/data/screener_data.json`. `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
+Discover (full universe, no sampling) → `_download_prices` → **Pass A** (hard filters + continuous factors) → **rank survivors by technical composite (`_select_scores`), keep top `enrich_max`** → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10 over the whole set)** → sort → write `/app/data/screener_data.json`. `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
 
 ## Output JSON
 
