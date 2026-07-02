@@ -88,11 +88,16 @@ See [docs/backend.md](docs/backend.md) for the exact factors and functions.
   needs a much larger, rolling multi-period backtest. Caveats: survivorship bias,
   price/volume signals only (no point-in-time fundamentals).
 - **Live performance tracking**: every scan writes a dated snapshot of its picks to
-  `data/history/`. `GET /api/performance` then measures each pick's return **since it
-  was first flagged** and compares it to IWM — an unbiased, real-time read of whether
-  the screener works. It becomes meaningful as history accumulates.
-- **Automatic scans**: the backend re-scans every `SCAN_EVERY_HOURS` (default 24) so
-  the snapshot history builds up on its own.
+  `data/history/` (ticker, entry price, score, key signals). `GET /api/performance` then
+  measures each pick's return **since it was first flagged** and compares it to IWM — an
+  unbiased, real-time read of whether the screener works. It is **robust by design**: a
+  delisted or missing ticker, a market-data outage, or a corrupt snapshot never breaks the
+  report — the endpoint always returns a well-formed payload (with a `message` on failure).
+- **Automatic scans**: the backend re-scans every `SCAN_EVERY_HOURS` (default 24), **only on
+  trading days** (Mon–Fri, weekends skipped — `SCAN_TRADING_DAYS_ONLY`, default on), so the
+  snapshot history builds up on its own, roughly one snapshot per trading day.
+- **Retention**: snapshots are tiny JSON files (a few KB each) — the policy is **keep
+  everything**; a longer history only makes the tracker more meaningful.
 
 ```bash
 # Backtest (offline analysis)
@@ -167,6 +172,7 @@ Screener thresholds and weights live in the `FILTERS` dict at the top of
 | --- | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | Frontend (`VITE_ANTHROPIC_API_KEY`) | Only for AI analysis | Key for the browser-side Claude analysis button. |
 | `SCAN_EVERY_HOURS` | Backend | No (default 24) | Interval between automatic background scans. |
+| `SCAN_TRADING_DAYS_ONLY` | Backend | No (default `true`) | Skip weekend auto-scans (market closed → redundant snapshots). |
 | `DATA_DIR` | Backend | No (default `/app/data`) | Where the cache and history are written (used by tests). |
 
 ## API endpoints

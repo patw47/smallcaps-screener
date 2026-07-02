@@ -74,7 +74,9 @@ npm run dev -- --host
 The scanner writes the latest results to `/app/data/screener_data.json`, and a dated
 snapshot of each scan's picks to `/app/data/history/*.json` (used by `GET /api/performance`
 to track past selections over time). Both live on the Compose named volume `data`, so they
-survive container restarts.
+survive container restarts. The scheduler runs one scan per **trading day**
+(`SCAN_TRADING_DAYS_ONLY`, weekends skipped). **Retention policy: keep everything** —
+snapshots are a few KB each and a longer history makes the tracker more meaningful.
 
 Remove everything (cache + history) by deleting the volume:
 
@@ -113,6 +115,7 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | Only for the frontend Claude button | Passed to the frontend as `VITE_ANTHROPIC_API_KEY`. The screener and API run without it. |
 | `SCAN_EVERY_HOURS` | No (default 24) | Interval between automatic background scans (history accumulation). |
+| `SCAN_TRADING_DAYS_ONLY` | No (default `true`) | Only auto-scan on trading days (Mon–Fri); skip weekends. |
 | `DATA_DIR` | No (default `/app/data`) | Where cache + history are written (used by tests outside the container). |
 
 ## Operational Checks
