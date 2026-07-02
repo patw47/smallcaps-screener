@@ -63,6 +63,27 @@ def _period_for(days: int) -> str:
     return "2y"
 
 
+def _parse_date(value) -> datetime | None:
+    """Parse ISO date tolérant : None / valeur corrompue → None (jamais d'exception)."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _empty_result(n_picks: int, high_score: int, now: datetime, message: str) -> dict:
+    """Réponse vide MAIS bien formée : /api/performance reste exploitable en toute circonstance."""
+    return {
+        "n_picks": n_picks, "n_tracked": 0,
+        "overall": _stats([]), "excess_mean": None,
+        "high_score": _stats([]), "low_score": _stats([]),
+        "high_score_threshold": high_score, "rows": [],
+        "as_of": now.isoformat(), "message": message,
+    }
+
+
 def _stats(xs: list[float]) -> dict:
     if not xs:
         return {"n": 0, "mean": None, "median": None, "hit": None}
@@ -75,45 +96,63 @@ def _stats(xs: list[float]) -> dict:
 def run_tracker(history_dir: Path = HISTORY_DIR, high_score: int = 7,
                 quiet: bool = False) -> dict:
     """Calcule la performance depuis sélection, agrège par score, compare à IWM."""
-    picks = load_first_flagged(history_dir)
+    now = datetime.now(tz=timezone.utc)
+
+    try:
+        picks = load_first_flagged(history_dir)
+    except Exception as e:               # historique illisible → réponse exploitable, jamais 500
+        return _empty_result(0, high_score, now, f"Historique illisible: {e}")
+
     if not picks:
-        result = {"n_picks": 0, "message": "Aucun historique de sélections pour l'instant."}
         if not quiet:
             print("\n[track] Aucun historique. Lance quelques scans d'abord (data/history/ vide).\n")
-        return result
+        # Même forme que les autres retours → /api/performance reste homogène et exploitable.
+        return _empty_result(0, high_score, now, "Aucun historique de sélections pour l'instant.")
 
-    now = datetime.now(tz=timezone.utc)
-    earliest = min(datetime.fromisoformat(p["date"]) for p in picks.values() if p.get("date"))
+    # Dates valides seulement (une sélection sans date ne doit pas casser le calcul de période).
+    dated = [_parse_date(p.get("date")) for p in picks.values()]
+    dated = [d for d in dated if d is not None]
+    earliest = min(dated) if dated else now
     period = _period_for((now - earliest).days)
 
     tickers = list(picks)
-    prices = _download_prices(tickers, FILTERS["rs_benchmark"], period=period)
+    try:
+        prices = _download_prices(tickers, FILTERS["rs_benchmark"], period=period)
+    except Exception as e:               # marché indisponible → réponse exploitable, jamais 500
+        if not quiet:
+            print(f"[track] données de marché indisponibles: {e}")
+        return _empty_result(len(picks), high_score, now, f"Données de marché indisponibles: {e}")
+
     bench_df = prices.pop(FILTERS["rs_benchmark"], None)
     bench_close = bench_df["Close"].dropna() if bench_df is not None and "Close" in bench_df else None
     bench_cur = float(bench_close.iloc[-1]) if bench_close is not None and len(bench_close) else None
 
     rows = []
     for tk, info in picks.items():
-        df = prices.get(tk)
-        entry_price = info.get("price")
-        if df is None or "Close" not in df or not entry_price:
-            continue
-        close = df["Close"].dropna()
-        if len(close) == 0:
-            continue
-        cur = float(close.iloc[-1])
-        ret = cur / entry_price - 1
+        # Un ticker retiré de la cote / corrompu ne doit JAMAIS casser le rapport global.
+        try:
+            df = prices.get(tk)
+            entry_price = info.get("price")
+            entry_dt = _parse_date(info.get("date"))
+            if df is None or "Close" not in df or not entry_price or entry_dt is None:
+                continue
+            close = df["Close"].dropna()
+            if len(close) == 0:
+                continue
+            cur = float(close.iloc[-1])
+            ret = cur / entry_price - 1
 
-        excess = None
-        if bench_close is not None and bench_cur:
-            entry_date = datetime.fromisoformat(info["date"]).date()
-            bench_entry = _value_on_or_after(bench_close, entry_date)
-            if bench_entry:
-                excess = ret - (bench_cur / bench_entry - 1)
+            excess = None
+            if bench_close is not None and bench_cur:
+                bench_entry = _value_on_or_after(bench_close, entry_dt.date())
+                if bench_entry:
+                    excess = ret - (bench_cur / bench_entry - 1)
 
-        held = (now - datetime.fromisoformat(info["date"])).days
-        rows.append({"ticker": tk, "score": info.get("score"), "ret": ret,
-                     "excess": excess, "held_days": held})
+            held = (now - entry_dt).days
+            rows.append({"ticker": tk, "score": info.get("score"), "ret": ret,
+                         "excess": excess, "held_days": held})
+        except Exception:
+            continue
 
     all_ret = [r["ret"] for r in rows]
     all_excess = [r["excess"] for r in rows if r["excess"] is not None]

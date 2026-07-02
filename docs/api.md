@@ -77,8 +77,9 @@ Errors:
 - `409`: a scan is already in progress.
 
 Besides this endpoint, the backend runs an **automatic scan every `SCAN_EVERY_HOURS`**
-(default 24, env var) and warms the cache on startup, so the scan history accumulates on
-its own.
+(default 24, env var), **only on trading days** (`SCAN_TRADING_DAYS_ONLY`, default `true` —
+weekends skipped), and warms the cache on startup, so the scan history accumulates on its
+own at roughly one snapshot per trading day.
 
 ## `GET /api/performance`
 
@@ -90,6 +91,10 @@ Query params: `high` (int, default 7) — the "high score" threshold for the buc
 
 Runs in a background executor (it downloads recent prices, so it can take ~10–30 s).
 Returns `{"n_picks": 0, ...}` until the scan history has entries.
+
+**Always available**: the tracker is hardened so this endpoint never 500s. A delisted or
+missing ticker is skipped, and a market-data outage or unreadable snapshot returns a
+well-formed empty payload carrying a `message` field instead of raising.
 
 ```json
 {
