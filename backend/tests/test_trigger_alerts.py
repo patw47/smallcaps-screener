@@ -91,8 +91,10 @@ def test_analyze_prices_exposes_trigger_fields():
 # Alerte Telegram — dedup, min_score, désactivation silencieuse
 # ---------------------------------------------------------------------------
 
-def _cand(ticker, triggered=True, setup_score=8, price=12.0):
-    return {"ticker": ticker, "triggered": triggered, "setup_score": setup_score,
+def _cand(ticker, fusee_event=True, setup_score=8, price=12.0):
+    # Epic 2 : l'alerte fire sur le variant ÉVÉNEMENT de Fusée (membre Fusée + cassure du jour).
+    return {"ticker": ticker, "triggered": True, "fusee_event": fusee_event,
+            "is_fusee": fusee_event, "setup_score": setup_score,
             "price": price, "pivot_level": 10.5}
 
 
@@ -133,8 +135,10 @@ def test_alert_refires_after_dedup_window(tmp_path):
     assert len(sent) == 2
 
 
-def test_alert_skips_low_score_and_not_triggered(tmp_path):
-    cands = [_cand("LOW", setup_score=3), _cand("SETUP", triggered=False, setup_score=9)]
+def test_alert_skips_low_score_and_non_fusee_event(tmp_path):
+    # LOW : membre Fusée mais setup_score < min → skip.
+    # PLAINTRIG : cassure (triggered) mais PAS un événement Fusée → ne doit plus alerter.
+    cands = [_cand("LOW", setup_score=3), _cand("PLAINTRIG", fusee_event=False, setup_score=9)]
     out = alerts.notify_new_triggers(cands, state_path=tmp_path / "s.json", min_score=7,
                                      dedup_days=5, send_fn=lambda t: True)
     assert out == []
