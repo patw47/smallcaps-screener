@@ -8,6 +8,16 @@ It is a decision-support tool: it discovers, scores, and ranks. It does not trad
 The final call stays human. The interface is in French; this documentation is in
 English.
 
+> **⚠️ Thesis pivot (Epic 2, in progress).** The original "catch quiet accumulation
+> early" thesis (described below) **failed its pre-registered study**: every score decile
+> was negative net-of-cost in excess of IWM, both horizons, every year. The project is
+> pivoting to **tail hunting** — two frozen profiles, **Fusée** (momentum extreme + volume
+> breakout) and **Phénix** (far below the 52-week high, volatility compressed, stabilizing),
+> judged on their **lift** in catching the right tail (+50 % / +100 % moves). The binding,
+> pre-registered specification is **[docs/backtest_protocol_v2.md](docs/backtest_protocol_v2.md)**
+> (single source of truth for the detectors, badges and the v2 study). The sections below
+> still describe the v1 screener that stays in production while the v2 profiles are built.
+
 ## How it works
 
 The scan is a **two-pass funnel** driven by **scoring, not strict elimination**.
