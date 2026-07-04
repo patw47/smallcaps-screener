@@ -194,12 +194,18 @@ def _make_df(closes, volumes):
     return pd.DataFrame({"Close": closes, "Volume": volumes}, index=idx)
 
 
-def test_pass_a_rejects_downtrend():
-    # baisse douce 35 → 15 : reste dans la bande de prix (2-25),
-    # mais pente MA50 négative → rejet tendance (garde-fou couteau qui tombe)
+def test_pass_a_rejects_downtrend_legacy():
+    # Comportement funnel v1 (pool "legacy") : baisse douce 35 → 15, dans la bande 2-25,
+    # mais pente MA50 négative → rejet tendance (garde-fou couteau qui tombe).
+    # En mode "tradability" (défaut, Epic 2) ce titre est au contraire GARDÉ (cf. test_profiles).
     closes = [35.0 - i * 0.1 for i in range(200)]
     df = _make_df(closes, [500_000] * len(closes))
-    signals, reason = analyze_prices("DOWN", df, None)
+    old = FILTERS["pool_mode"]
+    try:
+        FILTERS["pool_mode"] = "legacy"
+        signals, reason = analyze_prices("DOWN", df, None)
+    finally:
+        FILTERS["pool_mode"] = old
     assert signals is None
     assert reason == "trend:down"
 
