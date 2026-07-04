@@ -9,6 +9,10 @@ calcule son rendement jusqu'à aujourd'hui et son écart vs l'indice IWM.
 Au fil des scans quotidiens, l'historique (data/history/) s'enrichit et ce suivi
 donne la mesure honnête et NON biaisée de la performance du screener.
 
+C'est la **Validation B** du protocole v2 : les rendements sont ventilés par SLEEVE de
+profil (Fusée / Phénix / overall / unknown), avec les métriques de queue +50 %/+100 %
+(numérateurs forward du protocole §1). Les snapshots pré-profil tombent dans "unknown".
+
 Usage : DATA_DIR=/app/data PYTHONPATH=backend python track.py
         (ou via l'endpoint API  GET /api/performance)
 """
@@ -24,6 +28,10 @@ import pandas as pd
 
 from screener_backend import FILTERS, HISTORY_DIR, _download_prices
 
+# Numérateurs forward du protocole v2 §1 : P(fwd ≥ +50 %) et P(fwd ≥ +100 %). FIGÉS par le
+# protocole pré-registré (pas des seuils réglables → hors FILTERS) — docs/backtest_protocol_v2.md.
+TAIL_THRESHOLDS = (0.50, 1.00)
+
 
 def load_first_flagged(history_dir: Path = HISTORY_DIR) -> dict[str, dict]:
     """Pour chaque ticker, la PREMIÈRE fois qu'il a été sélectionné (date, prix, score)."""
@@ -38,7 +46,10 @@ def load_first_flagged(history_dir: Path = HISTORY_DIR) -> dict[str, dict]:
         for p in snap.get("picks", []):
             tk = p.get("ticker")
             if tk and tk not in picks:
-                picks[tk] = {"date": date, "price": p.get("price"), "score": p.get("score")}
+                # On fige aussi le profil AU PREMIER FLAG (sleeve du ticker). Les vieux
+                # snapshots sans champ profil → is_fusee/is_phenix None → sleeve "unknown".
+                picks[tk] = {"date": date, "price": p.get("price"), "score": p.get("score"),
+                             "is_fusee": p.get("is_fusee"), "is_phenix": p.get("is_phenix")}
     return picks
 
 
@@ -80,6 +91,7 @@ def _empty_result(n_picks: int, high_score: int, now: datetime, message: str) ->
         "overall": _stats([]), "excess_mean": None,
         "high_score": _stats([]), "low_score": _stats([]),
         "high_score_threshold": high_score, "rows": [],
+        "sleeves": {k: _sleeve_stats([]) for k in ("overall", "fusee", "phenix", "unknown")},
         "as_of": now.isoformat(), "message": message,
     }
 
@@ -90,6 +102,23 @@ def _stats(xs: list[float]) -> dict:
     return {
         "n": len(xs), "mean": statistics.mean(xs),
         "median": statistics.median(xs), "hit": sum(1 for x in xs if x > 0) / len(xs),
+    }
+
+
+def _sleeve_stats(sleeve_rows: list[dict]) -> dict:
+    """
+    Agrégat d'une sleeve (Fusée / Phénix / overall / unknown) : stats de base (n, moyenne,
+    médiane, taux de gagnants) + écart moyen vs IWM + métriques de QUEUE — nombre d'événements
+    +50 % et +100 % depuis sélection (numérateurs forward du protocole v2 §1).
+    """
+    up1, up2 = TAIL_THRESHOLDS
+    rets = [r["ret"] for r in sleeve_rows]
+    excess = [r["excess"] for r in sleeve_rows if r["excess"] is not None]
+    return {
+        **_stats(rets),
+        "excess_mean": (statistics.mean(excess) if excess else None),
+        "n_up50": sum(1 for x in rets if x >= up1),
+        "n_up100": sum(1 for x in rets if x >= up2),
     }
 
 
@@ -149,8 +178,14 @@ def run_tracker(history_dir: Path = HISTORY_DIR, high_score: int = 7,
                     excess = ret - (bench_cur / bench_entry - 1)
 
             held = (now - entry_dt).days
+            # Sleeve figée au premier flag ; profil absent (vieux snapshot) → "unknown".
+            has_profile = (info.get("is_fusee") is not None
+                           or info.get("is_phenix") is not None)
             rows.append({"ticker": tk, "score": info.get("score"), "ret": ret,
-                         "excess": excess, "held_days": held})
+                         "excess": excess, "held_days": held,
+                         "is_fusee": bool(info.get("is_fusee")),
+                         "is_phenix": bool(info.get("is_phenix")),
+                         "has_profile": has_profile})
         except Exception:
             continue
 
@@ -159,11 +194,21 @@ def run_tracker(history_dir: Path = HISTORY_DIR, high_score: int = 7,
     high = [r["ret"] for r in rows if (r["score"] or 0) >= high_score]
     low = [r["ret"] for r in rows if (r["score"] or 0) < high_score]
 
+    # Sleeves (Validation B du protocole) : Fusée / Phénix / overall / unknown. Un ticker
+    # peut appartenir aux DEUX sleeves de profil (both). "unknown" = snapshot pré-profil.
+    sleeves = {
+        "overall": _sleeve_stats(rows),
+        "fusee": _sleeve_stats([r for r in rows if r["has_profile"] and r["is_fusee"]]),
+        "phenix": _sleeve_stats([r for r in rows if r["has_profile"] and r["is_phenix"]]),
+        "unknown": _sleeve_stats([r for r in rows if not r["has_profile"]]),
+    }
+
     result = {
         "n_picks": len(picks), "n_tracked": len(rows),
         "overall": _stats(all_ret),
         "excess_mean": (statistics.mean(all_excess) if all_excess else None),
         "high_score": _stats(high), "low_score": _stats(low), "high_score_threshold": high_score,
+        "sleeves": sleeves,
         "rows": sorted(rows, key=lambda r: r["ret"], reverse=True),
         "as_of": now.isoformat(),
     }
@@ -191,6 +236,11 @@ def _print_report(r: dict) -> None:
     print(f"\n  Par score (seuil {r['high_score_threshold']}) :")
     print(f"    Score haut (>= {r['high_score_threshold']}) : {_pct(h['mean'])}   (n={h['n']})")
     print(f"    Score bas  (<  {r['high_score_threshold']}) : {_pct(l['mean'])}   (n={l['n']})")
+    print("\n  Par profil (sleeves — Validation B) :")
+    for name in ("fusee", "phenix", "overall", "unknown"):
+        s = r["sleeves"][name]
+        print(f"    {name:<8} n={s['n']:<3} moy {_pct(s['mean'])}  excès {_pct(s['excess_mean'])}"
+              f"   +50%: {s['n_up50']}   +100%: {s['n_up100']}")
     top = r["rows"][:8]
     if top:
         print("\n  Top rendements :")

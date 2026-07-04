@@ -177,8 +177,14 @@ async def force_scan():
 @app.get("/api/performance", summary="Suivi de performance des sélections dans le temps")
 async def get_performance(high: int = 7):
     """
-    Rendement des sélections réelles depuis leur première apparition, agrégé par
-    score et comparé à IWM. Se remplit au fil des scans (historique data/history/).
+    Rendement des sélections réelles depuis leur première apparition, agrégé par score
+    et comparé à IWM. Se remplit au fil des scans (historique data/history/).
+
+    Réponse (Validation B du protocole v2) : en plus des agrégats `overall` / `high_score`
+    / `low_score`, un bloc **`sleeves`** ventile par profil — `fusee` / `phenix` / `overall`
+    / `unknown` — chaque sleeve portant `n`, `mean`, `median`, `hit`, `excess_mean` et les
+    compteurs de queue **`n_up50`** / **`n_up100`** (événements +50 % / +100 % depuis
+    sélection). Forme homogène, jamais de 500 (durci dans `run_tracker`).
     """
     loop = asyncio.get_event_loop()
     try:
