@@ -13,6 +13,12 @@
 
 **Minimal hard filters (tradable + not a falling knife) → rank by a technical score led by accumulation → enrich the top-scored names with fundamentals.** The thesis is to catch small caps *early* (quiet accumulation / tight base, before the move), so selection is driven by **scoring**, not by strict elimination.
 
+> **Epic 2 — tail-hunting pivot.** The v1 thesis above failed its pre-registered study; the
+> project is pivoting to two frozen profiles (**Fusée**, **Phénix**) specified in
+> [backtest_protocol_v2.md](backtest_protocol_v2.md) — the single source of truth for the
+> production detectors, the frontend badges and the v2 study. The v1 screener documented here
+> stays in production until the v2 profiles land.
+
 ## Screener Configuration
 
 The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No magic numbers in the logic.
