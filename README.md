@@ -147,7 +147,10 @@ curl http://localhost:8000/api/performance
   batches (free); only the top ~150 survivors reach the costly `.info` calls.
 - Market data comes from public endpoints and `yfinance`; field quality varies by
   ticker (small caps especially). The reliable signals are price/volume based.
-- **Do not modify `frontend/smallcap-screener.jsx`** — it is the canonical UI.
+- The dashboard shows each stock's **tail-hunting profile** prominently: a 🚀 **Fusée** or
+  🔥 **Phénix** badge (both if it qualifies for both), with a profile filter (All / Fusée /
+  Phénix) and per-profile counts. The **Phénix badge carries a "non validé" marker** — its
+  edge is not yet validated on delisted-inclusive data (survivorship bias, protocol v2 §5).
 - This is a screening tool, **not financial advice**.
 
 ## Stack
@@ -225,7 +228,7 @@ backend/
 ├── track.py              # live performance tracking of past selections
 └── tests/                # offline deterministic unit tests
 frontend/
-├── smallcap-screener.jsx # canonical dashboard (do not modify)
+├── smallcap-screener.jsx # dashboard UI (Fusée/Phénix profile badges; editable since Epic 2)
 └── src/main.jsx
 docs/                     # architecture, backend, api, frontend, deployment
 ```
