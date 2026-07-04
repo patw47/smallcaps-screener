@@ -1,5 +1,11 @@
 # Frontend
 
+> **Epic 2 — the freeze is lifted.** `frontend/smallcap-screener.jsx` was frozen through
+> Epic 1; since 2026-07-04 it is **editable**. It must display the **Fusée / Phénix profile
+> badges prominently on every stock**, and the **Phénix badge must carry a visible "non
+> validé" marker** (survivorship bias not yet corrected — protocol v2 §5). Keep edits focused
+> (badges, filtering) — no redesign.
+
 ## Files
 
 - `frontend/src/main.jsx`: React entry point.
@@ -30,6 +36,7 @@ The main `App` component stores:
 | `loading` | Initial scan loading state. |
 | `scanning` | Force-scan button state. |
 | `sector` | Selected sector filter. |
+| `profile` | Selected profile filter (`All` / `Fusée` / `Phénix`, Epic 2). |
 | `minScore` | Minimum local score filter. |
 | `analyses` | Claude analysis text by ticker. |
 | `loadingTickers` | Per-ticker analysis loading state. |
@@ -55,6 +62,9 @@ The backend returns snake_case fields. The frontend maps them into camelCase fie
 | `score` | `score` (backend score, 0–10) |
 | `positives` | `positives` |
 | `flags` | `flags` |
+| `profile` / `is_fusee` / `is_phenix` | `profile` / `isFusee` / `isPhenix` (Epic 2) |
+| `fusee_event` | `fuseeEvent` (Fusée member + same-day breakout) |
+| `fusee_strength` / `phenix_strength` / `profile_strength` | `fuseeStrength` / `phenixStrength` / `profileStrength` |
 
 `compressed` is converted into `volatility` (`true` → `"low"`, `false` → `"normal"`).
 
@@ -94,9 +104,13 @@ After the request resolves, the frontend immediately calls `fetchData()` again. 
 
 Filtering happens entirely in the browser:
 
+- **Profile filter (Epic 2)**: `All` / `🚀 Fusée` / `🔥 Phénix`, each button showing its
+  live count. A `Fusée` / `Phénix` view keeps only members of that profile.
 - Sector filter from `INSTRUMENTS`.
 - Minimum score filter with preset values `0`, `5`, `7`, and `9`.
-- Final results are sorted by local frontend score descending.
+- **Sort by profile strength**: in a profile view results are ordered by that profile's
+  strength (`fuseeStrength` / `phenixStrength`); in `All` view by `profileStrength` (the max).
+  The score column and score filter still work; the score no longer drives the ordering.
 
 ### Claude Analysis
 
@@ -117,6 +131,21 @@ Security note: this exposes the key to browser code. Use a backend proxy before 
 
 ## UI Components
 
+### `ProfileBadge` / `ProfileBadges` (Epic 2)
+
+`ProfileBadge` renders one coloured chip per profile: **🚀 Fusée** (green) and **🔥 Phénix**
+(orange), each with the member's strength (0–100). A Fusée chip shows a **⚡** when
+`fuseeEvent` is set (breakout that day). The **Phénix chip always carries a "non validé"
+tag** with a tooltip explaining the survivorship gating (protocol v2 §5) — non-negotiable.
+`ProfileBadges` renders every profile a stock belongs to (both chips for dual-profile
+stocks); it returns nothing for a non-member. The badges sit prominently at the top of each
+`StockCard`. The stats header shows the **per-profile candidate counts**.
+
+Rendered UI (Epic 2 Sprint 3, mock data): [`docs/screenshots/epic2-profile-badges-all.png`](screenshots/epic2-profile-badges-all.png)
+(All view — dual-profile VXRT shows both chips, FCEL carries the ⚡ event marker) and
+[`docs/screenshots/epic2-profile-badges-phenix.png`](screenshots/epic2-profile-badges-phenix.png)
+(Phénix filter — only Phénix members, "non validé" markers, sorted by Phénix strength).
+
 ### `ScoreBar`
 
 Displays the current score as a horizontal bar:
@@ -130,6 +159,7 @@ Displays the current score as a horizontal bar:
 Displays:
 
 - Ticker, name, sector, IPO year.
+- **Profile badges** (Fusée / Phénix, Epic 2) — prominent, at the top.
 - Price and one-day change.
 - Market cap, volume ratio, one-month change.
 - Score bar.

@@ -22,7 +22,60 @@ function normalizeStocks(raw) {
     score: s.score ?? 0,
     positives: s.positives ?? [],
     flags: s.flags ?? [],
+    // Profils tail-hunting (Epic 2, backend Sprint 2) — source de vérité protocole v2 §3.
+    profile: s.profile ?? null,
+    isFusee: !!s.is_fusee,
+    isPhenix: !!s.is_phenix,
+    fuseeEvent: !!s.fusee_event,
+    fuseeStrength: s.fusee_strength ?? null,
+    phenixStrength: s.phenix_strength ?? null,
+    profileStrength: s.profile_strength ?? 0,
   }));
+}
+
+// Profils tail-hunting (Epic 2) : chip coloré par profil. Phénix porte un marqueur
+// « non validé » VISIBLE (honnêteté : biais de survie non corrigé, protocole v2 §5).
+const PROFILE_STYLE = {
+  fusee: { emoji: "🚀", label: "Fusée", fg: "#00e69a", bg: "#00ff9d18", bd: "#00ff9d44" },
+  phenix: { emoji: "🔥", label: "Phénix", fg: "#ff9966", bg: "#ff6b6b18", bd: "#ff6b6b44" },
+};
+
+function ProfileBadge({ kind, strength, event }) {
+  const c = PROFILE_STYLE[kind];
+  const pct = strength != null ? Math.round(strength * 100) : null;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      background: c.bg, color: c.fg, border: `1px solid ${c.bd}`,
+      borderRadius: 20, padding: "4px 11px", fontSize: 12, fontWeight: 700,
+      fontFamily: "monospace", letterSpacing: 0.3,
+    }}>
+      <span>{c.emoji} {c.label}</span>
+      {pct != null && <span style={{ opacity: 0.7, fontWeight: 600 }}>· {pct}</span>}
+      {event && (
+        <span title="Cassure déclenchée aujourd'hui (variant événement Fusée)"
+              style={{ color: "#ffd24d", cursor: "help" }}>⚡</span>
+      )}
+      {kind === "phenix" && (
+        <span title="Hypothèse — NON VALIDÉ : biais de survie non corrigé (protocole v2 §5). Aucun capital réel tant que la validation sur données incluant les titres delisted n'est pas faite."
+              style={{
+                background: "#ffcc6622", color: "#ffcc66", fontSize: 9, fontWeight: 700,
+                padding: "1px 6px", borderRadius: 10, marginLeft: 3, cursor: "help",
+                textTransform: "uppercase", letterSpacing: 0.4,
+              }}>non validé</span>
+      )}
+    </span>
+  );
+}
+
+function ProfileBadges({ stock }) {
+  if (!stock.isFusee && !stock.isPhenix) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+      {stock.isFusee && <ProfileBadge kind="fusee" strength={stock.fuseeStrength} event={stock.fuseeEvent} />}
+      {stock.isPhenix && <ProfileBadge kind="phenix" strength={stock.phenixStrength} />}
+    </div>
+  );
 }
 
 function ScoreBar({ score }) {
@@ -70,6 +123,8 @@ function StockCard({ stock, onAnalyze, analysis, isLoading }) {
           <div style={{ fontSize: 12, color: changeColor(stock.change1d), fontFamily: "monospace" }}>{stock.change1d > 0 ? "+" : ""}{stock.change1d}% today</div>
         </div>
       </div>
+
+      <ProfileBadges stock={stock} />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
         {[
@@ -141,6 +196,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [sector, setSector] = useState("All");
+  const [profile, setProfile] = useState("All");   // All | Fusée | Phénix (Epic 2)
   const [minScore, setMinScore] = useState(0);
   const [analyses, setAnalyses] = useState({});
   const [loadingTickers, setLoadingTickers] = useState({});
@@ -217,13 +273,23 @@ Réponds en français. Structure:
     setLoadingTickers(prev => ({ ...prev, [stock.ticker]: false }));
   }, []);
 
+  const fuseeCount = stocks.filter(s => s.isFusee).length;
+  const phenixCount = stocks.filter(s => s.isPhenix).length;
+
   const filtered = stocks
     .filter(s => {
       if (sector !== "All" && s.sector !== sector) return false;
       if ((s.score ?? 0) < minScore) return false;
+      if (profile === "Fusée" && !s.isFusee) return false;
+      if (profile === "Phénix" && !s.isPhenix) return false;
       return true;
     })
-    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    // Tri par FORCE DE PROFIL (Epic 2) : dans une vue profil, par la force de ce profil.
+    .sort((a, b) => {
+      if (profile === "Fusée") return (b.fuseeStrength ?? 0) - (a.fuseeStrength ?? 0);
+      if (profile === "Phénix") return (b.phenixStrength ?? 0) - (a.phenixStrength ?? 0);
+      return (b.profileStrength ?? 0) - (a.profileStrength ?? 0);
+    });
 
   if (loading) {
     return (
@@ -296,15 +362,38 @@ Réponds en français. Structure:
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, margin: "24px 0" }}>
           {[
             { label: "Candidates", value: filtered.length, color: "#8888ff" },
+            { label: "🚀 Fusée", value: fuseeCount, color: "#00cc7a" },
+            { label: "🔥 Phénix", value: phenixCount, color: "#ff9966" },
             { label: "Score moyen", value: (filtered.reduce((a, s) => a + (s.score ?? 0), 0) / (filtered.length || 1)).toFixed(1) + "/10", color: "#f0c040" },
-            { label: "Avec catalyseur", value: filtered.filter(s => s.catalystDate).length, color: "#00cc7a" },
-            { label: "Insider buying", value: filtered.filter(s => s.insiderBuying).length, color: "#ff9966" },
           ].map(({ label, value, color }) => (
             <div key={label} style={{ background: "#0d0d1a", border: "1px solid #ffffff08", borderRadius: 10, padding: "14px 18px" }}>
               <div style={{ color: "#33335a", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{label}</div>
               <div style={{ color, fontSize: 22, fontWeight: 700, fontFamily: "monospace" }}>{value}</div>
             </div>
           ))}
+        </div>
+
+        {/* Profile filter (Epic 2) — tail-hunting Fusée / Phénix */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+          {[
+            { key: "All", label: "Tous profils" },
+            { key: "Fusée", label: `🚀 Fusée (${fuseeCount})` },
+            { key: "Phénix", label: `🔥 Phénix (${phenixCount})` },
+          ].map(({ key, label }) => (
+            <button key={key} onClick={() => setProfile(key)} style={{
+              padding: "7px 16px",
+              background: profile === key ? "#2a2a6a" : "#0d0d1a",
+              border: `1px solid ${profile === key ? "#4444aa" : "#ffffff0a"}`,
+              borderRadius: 20, color: profile === key ? "#aaaaff" : "#6666aa",
+              fontSize: 12, fontWeight: 700, fontFamily: "monospace", cursor: "pointer",
+              transition: "all 0.15s ease",
+            }}>{label}</button>
+          ))}
+          {profile === "Phénix" && (
+            <span style={{ color: "#ffcc66", fontSize: 11, fontFamily: "monospace" }}>
+              ⚠ Phénix : hypothèse non validée (biais de survie, protocole v2 §5)
+            </span>
+          )}
         </div>
 
         {/* Filters */}
