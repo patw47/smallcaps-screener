@@ -136,6 +136,20 @@ FILTERS = {
     "enrich_backoff_s": 3.0,       # base du backoff exponentiel (3, 6, 12, 24s + jitter)
     "shuffle_seed": None,          # int → ordre de téléchargement reproductible ; None → ordre aléatoire
                                    # (n'affecte PLUS la composition de l'univers, seulement l'ordre)
+    # --- Pivot Epic 2 (Sprint 2) : univers tradable + détecteurs de profils ---
+    # "tradability" (défaut) : filtres durs réduits à prix ≥ price_min + dollar-volume ≥
+    #     dollar_vol_min ; la SÉLECTION est faite par les DÉTECTEURS DE PROFILS (Fusée/Phénix),
+    #     plus par le score. "legacy" : ancien entonnoir v1 (price_max, bande perf_1m, garde
+    #     pente MA50) — conservé pour la reproductibilité du backtest v1 (régression).
+    "pool_mode": "tradability",
+    # Seuils des profils = PERCENTILES cross-sectionnels dans l'univers tradable, VERBATIM au
+    # protocole v2 §3 (docs/backtest_protocol_v2.md). SOURCE UNIQUE partagée production ↔ étude ;
+    # toute déviation exige d'abord une révision du protocole.
+    "profiles": {
+        "fusee":  {"rs63_pctile_min": 0.80, "perf_1m_pctile_min": 0.80},
+        "phenix": {"pct_52w_pctile_max": 0.20, "atr_ratio_pctile_max": 0.40},
+        "phenix_sma_window": 20,   # close ≥ SMA20 : garde de stabilisation (booléenne, pas un percentile)
+    },
 }
 
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
@@ -690,32 +704,44 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     if len(close) < FILTERS["vol_window_long"] + FILTERS["ma_slope_lookback"]:
         return None, f"history:{len(close)}j"
 
-    # --- Prix ---
+    # --- Mode de pool (Epic 2) : "tradability" (défaut) réduit les filtres durs à
+    #     prix ≥ price_min + liquidité (protocole v2 §2) ; "legacy" conserve l'entonnoir v1. ---
+    legacy = FILTERS["pool_mode"] == "legacy"
+
+    # --- Prix : plancher (les deux modes) ; plafond price_max seulement en legacy ---
     price = _safe_float(close.iloc[-1])
     if price is None:
         return None, "price:None"
-    if not (FILTERS["price_min"] <= price <= FILTERS["price_max"]):
+    if price < FILTERS["price_min"]:
+        return None, f"price:{price:.2f}"
+    if legacy and price > FILTERS["price_max"]:
         return None, f"price:{price:.2f}"
 
-    # --- Perf 1 mois (~21 jours de bourse) ---
+    # --- Perf 1 mois (~21 jours de bourse) : informatif ; borne dure seulement en legacy ---
     change_1m = _pct_change(close, 21)
     if change_1m is None:
         return None, "change_1m:None"
-    if not (FILTERS["perf_1m_min"] <= change_1m <= FILTERS["perf_1m_max"]):
+    if legacy and not (FILTERS["perf_1m_min"] <= change_1m <= FILTERS["perf_1m_max"]):
         return None, f"change_1m:{change_1m*100:.1f}%"
 
-    # --- Liquidité (hard) ---
+    # --- Liquidité (hard, les deux modes — définit la tradabilité) ---
     dollar_vol = _median_dollar_volume(close, volume, FILTERS["dollar_vol_window"])
     if dollar_vol is None or dollar_vol < FILTERS["dollar_vol_min"]:
         return None, f"liquidity:{int(dollar_vol) if dollar_vol else 0}"
 
-    # --- Tendance : pente MA50 >= 0, et prix > MA50 si exigé (hard) ---
+    # --- Tendance : MA50 toujours calculée (signaux) ; pente = filtre dur seulement en legacy ---
     ma50 = _sma(close, FILTERS["ma_trend_window"])
     ma50_rising = _ma_rising(close, FILTERS["ma_trend_window"], FILTERS["ma_slope_lookback"])
-    if ma50 is None or not ma50_rising:
-        return None, "trend:down"
-    if FILTERS["trend_require_above_ma"] and price <= ma50:
-        return None, "trend:below_ma"
+    if ma50 is None:
+        return None, "trend:no_ma"
+    if legacy:
+        if not ma50_rising:
+            return None, "trend:down"
+        if FILTERS["trend_require_above_ma"] and price <= ma50:
+            return None, "trend:below_ma"
+
+    # --- SMA20 : garde de stabilisation Phénix (close ≥ SMA20, protocole v2 §3) ---
+    sma20 = _sma(close, FILTERS["profiles"]["phenix_sma_window"])
 
     # --- Signaux de scoring (prix/volume) ---
     change_1d = _pct_change(close, 1)
@@ -781,8 +807,8 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     )
     rs_signal = bool(rs_outperf and rs_line_rising)
     rs_turning = bool(rs_line_rising)  # la RS repart (retournement) — scoring
-    # Filtre RS dur seulement si rs_require=True (par défaut False → RS = scoring).
-    if FILTERS["rs_require"] and rs_outperf is not None and not rs_signal:
+    # Filtre RS dur seulement en legacy si rs_require=True (par défaut False → RS = scoring).
+    if legacy and FILTERS["rs_require"] and rs_outperf is not None and not rs_signal:
         return None, "rs:weak"
 
     # --- Trigger : la cassure a lieu MAINTENANT (Sprint 3), distinct du setup/score ---
@@ -811,6 +837,7 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         "near_pivot": near_pivot,
         "low_ext": low_ext,
         "ma50": round(ma50, 2),
+        "sma20": round(sma20, 2) if sma20 is not None else None,  # garde Phénix (close ≥ SMA20)
         "price_above_ma50": bool(price > ma50),
         "rs_outperf": bool(rs_outperf) if rs_outperf is not None else None,
         "rs_line_rising": bool(rs_line_rising) if rs_line_rising is not None else None,
@@ -978,18 +1005,30 @@ def run_scan(tickers: list[str] | None = None) -> dict:
             cat = reason.split(":")[0]
             rejection_counts[cat] = rejection_counts.get(cat, 0) + 1
 
-    # Classement par SCORE TECHNIQUE PERCENTILE (accumulation en tête) pour choisir qui
-    # mérite l'appel .info coûteux. Le percentile est cross-sectionnel : « les meilleures
-    # parmi le vivier du jour ». L'accumulation EST la thèse → classer par elle est légitime.
-    tech_scores = _select_scores([sig for _, sig in survivors])
-    ranked = sorted(zip(survivors, tech_scores),
-                    key=lambda x: (x[1], x[0][1].get("dollar_volume") or 0), reverse=True)
-    survivors = [s for s, _ in ranked]
+    # --- Sélection des survivants à enrichir (Passe B coûteuse) ---
+    # Epic 2, mode "tradability" : la sélection est faite par les DÉTECTEURS DE PROFILS
+    # (Fusée/Phénix, percentiles cross-sectionnels du protocole v2 §3) — seuls les MEMBRES
+    # sont affichés/enrichis, classés par force de profil. Mode "legacy" : ancien classement
+    # par score technique percentile (reproductibilité du backtest v1).
+    n_tradable = len(survivors)
+    if FILTERS["pool_mode"] == "legacy":
+        tech_scores = _select_scores([sig for _, sig in survivors])
+        ranked = sorted(zip(survivors, tech_scores),
+                        key=lambda x: (x[1], x[0][1].get("dollar_volume") or 0), reverse=True)
+        survivors = [s for s, _ in ranked]
+    else:
+        from profiles import detect_profiles, rank_members
+        detect_profiles([sig for _, sig in survivors])
+        survivors = rank_members(survivors)
+        rejection_counts["not_profiled"] = n_tradable - len(survivors)
+
     n_all = len(survivors)
     capped = survivors[:FILTERS["enrich_max"]]
     if n_all > len(capped):
         rejection_counts["below_cutoff"] = n_all - len(capped)
-    print(f"\n[Passe A] {n_all} survivants / {total} tickers → {len(capped)} enrichis (top score technique)")
+    label = "top score technique" if FILTERS["pool_mode"] == "legacy" else "membres de profil"
+    print(f"\n[Passe A] {n_tradable} tradables / {total} tickers → {n_all} {label} → "
+          f"{len(capped)} enrichis")
 
     # --- Passe B : enrichissement .info sur les survivants retenus (parallèle, borné) ---
     scan_state.update({"phase": "enrich", "progress": 0, "total": len(capped)})
@@ -1014,7 +1053,7 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     print(f"\n{'='*55}")
     print(f"  {len(candidates)} candidats trouvés sur {total} tickers de l'univers")
     print(f"{'='*55}")
-    print(f"\n  Rejections par filtre :")
+    print("\n  Rejections par filtre :")
     for cat, count in sorted(rejection_counts.items(), key=lambda x: -x[1]):
         print(f"    {cat:<20} {count:>4} tickers")
     print()
@@ -1026,13 +1065,21 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     # `score` est CONSERVÉ tel quel (l'UI actuelle le lit) ; setup_score en est l'alias.
     for s in candidates:
         s["setup_score"] = s["score"]
-    candidates.sort(key=lambda x: (x["score"], x.get("rs_strength") or 0), reverse=True)
+    if FILTERS["pool_mode"] == "legacy":
+        candidates.sort(key=lambda x: (x["score"], x.get("rs_strength") or 0), reverse=True)
+    else:
+        # Epic 2 : affichage classé par FORCE DE PROFIL. setup_score reste calculé pour
+        # continuité mais ne pilote plus ni la sélection ni l'ordre.
+        candidates.sort(key=lambda x: (x.get("profile_strength") or 0.0,
+                                       x.get("rs_strength") or 0), reverse=True)
 
     output = {
         "scanned_at": datetime.now(tz=timezone.utc).isoformat(),
         "universe_size": total,
         "total_scanned": total,
-        "survivors_price_filter": n_all,
+        "survivors_price_filter": n_tradable,   # ont passé les filtres durs (univers tradable)
+        "profile_members": n_all,               # membres Fusée/Phénix retenus (== tradables en legacy)
+        "pool_mode": FILTERS["pool_mode"],
         "enriched": n_surv,
         "candidates": len(candidates),
         "stocks": candidates,
@@ -1072,6 +1119,13 @@ def _write_snapshot(output: dict) -> None:
                 "sector": s.get("sector"),
                 "accumulation": s.get("accumulation"), "compressed": s.get("compressed"),
                 "near_pivot": s.get("near_pivot"), "rs_strength": s.get("rs_strength"),
+                # Profils tail-hunting (Epic 2) — nécessaires aux sleeves du tracker (Sprint 4)
+                "profile": s.get("profile"),
+                "is_fusee": s.get("is_fusee"), "is_phenix": s.get("is_phenix"),
+                "fusee_event": s.get("fusee_event"),
+                "fusee_strength": s.get("fusee_strength"),
+                "phenix_strength": s.get("phenix_strength"),
+                "profile_strength": s.get("profile_strength"),
             }
             for s in output.get("stocks", [])
         ]

@@ -4,6 +4,7 @@
 
 - `backend/api.py`: FastAPI application and HTTP routes.
 - `backend/screener_backend.py`: market data discovery, two-pass filtering, scoring, and JSON output.
+- `backend/profiles.py`: tail-hunting profile detectors (Fusée / Phénix) — the single source of truth for the protocol v2 §3 definitions, shared by production and the study.
 - `backend/backtest.py`: forward-return validation harness (offline analysis, not part of the live API).
 - `backend/tests/`: offline deterministic unit tests (`test_screener.py`, `test_backtest.py`).
 - `requirements.txt`: Python runtime dependencies used by the backend image.
@@ -62,6 +63,8 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `enrich_workers` / `enrich_jitter_s` / `enrich_retries` / `enrich_backoff_s` | `2` / `0.5` / `4` / `3.0` | Pass B pool + anti-throttle backoff (Yahoo bans the IP if hammered). |
 | `cache_minutes` | `30` | Cache lifetime. |
 | `shuffle_seed` | `None` | `int` → reproducible **download order**; `None` → random order. Never changes universe membership. |
+| `pool_mode` | `tradability` | **Epic 2**: `tradability` (default) → hard path = price ≥ `price_min` + dollar-volume ≥ `dollar_vol_min`, selection by **profile detectors**; `legacy` → the v1 funnel (`price_max`, `perf_1m` band, MA50-slope gate) for backtest reproducibility. |
+| `profiles` | dict | Cross-sectional **percentile** thresholds for Fusée / Phénix, **verbatim** from protocol v2 §3: Fusée `rs63/perf_1m ≥ P80`; Phénix `pct_52w ≤ P20`, `atr_ratio ≤ P40`, `close ≥ SMA20` (`phenix_sma_window`). Single source of truth (prod ↔ study). |
 
 ## Ticker Discovery
 
@@ -79,18 +82,19 @@ a single exchange (NASDAQ), now fully covered by the NASDAQ screener API. Discov
 
 ## Pass A — price/volume (`analyze_prices`)
 
-Pure function on a batch-downloaded OHLCV DataFrame (no network). **Hard filters** (kept minimal):
+Pure function on a batch-downloaded OHLCV DataFrame (no network). The **hard filters depend on `pool_mode`** (Epic 2):
 
-| Filter | Condition | Reason |
-| --- | --- | --- |
-| Price | `price_min ≤ last close ≤ price_max` (2–25) | `price:…` |
-| 1-month perf | within `perf_1m_min..max` | `change_1m:…` |
-| Liquidity | median 20d dollar-volume ≥ `dollar_vol_min` | `liquidity:…` |
-| Falling-knife guard | **MA50 slope ≥ 0** (flat or rising) | `trend:down` |
+| Filter | `tradability` (default) | `legacy` (v1 funnel) | Reason |
+| --- | --- | --- | --- |
+| Price floor | `close ≥ price_min` (2) | `close ≥ price_min` | `price:…` |
+| Price ceiling | — (kept as value only) | `close ≤ price_max` (25) | `price:…` |
+| 1-month perf | — (informational) | within `perf_1m_min..max` | `change_1m:…` |
+| Liquidity | median 20d dollar-volume ≥ `dollar_vol_min` | same | `liquidity:…` |
+| Falling-knife guard | — (informational) | **MA50 slope ≥ 0** | `trend:down` |
 
-RS, price > MA50, and near-high are **not** hard filters — they are scoring signals (so early setups aren't eliminated). Optional hard gates exist behind `rs_require` / `trend_require_above_ma` (both `False` by default).
+In `tradability` the pool is **everything tradable** (price floor + liquidity, protocol v2 §2) and **selection is done by the profile detectors** (below), not by the funnel. `legacy` reproduces the v1 hard path for backtest regression. RS, price > MA50 and near-high are never hard filters (scoring signals); optional legacy-only gates live behind `rs_require` / `trend_require_above_ma`.
 
-Signals computed: `accumulation`, `compressed` (see Sensors v2), `near_pivot` / `pct_recent_high` (recent base), `low_ext` (near MA50), `rs_turning` / `rs_strength` / `rs_signal`, `price_above_ma50`, `pct_52w_high` / `near_high` (informational), `dollar_volume`, `vol_ratio`, `change_1d` / `change_1m`, the v2 diagnostics `compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`, and the **trigger** fields below.
+Signals computed: `accumulation`, `compressed` (see Sensors v2), `near_pivot` / `pct_recent_high` (recent base), `low_ext` (near MA50), `rs_turning` / `rs_strength` / `rs_signal`, `price_above_ma50`, **`sma20`** (Phénix `close ≥ SMA20` gate), `pct_52w_high` / `near_high` (informational), `dollar_volume`, `vol_ratio`, `change_1d` / `change_1m`, the v2 diagnostics `compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`, and the **trigger** fields below.
 
 ## Sensors v2 — compression & accumulation (`FILTERS["sensors_version"]`)
 
@@ -117,6 +121,30 @@ Continuous factors follow the active version: in v2, `f_atr_ratio` carries the c
 carry the raw ATR20/ATR90 and the net directional-volume fraction. The factor **keys and
 weights are unchanged** — only the values feeding them change.
 
+## Tail-hunting profiles — Fusée & Phénix (`profiles.py`, Epic 2)
+
+`profiles.py` is the **single source of truth** for the protocol v2 §3 definitions, shared by
+production (`run_scan`, badges, alerts) and the study (Sprint 5). Thresholds live only in
+`FILTERS["profiles"]`; a dedicated test asserts they equal the protocol values verbatim.
+
+Memberships are **cross-sectional percentiles** computed per scan over the whole tradable pool
+(all Pass A survivors), so the detector needs the full population — not a per-ticker rule:
+
+- **Fusée** (momentum extreme): `rs63 ≥ P80` **AND** `perf_1m ≥ P80` (mapped to the existing
+  `rs_strength` and `change_1m` signals). Event variant `fusee_event` = member **AND** a
+  breakout `triggered` that day.
+- **Phénix** (massacred, coiling, stabilizing): `pct_52w_high ≤ P20` **AND** `atr_ratio ≤ P40`
+  **AND** `close ≥ SMA20` (the `sma20` stabilization gate).
+
+`detect_profiles(signals)` mutates each signal in place, adding `is_fusee` / `is_phenix`
+(bool), `fusee_strength` / `phenix_strength` (float | `None`, members only — the mean of the
+member percentiles, oriented so *deeper = stronger*; the boolean SMA gate is excluded per §3),
+`fusee_event`, `profiles` (list), `profile` (`"fusee"` | `"phenix"` | `"both"` | `None`) and
+`profile_strength` (max, used for ranking display). Robust to an **empty universe** and to
+**missing values** (a required field `None` → non-member). `rank_members` keeps only members,
+sorted by `profile_strength`. Membership is boolean; strength is display-only, never part of
+the pass/fail judgment.
+
 ## Setup vs trigger (`_breakout`)
 
 Two distinct notions, so the screener can *watch beforehand* and *ping at departure*:
@@ -135,8 +163,9 @@ set, so every candidate in the JSON/snapshots carries them.
 
 ## Telegram alerts (`alerts.py`)
 
-On each scan, `notify_new_triggers` pings **newly `triggered`** names with
-`setup_score ≥ alert_min_score`. **Dedup**: a ticker is not re-notified within
+On each scan, `notify_new_triggers` pings **newly `fusee_event`** names — a **Fusée member
+whose breakout `triggered` that day** (Epic 2 semantics; a plain non-Fusée trigger no longer
+alerts) — with `setup_score ≥ alert_min_score`. **Dedup**: a ticker is not re-notified within
 `alert_dedup_days` (state persisted in `data/alerts_state.json`; recorded **only on
 successful send**, so a failure/absent token retries next scan). Secrets come from env only
 (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) — **without them, alerting is silently disabled
@@ -208,11 +237,11 @@ the Sprint 6 backtest). Award/option/tax codes (`A`/`M`/`F`/`G`…) are ignored.
 
 ## Orchestration — `run_scan(tickers=None)`
 
-Discover (full universe, no sampling) → `_download_prices` → **Pass A** (hard filters + continuous factors + trigger) → **rank survivors by technical composite (`_select_scores`), keep top `enrich_max`** → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10 over the whole set)** → set `setup_score` alias → sort → write `/app/data/screener_data.json` → **`notify_new_triggers`** (Telegram, best-effort). `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
+Discover (full universe, no sampling) → `_download_prices` → **Pass A** (tradability hard path + signals + trigger) → **`detect_profiles` over the whole tradable pool → keep profile members only, ranked by `profile_strength`** (in `legacy`: rank the whole pool by technical composite instead) → keep top `enrich_max` → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10)** → set `setup_score` alias (kept for continuity, no longer drives selection) → sort by profile strength → write `/app/data/screener_data.json` → **`notify_new_triggers`** (Fusée-event, Telegram, best-effort). `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
 
 ## Output JSON
 
-Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter`, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, the v2 sensor diagnostics **`compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`**, the insider fields **`insider_net_buying` / `insider_net_buying_pos`** (net Form 4 $, scored) and `insider_pct` / `insider_buying` (display only), `positives`, `flags`, and `catalyst_type`/`catalyst_date` (`null`). Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger`.
+Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter` (tradable pool), **`profile_members`**, **`pool_mode`**, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, the **profile fields `profile` / `is_fusee` / `is_phenix` / `fusee_event` / `fusee_strength` / `phenix_strength` / `profile_strength`**, the v2 sensor diagnostics **`compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`** (plus `sma20`), the insider fields **`insider_net_buying` / `insider_net_buying_pos`** (net Form 4 $, scored) and `insider_pct` / `insider_buying` (display only), `positives`, `flags`, and `catalyst_type`/`catalyst_date` (`null`). In `tradability` mode every stock is a **profile member**; non-members are absent. Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger` and the profile fields (for the Sprint 4 two-sleeve tracker).
 
 ## Backtest harness — `backend/backtest.py`
 

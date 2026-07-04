@@ -1,9 +1,10 @@
 """
-Alertes Telegram sur les cassures (Sprint 3).
+Alertes Telegram sur les cassures Fusée (Sprint 3 ; sémantique révisée Epic 2 Sprint 2).
 
-Le score dit « le ressort est armé » (watchlist) ; le trigger dit « la cassure a lieu
-MAINTENANT ». Ce module notifie, à chaque scan, les tickers NOUVELLEMENT déclenchés
-(`triggered`) dont le `setup_score` dépasse `FILTERS["alert_min_score"]`.
+Le score dit « le ressort est armé » (watchlist) ; le variant ÉVÉNEMENT de Fusée dit
+« un extrême de momentum casse MAINTENANT ». Ce module notifie, à chaque scan, les tickers
+NOUVELLEMENT en `fusee_event` (membre Fusée + cassure le jour même) dont le `setup_score`
+dépasse `FILTERS["alert_min_score"]`. Un simple `triggered` non-Fusée n'alerte plus.
 
 Anti-doublon : un même ticker n'est pas re-notifié avant `FILTERS["alert_dedup_days"]`
 jours (état persistant dans `data/alerts_state.json`).
@@ -104,8 +105,8 @@ def notify_new_triggers(candidates: list[dict], *, state_path: Path = ALERT_STAT
     state = _load_state(state_path)
     fresh: list[dict] = []
     for s in candidates:
-        if not s.get("triggered"):
-            continue
+        if not s.get("fusee_event"):   # Epic 2 : alerte sur le variant ÉVÉNEMENT de Fusée
+            continue                    # (membre Fusée + cassure du jour), plus le simple trigger
         if (s.get("setup_score", s.get("score")) or 0) < min_score:
             continue
         tk = s.get("ticker")
@@ -123,7 +124,7 @@ def notify_new_triggers(candidates: list[dict], *, state_path: Path = ALERT_STAT
     if not fresh:
         return []
 
-    text = ("🚀 <b>Cassure déclenchée</b> ({} nouveau(x))\n".format(len(fresh))
+    text = ("🚀 <b>Fusée — cassure déclenchée</b> ({} nouveau(x))\n".format(len(fresh))
             + "\n".join(_format_line(s) for s in fresh))
     if not send_fn(text):
         return []  # désactivé ou échec → on n'enregistre rien (retry au prochain scan)
