@@ -130,6 +130,7 @@ FILTERS = {
     "discovery_marketcaps": ("Small", "Micro"),          # catégories cap pré-filtrées côté API
     "max_tickers": None,           # None → univers COMPLET (aucun échantillonnage) ; int → soupape (tests/debug)
     "download_chunk": 100,         # taille des lots yf.download
+    "download_retries": 3,         # retries + backoff sur lot prix throttlé (429) — anti-perte silencieuse
     "history_period": "1y",        # 1 an : requis pour plus-haut 52 sem. + ATR90 (Palier 2)
     "enrich_workers": 2,           # threads .info en Passe B — BAS : Yahoo bannit l'IP au-delà
     "enrich_jitter_s": 0.5,        # jitter aléatoire par appel .info (anti-throttle Yahoo)
@@ -673,20 +674,33 @@ def _download_prices(tickers: list[str], bench_symbol: str,
 
     for idx in range(0, len(all_syms), chunk):
         part = all_syms[idx:idx + chunk]
-        try:
-            data = yf.download(
-                part, period=period, interval="1d",
-                group_by="ticker", auto_adjust=True,
-                threads=True, progress=False,
-            )
-        except Exception as e:
-            print(f"[download] lot {idx // chunk + 1}/{n_chunks} erreur: {e}")
-            continue
-        for sym in part:
-            df = _extract_symbol(data, sym)
-            if df is not None:
-                prices[sym] = df
-        print(f"[download] lot {idx // chunk + 1}/{n_chunks} → {len(prices)} séries")
+        got = 0
+        # Retry + backoff exponentiel sur lot vide/throttlé (429) : un lot throttlé NE DOIT PAS
+        # être abandonné silencieusement — sinon l'univers du run jugé est tronqué (biais).
+        for attempt in range(FILTERS["download_retries"] + 1):
+            try:
+                data = yf.download(
+                    part, period=period, interval="1d",
+                    group_by="ticker", auto_adjust=True, actions=True,
+                    threads=True, progress=False,
+                )
+            except Exception as e:
+                data = None
+                print(f"[download] lot {idx // chunk + 1}/{n_chunks} tentative {attempt+1} erreur: {e}")
+            if data is not None and len(data):
+                for sym in part:
+                    df = _extract_symbol(data, sym)
+                    if df is not None:
+                        prices[sym] = df
+                        got += 1
+                if got:
+                    break
+            if attempt < FILTERS["download_retries"]:      # throttlé/vide → pause avant retry
+                time.sleep(FILTERS["enrich_backoff_s"] * (2 ** attempt) + random.uniform(0, 1.0))
+        if got == 0:                                        # pas de perte silencieuse (§ no silent caps)
+            print(f"[download] lot {idx // chunk + 1}/{n_chunks} PERDU après retries — {len(part)} tickers absents")
+        else:
+            print(f"[download] lot {idx // chunk + 1}/{n_chunks} → {len(prices)} séries")
         time.sleep(FILTERS["rate_limit_s"])
     return prices
 
@@ -822,6 +836,12 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     # --- Features v3 dérivées du prix (Epic 3 S3) : close vs SMA20, penny stock récent ---
     close_vs_sma20 = (price / sma20 - 1) if sma20 else None   # T6 (stabilisation)
     sub_dollar_flag = bool(float(close.tail(63).min()) < 1.0)  # S5 (a récemment touché < 1 $)
+    # Reverse split récent (ratio ∈ ]0,1[) depuis la colonne d'actions yfinance — signal de
+    # détresse / conformité de cotation (S2). Point-in-time : df est déjà tronqué à la date as-of.
+    reverse_split_flag = None
+    if "Stock Splits" in df.columns:
+        sp = df["Stock Splits"].tail(FILTERS["high_window"])
+        reverse_split_flag = bool(((sp > 0) & (sp < 1)).any())
 
     signals = {
         "price": round(price, 2),
@@ -862,9 +882,7 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         # Features v3 dérivées du prix (Epic 3 S3) :
         "close_vs_sma20": round(close_vs_sma20, 4) if close_vs_sma20 is not None else None,
         "sub_dollar_flag": sub_dollar_flag,
-        # ponytail: reverse_split_flag None (stub neutre) — source propre = yfinance .splits ou
-        # 8-K EDGAR ; à câbler si le veto survie S5 en a besoin. Le modèle le tolère (ridge → ~0).
-        "reverse_split_flag": None,
+        "reverse_split_flag": reverse_split_flag,   # S2 (reverse split récent = détresse)
     }
     return signals, "ok"
 
