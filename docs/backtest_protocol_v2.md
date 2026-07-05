@@ -106,3 +106,48 @@ DATA_DIR=/tmp/bt2 PYTHONPATH=backend python backtest.py --study-v2 --period 5y
 
 # Validation B: accumulate live scans; /api/performance reports per-profile sleeves.
 ```
+
+The study lives in `backend/backtest.py` (`run_study_v2`). It reuses the production
+detectors verbatim (`profiles.detect_profiles`) on the tradable pool
+(`analyze_prices` in `pool_mode="tradability"`) — **no membership logic is duplicated**
+(protocol §3). Per as-of date it labels the full cross-section, then measures, per
+profile × window: the +50 %/+100 % tail lifts with bootstrap 95 % CI, the ≤ −50 % left-tail
+guard, mean net expectancy (−1 % round-trip), the break-even hidden-delisting rate (§5),
+and the explicit PASS/FAIL/CONDITIONAL verdict against §6. The +50 %/+100 % thresholds, the
+two windows, and the §6 criteria are frozen module constants in `backtest.py` (not tunable —
+outside `FILTERS`, like the tracker's tail thresholds).
+
+## 9. Run log — Validation A (judged ONCE)
+
+Validation A is executed a single time on the merged study code; its verdict is recorded
+here verbatim and never re-fitted. Any change to definitions after seeing this is a protocol
+revision + new epic decision (§6), not a rerun.
+
+<!-- VALIDATION_A_RUNLOG -->
+- **Run**: 2026-07-05, full tradable universe **2519 tickers**, `--period 5y`; Validation A
+  window carried **21 131** profile×date base observations. Executed once — never re-fitted.
+- **Command**: `DATA_DIR=/tmp/bt2 PYTHONPATH=backend python backtest.py --study-v2 --n 0 --period 5y`
+- **Commit**: `46fb58a` (study code, branch `feat/study-v2`)
+
+Decisive horizon **fwd63**, Validation A [2021-07 → 2023-06]:
+
+| Profile | n | lift ≥+100 % (CI95) | lift ≥+50 % (CI95) | net expectancy | left-tail guard | break-even delist. | Verdict §6 |
+|---|---|---|---|---|---|---|---|
+| Fusée | 1989 | 1.03× (0.46–1.71) | 1.35× (1.05–1.67) | −9.56 % | 1.32× OK | 2.7 % ⚠️ | **FAIL** |
+| Fusée (event) | 129 | 0.00× (0.00–0.00) | 0.31× (0.00–0.92) | −10.51 % | 1.50× OK | n/a | **FAIL** |
+| Phénix | 693 | 4.59× (2.30–7.21) | 2.51× (1.77–3.25) | −11.02 % | 2.27× **exceeds** | 78.2 % | **FAIL** |
+
+**Verdict — all profiles FAIL Validation A.**
+- **Fusée**: no material +100 % lift at 63d (1.03×, CI spans 1.0×), negative net expectancy,
+  and the lift is **fragile** (break-even 2.7 % < 5 %). Per §6 the momentum-tail sub-thesis is
+  **dropped — no consolation re-fitting** on this data.
+- **Phénix**: a large, statistically real right-tail lift (4.59×, CI excludes 1.0×) — but it is
+  a **barbell eaten by the left tail**: the ≤ −50 % guard blows past its 1.5× cap (2.27×) and net
+  expectancy is −11 %. It fails criteria (2) and (3) exactly as §1 anticipated ("a lift eaten by
+  crashes fails"). Phénix was money-gated regardless (§5); it does not go live.
+
+Exploration window (2023-07 → 2026-06, **in-sample, spent**) reproduced the same shape
+(Phénix fwd63 lift +100 % 2.09× with the guard again exceeding at 1.83× and negative net
+expectancy) — context only, never part of the verdict. Sprint 6 applies these verdicts to
+the product (badges / money-gating / docs).
+<!-- /VALIDATION_A_RUNLOG -->
