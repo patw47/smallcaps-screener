@@ -49,7 +49,7 @@ study MUST share the same code.
 - **Fusée (momentum extreme)** — primary:
   `rs63 ≥ 80th percentile` AND `perf_1m ≥ 80th percentile`.
   Event variant (reported alongside): primary AND breakout trigger that day
-  (close > 50d pivot on volume ≥ 1.5× 50d average — the Sprint 3 trigger).
+  (close > 50d pivot on volume ≥ 1.5× 50d average — the Epic 1 breakout trigger).
 - **Phénix (massacred, coiling, stabilizing)** — primary:
   `pct_52w ≤ 20th percentile` (far below its 52-week high) AND
   `atr_ratio ≤ 40th percentile` (volatility compressed) AND
@@ -151,3 +151,28 @@ Exploration window (2023-07 → 2026-06, **in-sample, spent**) reproduced the sa
 expectancy) — context only, never part of the verdict. Sprint 6 applies these verdicts to
 the product (badges / money-gating / docs).
 <!-- /VALIDATION_A_RUNLOG -->
+
+## 10. Verdict application (Epic 2 Sprint 6)
+
+The §6 decision rule applied to the §9 Validation A results. Every statement cites a §9 number.
+
+- **Fusée → FAIL → sub-thesis dropped.** The momentum-tail lift is not there at the decisive
+  horizon: fwd63 `P(≥+100 %)` lift **1.03×** with CI95 **[0.46, 1.71]** straddling 1.0×, net
+  expectancy **−9.56 %**, and it is fragile (break-even hidden-delisting **2.7 % < 5 %**). Per §6
+  the momentum-tail sub-thesis is **dropped — no consolation re-fitting** on this data. The Fusée
+  badge stays (useful for surfacing candidates) but is labelled **"non validé"** in the dashboard.
+- **Phénix → FAIL → research-only, money-gated.** The right-tail lift is real and large (fwd63
+  `P(≥+100 %)` **4.59×**, CI95 **[2.30, 7.21]** excluding 1.0×) but it is a **barbell eaten by the
+  left tail**: the ≤ −50 % guard is **2.27×** (over the 1.5× cap) and net expectancy is **−11.02 %**,
+  so it fails criteria (2) and (3). Phénix does **not** go live; it keeps its **"non validé"** badge.
+- **Validation B** (the live tracker, `/api/performance` per-profile sleeves) **keeps running** and
+  is the only path that could overturn a FAIL forward. The daily scan is unchanged.
+
+### Delisted-data purchase decision: **DEFERRED**
+
+No delisted-inclusive dataset (Norgate/Sharadar, ~30–80 USD/mo) has been purchased. Consequence
+for Phénix: it stays **research-only / money-gated** exactly as §5 requires. Rationale for
+deferring: the §9 verdict already fails Phénix on *survivor-only* data (net expectancy −11 %,
+left-tail guard 2.27×); adding the delisted −100 % losses can only move those numbers **against**
+Phénix, so the purchase is not decision-relevant right now. Revisit only if a future rule change or
+Validation B result makes Phénix viable on visible data. This decision is the user's to reverse.

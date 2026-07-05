@@ -135,11 +135,14 @@ Security note: this exposes the key to browser code. Use a backend proxy before 
 
 `ProfileBadge` renders one coloured chip per profile: **🚀 Fusée** (green) and **🔥 Phénix**
 (orange), each with the member's strength (0–100). A Fusée chip shows a **⚡** when
-`fuseeEvent` is set (breakout that day). The **Phénix chip always carries a "non validé"
-tag** with a tooltip explaining the survivorship gating (protocol v2 §5) — non-negotiable.
-`ProfileBadges` renders every profile a stock belongs to (both chips for dual-profile
-stocks); it returns nothing for a non-member. The badges sit prominently at the top of each
-`StockCard`. The stats header shows the **per-profile candidate counts**.
+`fuseeEvent` is set (breakout that day). **Both chips carry a "non validé" tag** (driven by a
+per-profile `caveat` tooltip in `PROFILE_STYLE`) since **Validation A failed for each**
+(Epic 2 Sprint 6, protocol v2 §6/§9): the tooltip carries that profile's Sprint 5 numbers —
+Fusée's dropped-momentum verdict, Phénix's barbell + money-gate. The profile-filter footnote
+mirrors it for whichever profile is selected. `ProfileBadges` renders every profile a stock
+belongs to (both chips for dual-profile stocks); it returns nothing for a non-member. The
+badges sit prominently at the top of each `StockCard`. The stats header shows the
+**per-profile candidate counts**.
 
 Rendered UI (Epic 2 Sprint 3, mock data): [`docs/screenshots/epic2-profile-badges-all.png`](screenshots/epic2-profile-badges-all.png)
 (All view — dual-profile VXRT shows both chips, FCEL carries the ⚡ event marker) and
