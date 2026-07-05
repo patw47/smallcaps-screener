@@ -108,6 +108,7 @@ FILTERS = {
     "short_interest_high": 15.0,
     # --- Insiders EDGAR Form 4 (Sprint 5) : achats nets datés, point-in-time ---
     "insider_window_days": 180,     # fenêtre d'agrégation des achats nets (3-6 mois)
+    "survival_window_days": 180,    # fenêtre des signaux de survie EDGAR (dilution, NT) — Epic 3 S2
     "edgar_cache_ttl_hours": 24,    # TTL cache des listes de filings (soumissions par CIK)
     "edgar_rate_limit_s": 0.12,     # ≥0.11 → ≤ ~9 req/s (SEC exige ≤ 10 req/s)
     "edgar_max_filings": 40,        # garde-fou : nb max de Form 4 parsés par ticker

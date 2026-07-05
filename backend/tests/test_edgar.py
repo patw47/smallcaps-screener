@@ -127,6 +127,61 @@ def test_parse_form4_open_market_only():
 
 
 # ---------------------------------------------------------------------------
+# Signaux de survie (Epic 3 S2) — dilution / retard / going-concern, point-in-time
+# ---------------------------------------------------------------------------
+
+def _make_survival_get(gc_text=None):
+    """fake_get servant company_tickers + submissions + le doc 10-Q (texte going-concern)."""
+    def fake_get(url):
+        if "company_tickers.json" in url:
+            return _Resp((FIX / "company_tickers.json").read_text())
+        if "submissions/CIK" in url:
+            return _Resp((FIX / "submissions_CIK0000000111.json").read_text())
+        if "test-10q.htm" in url:
+            return _Resp(gc_text if gc_text is not None else (FIX / "test-10q.htm").read_text())
+        return None
+    return fake_get
+
+
+def test_survival_flags_full_window(edgar_env, monkeypatch):
+    # as_of = 2026-07-01 : S-3 (03-01) + 424B5 (03-05) → dilution ; NT 10-Q (04-20) → retard ;
+    # 10-Q (05-15) contient « substantial doubt » → going concern.
+    monkeypatch.setattr(edgar, "_get", _make_survival_get())
+    r = edgar.survival_signals("TEST", now=NOW, window_days=180)
+    assert r is not None
+    assert r["dilution_flag"] is True
+    assert r["late_filing_flag"] is True
+    assert r["going_concern_flag"] is True
+    assert r["cash_runway"] is None
+
+
+def test_survival_point_in_time_excludes_future_filings(edgar_env, monkeypatch):
+    # as_of = 2026-04-01 : S-3/424B5 déjà déposés (≤ as_of) → dilution ; MAIS NT 10-Q (04-20)
+    # et 10-Q (05-15) sont POSTÉRIEURS → invisibles. Aucun look-ahead.
+    monkeypatch.setattr(edgar, "_get", _make_survival_get())
+    r = edgar.survival_signals("TEST", now=datetime(2026, 4, 1, tzinfo=timezone.utc), window_days=180)
+    assert r["dilution_flag"] is True
+    assert r["late_filing_flag"] is False      # NT 10-Q pas encore déposé à cette date
+    assert r["going_concern_flag"] is False     # aucun 10-Q/10-K ≤ as_of
+
+
+def test_survival_going_concern_absent(edgar_env, monkeypatch):
+    # 10-Q présent mais SANS « substantial doubt » → going_concern False (dilution/late intacts).
+    clean = "<html><body>Operations are profitable. No liquidity issues.</body></html>"
+    monkeypatch.setattr(edgar, "_get", _make_survival_get(gc_text=clean))
+    r = edgar.survival_signals("TEST", now=NOW, window_days=180)
+    assert r["going_concern_flag"] is False
+    assert r["dilution_flag"] is True
+
+
+def test_survival_none_when_disabled_or_unknown(edgar_env, monkeypatch):
+    monkeypatch.setattr(edgar, "_get", _make_survival_get())
+    assert edgar.survival_signals("NOPE", now=NOW) is None      # ticker inconnu → neutre
+    monkeypatch.setattr(edgar, "_USER_AGENT", "")
+    assert edgar.survival_signals("TEST", now=NOW) is None      # EDGAR désactivé → neutre
+
+
+# ---------------------------------------------------------------------------
 # Cache : 2e scan = zéro appel EDGAR répété
 # ---------------------------------------------------------------------------
 

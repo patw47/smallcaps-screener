@@ -201,6 +201,115 @@ def _filing_xml(cik: int, accession: str, doc: str) -> str | None:
 # Achats nets d'insiders
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Signaux de SURVIE (Epic 3 S2) — la queue gauche que le prix ne voit pas
+# ---------------------------------------------------------------------------
+
+# Émissions d'actions à venir (registrations / prospectus) → dilution.
+_DILUTION_PREFIXES = ("S-1", "S-3", "F-1", "F-3", "424B")
+# Rapports périodiques en retard → détresse de reporting.
+_LATE_FORMS = ("NT 10-Q", "NT 10-K")
+# Rapports périodiques de base (texte scanné pour le going-concern).
+_PERIODIC_FORMS = ("10-Q", "10-K")
+
+
+def _doc_text(cik: int, accession: str, doc: str) -> str | None:
+    """Texte du document primaire d'un filing (IMMUABLE → cache permanent). Générique.
+
+    Comme pour le Form 4, `primaryDocument` peut porter un préfixe de rendu XSL : on vise le
+    nom nu (dernier segment). Jamais fatal ; None si indisponible.
+    """
+    raw = doc.split("/")[-1]
+    name = f"doc_{accession.replace('-', '')}_{raw}"
+    cached = _read_cache(name, None)  # filing immuable → jamais périmé
+    if cached is not None:
+        return cached
+    url = _ARCHIVE_DOC.format(cik=cik, acc_nodash=accession.replace("-", ""), doc=raw)
+    resp = _get(url)
+    if resp is None:
+        return None
+    _write_cache(name, resp.text)
+    return resp.text
+
+
+def survival_signals(ticker: str, now: datetime | None = None,
+                     window_days: int | None = None) -> dict | None:
+    """
+    Signaux de SURVIE datés depuis EDGAR (Epic 3 S2) — l'information de queue gauche que le
+    prix ne contient pas. POINT-IN-TIME STRICT : seuls les filings dont `filingDate ≤ as_of`
+    sont vus (aucun look-ahead), donc réutilisable tel quel par l'étude walk-forward.
+
+    - `dilution_flag`      : registration / prospectus (S-1/S-3/F-1/F-3/424B) dans la fenêtre
+                             → émission d'actions à venir.
+    - `late_filing_flag`   : NT 10-Q / NT 10-K dans la fenêtre → rapport en retard (détresse).
+    - `going_concern_flag` : « substantial doubt » (langage ASC 205-40) dans le dernier
+                             10-Q/10-K ≤ as_of → le signal de faillite le plus direct.
+    - `cash_runway`        : None pour l'instant (voir ponytail — piste XBRL companyfacts).
+
+    Booléens : filing absent → False (pas de mauvaise nouvelle), jamais None pour « donnée
+    manquante ». None UNIQUEMENT si EDGAR est indisponible / désactivé / ticker inconnu
+    (neutre, ne pénalise pas — même contrat que `net_insider_buying`).
+    """
+    if not _USER_AGENT:
+        return None
+    window_days = window_days or FILTERS["survival_window_days"]
+    now = now or datetime.now(tz=timezone.utc)
+    as_of = now.date().isoformat()
+    cutoff = (now - timedelta(days=window_days)).date().isoformat()
+
+    cik_map = _load_cik_map()
+    if not cik_map:
+        return None
+    cik = cik_map.get(ticker.upper())
+    if cik is None:
+        return None  # ticker absent d'EDGAR → neutre
+
+    cik10 = f"{cik:010d}"
+    subs_text = _cached_text(
+        _SUBMISSIONS_URL.format(cik10=cik10), f"submissions_{cik10}.json",
+        FILTERS["edgar_cache_ttl_hours"] * 3600)
+    if subs_text is None:
+        return None
+    try:
+        recent = json.loads(subs_text)["filings"]["recent"]
+        forms, accs = recent["form"], recent["accessionNumber"]
+        fdates, docs = recent["filingDate"], recent["primaryDocument"]
+    except Exception:
+        return None
+
+    dilution = late = False
+    gc = None  # (filingDate, cik, accession, doc) du dernier 10-Q/10-K ≤ as_of
+    for form, acc, fdate, doc in zip(forms, accs, fdates, docs):
+        if fdate > as_of:
+            continue  # POINT-IN-TIME : filing postérieur à la date de scan → invisible
+        f = form.strip()
+        if cutoff <= fdate <= as_of:
+            if f.startswith(_DILUTION_PREFIXES):
+                dilution = True
+            if f in _LATE_FORMS:
+                late = True
+        if f in _PERIODIC_FORMS and (gc is None or fdate > gc[0]):
+            gc = (fdate, cik, acc, doc)
+
+    going_concern = False
+    if gc is not None:
+        text = _doc_text(gc[1], gc[2], gc[3])
+        if text is not None:
+            going_concern = "substantial doubt" in text.lower()
+
+    return {
+        "ticker": ticker.upper(), "cik": cik,
+        "dilution_flag": dilution,
+        "late_filing_flag": late,
+        "going_concern_flag": going_concern,
+        # ponytail: cash_runway via XBRL companyfacts (data.sec.gov/api/xbrl/companyfacts) —
+        # datable mais parsing fragile (annuel vs trimestriel, restatements). None = neutre
+        # au protocole v3 §3. À câbler si le modèle S3 montre que le veto survie en a besoin.
+        "cash_runway": None,
+        "window_days": window_days, "cutoff": cutoff, "as_of": as_of,
+    }
+
+
 def net_insider_buying(ticker: str, window_days: int | None = None,
                        now: datetime | None = None) -> dict | None:
     """
