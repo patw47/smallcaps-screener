@@ -314,7 +314,7 @@ def survival_signals(ticker: str, now: datetime | None = None,
     - `late_filing_flag`   : NT 10-Q / NT 10-K dans la fenêtre → rapport en retard (détresse).
     - `going_concern_flag` : « substantial doubt » (langage ASC 205-40) dans le dernier
                              10-Q/10-K ≤ as_of → le signal de faillite le plus direct.
-    - `cash_runway`        : None pour l'instant (voir ponytail — piste XBRL companyfacts).
+    - `cash_runway`        : mois de trésorerie restants (XBRL companyfacts, point-in-time).
 
     Booléens : filing absent → False (pas de mauvaise nouvelle), jamais None pour « donnée
     manquante ». None UNIQUEMENT si EDGAR est indisponible / désactivé / ticker inconnu
@@ -391,6 +391,7 @@ def net_insider_buying(ticker: str, window_days: int | None = None,
         return None
     window_days = window_days or FILTERS["insider_window_days"]
     now = now or datetime.now(tz=timezone.utc)
+    as_of = now.date().isoformat()
     cutoff = (now - timedelta(days=window_days)).date().isoformat()
 
     cik_map = _load_cik_map()
@@ -418,6 +419,8 @@ def net_insider_buying(ticker: str, window_days: int | None = None,
     # recent[] est trié du plus récent au plus ancien : on s'arrête dès qu'un filing est
     # déposé avant le cutoff (transactionDate ≤ filingDate → forcément hors fenêtre).
     for form, acc, fdate, doc in zip(forms, accs, fdates, docs):
+        if fdate > as_of:
+            continue          # POINT-IN-TIME : dépôt postérieur à la date de scan → invisible
         if form != "4":
             continue
         if fdate < cutoff:

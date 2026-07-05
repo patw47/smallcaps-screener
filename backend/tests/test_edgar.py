@@ -78,6 +78,16 @@ def test_net_buying_aggregation(edgar_env, monkeypatch):
     assert all(t["date"] >= r["cutoff"] for t in r["transactions"])
 
 
+def test_net_buying_point_in_time_excludes_future_filings(edgar_env, monkeypatch):
+    # as_of=2026-05-15 : le Form 4 déposé le 2026-06-10 (form4_0002) est POSTÉRIEUR → invisible.
+    # Reste form4_0001 (2026-05-02) : 2 achats P (10000 + 6000), aucune vente → net 16000.
+    monkeypatch.setattr(edgar, "_get", _make_fake_get({"n": 0}))
+    r = edgar.net_insider_buying("TEST", window_days=180,
+                                 now=datetime(2026, 5, 15, tzinfo=timezone.utc))
+    assert r["net_buying"] == 16000.0     # sans la vente 3300 ni l'achat 2000 du filing du 06-10
+    assert r["n_sells"] == 0
+
+
 def test_filing_url_strips_xsl_render_prefix(edgar_env, monkeypatch):
     # primaryDocument = "xslF345X06/wk-form4_x.xml" (rendu HTML) → l'URL doit viser le XML BRUT.
     seen = []
