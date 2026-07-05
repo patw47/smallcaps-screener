@@ -105,6 +105,16 @@ See [docs/backend.md](docs/backend.md) for the exact factors and functions.
   authorizes the Sprint 8 weight calibration. Every report prints the **survivorship-bias**
   warning (results are an upper bound). The older single-window `--sweep` / default modes
   remain for quick checks.
+- **The v2 tail-hunting study** (`backend/backtest.py --study-v2`): the study for the current
+  thesis. On the **tradable** universe (no thesis filters), at each monthly as-of date it labels
+  the full cross-section with the **production detectors** (`profiles.detect_profiles` — the same
+  code as the badges, zero duplication) and measures, **per profile × window**, the **+50 %/+100 %
+  forward tail lifts** with a bootstrap 95 % CI, the **≤ −50 % left-tail guard**, mean **net
+  expectancy**, the **break-even hidden-delisting rate** (survivorship fragility, protocol §5), and
+  an explicit **PASS/FAIL/CONDITIONAL verdict** against the pre-registered criteria. It splits
+  **Validation A** (2021-07→2023-06, judged once) from the spent **exploration** window. The frozen
+  spec is [docs/backtest_protocol_v2.md](docs/backtest_protocol_v2.md); the Validation A run log is
+  its §9. Phénix can only ever be **CONDITIONAL** (money-gated pending delisted-inclusive data).
 - **Live performance tracking**: every scan writes a dated snapshot of its picks to
   `data/history/` (ticker, entry price, score, key signals). `GET /api/performance` then
   measures each pick's return **since it was first flagged** and compares it to IWM — an
@@ -120,6 +130,9 @@ See [docs/backend.md](docs/backend.md) for the exact factors and functions.
 ```bash
 # The study — rolling multi-date cross-section (Sprint 6). --n 0 = full universe.
 docker compose exec backend python backtest.py --study --n 0 --period 3y
+
+# The v2 tail-hunting study (Fusée/Phénix lifts + Validation A verdict). --n 0 = full universe.
+docker compose exec backend python backtest.py --study-v2 --n 0 --period 5y
 
 # Quick single-window backtest
 docker compose exec backend python backtest.py --n 200 --forward 63 --seed 42
