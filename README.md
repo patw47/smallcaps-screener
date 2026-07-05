@@ -146,6 +146,10 @@ docker compose exec backend python backtest.py --study --n 0 --period 3y
 # The v2 tail-hunting study (Fusée/Phénix lifts + Validation A verdict). --n 0 = full universe.
 docker compose exec backend python backtest.py --study-v2 --n 0 --period 5y
 
+# The v3 survival-conditioned study (purged walk-forward). Dry-run/NON-BINDING by default;
+# add --signed-off ONLY once docs/backtest_protocol_v3.md is signed off (judged once).
+docker compose exec backend python backtest.py --study-v3 --n 0 --period 5y
+
 # Quick single-window backtest
 docker compose exec backend python backtest.py --n 200 --forward 63 --seed 42
 
