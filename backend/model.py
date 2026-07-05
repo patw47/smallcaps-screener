@@ -89,7 +89,9 @@ class Isotonic:
                 val[-2] = (val[-1] * wt[-1] + val[-2] * wt[-2]) / w2
                 wt[-2] = w2
                 xr[-2] = xr[-1]
-                val.pop(); wt.pop(); xr.pop()
+                val.pop()
+                wt.pop()
+                xr.pop()
         self.x_ = np.array(xr) if xr else np.array([0.0, 1.0])
         self.y_ = np.array(val) if val else np.array([0.0, 1.0])
         return self
