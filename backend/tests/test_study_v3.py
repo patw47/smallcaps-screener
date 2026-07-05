@@ -75,6 +75,26 @@ def test_value_of_survival_detects_added_value():
     assert vos["delta"] > 0
 
 
+def test_study_v3_verdict_branches():
+    strong = {"lift100": 2.0, "lift100_ci": (1.2, 3.0), "guard_ok": True, "net_expectancy": 0.05}
+    low_base = (-0.02, 0.0, 0.01)   # random / best-feature / phenix, tous < 0.05
+    # tous critères OK → pass provisoire
+    v = bt.study_v3_verdict(strong, {"adds_value": True}, *low_base)
+    assert v["verdict"] == "PROVISIONAL_PASS"
+    # mode A : le veto n'ajoute rien mais espérance positive → FAIL_SURVIVAL_NO_VALUE
+    v = bt.study_v3_verdict(strong, {"adds_value": False}, *low_base)
+    assert v["verdict"] == "FAIL_SURVIVAL_NO_VALUE"
+    # mode A terminal : espérance ≤ 0 ET veto n'aide pas → TERMINAL_FAIL
+    dead = {**strong, "net_expectancy": -0.03}
+    v = bt.study_v3_verdict(dead, {"adds_value": False}, *low_base)
+    assert v["verdict"] == "TERMINAL_FAIL"
+    # mode B : le veto aide mais espérance ≤ 0 (signal étouffé) → FAIL
+    v = bt.study_v3_verdict(dead, {"adds_value": True}, *low_base)
+    assert v["verdict"] == "FAIL"
+    # données insuffisantes
+    assert bt.study_v3_verdict(None, {}, None, None, None)["verdict"] == "INCONCLUSIVE"
+
+
 def test_module_imports_and_constants_frozen():
     # constantes §4/§7 gelées (hors FILTERS)
     assert bt.STUDY_V3_K == 5 and bt.STUDY_V3_EMBARGO == 73

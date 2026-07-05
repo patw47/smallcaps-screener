@@ -1,15 +1,16 @@
 # Backtest Protocol v3 — Survival-Conditioned Right-Tail Scoring
 
-**Status: pre-registered DRAFT — becomes binding once committed to `main` AND signed off by the
-project owner, BEFORE any judged run of the v3 study.** Changing the feature set, model class,
-hyperparameter grid, validation scheme, metrics or success/kill criteria after seeing any
-out-of-fold result is forbidden. Supersedes `backtest_protocol_v2.md` (tail-hunting profiles) for
-the new thesis; v1 and v2 remain the record of the previous theses and their verdicts.
+**Status: BINDING — signed off 2026-07-05 by the project owner.** The feature set, model class,
+hyperparameter grid, validation scheme, metrics and success/kill criteria are now FROZEN; changing
+any of them after seeing an out-of-fold result is forbidden (a change = a new pre-registered epic,
+never a re-fit). Supersedes `backtest_protocol_v2.md` (tail-hunting profiles) for the new thesis;
+v1 and v2 remain the record of the previous theses and their verdicts.
 
-> ⚠️ **This protocol cannot self-approve.** The whole value of pre-registration is that a human
-> fixes the criteria before results exist. The v3 study (`--study-v3`) is implemented freely, but
-> **it is not executed for judgement until this document is signed off.** Until then, any run is a
-> dry-run for plumbing only, and its numbers are non-binding.
+> ✅ **Signed off 2026-07-05.** The criteria below were fixed by a human before results exist — the
+> anti-overfitting barrier is in place. The judged run is now authorized (`--study-v3 --signed-off`,
+> §9) and is executed **once** by the owner; its output is transcribed verbatim into the §10
+> run-log and never re-fitted. Reminder (§2): on free survivor-only data the study can only
+> **refute** — a `PROVISIONAL_PASS` stays "non validé" until the live tracker (Validation B) agrees.
 
 ## 0. Why a v3 — the verdicts that killed v1 and v2
 
@@ -214,8 +215,22 @@ in `FILTERS`, like the other studies' judged thresholds).
 ## 10. Run log — judged run (executed ONCE, after sign-off)
 
 <!-- VALIDATION_V3_RUNLOG -->
-*(empty — to be filled verbatim by the single judged run once §0 sign-off is granted; never
-re-fitted)*
+**Judged run — protocol signed off 2026-07-05; executed ONCE by the owner (never re-fitted).**
+
+Command (owner's Docker host, with a compliant `EDGAR_USER_AGENT` so the survival features are
+live — without it they fall back to neutral and the survival veto cannot be judged):
+
+```bash
+EDGAR_USER_AGENT="Your Name your@email.com" \
+  docker compose exec backend python backtest.py --study-v3 --signed-off --n 0 --period 5y
+```
+
+The run prints a `VERDICT §7` line (`PROVISIONAL_PASS` / `FAIL` / `FAIL_SURVIVAL_NO_VALUE` /
+`TERMINAL_FAIL`) with the four criterion check-marks, the decile lift/net-expectancy/guard, the
+value-of-survival delta, the per-regime split and the baselines. **Paste that output block here
+verbatim once run** — then §11 applies the decision rule (and §12 the contingency branch).
+
+*(pending execution — awaiting the owner's judged run)*
 <!-- /VALIDATION_V3_RUNLOG -->
 
 ## 11. Verdict application
