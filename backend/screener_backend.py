@@ -819,6 +819,10 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     # (f_accum et f_compression sont calculés plus haut selon sensors_version)
     f_ext = (price / ma50 - 1) if ma50 else None
 
+    # --- Features v3 dérivées du prix (Epic 3 S3) : close vs SMA20, penny stock récent ---
+    close_vs_sma20 = (price / sma20 - 1) if sma20 else None   # T6 (stabilisation)
+    sub_dollar_flag = bool(float(close.tail(63).min()) < 1.0)  # S5 (a récemment touché < 1 $)
+
     signals = {
         "price": round(price, 2),
         "change_1d": round(change_1d, 4) if change_1d is not None else None,
@@ -855,6 +859,12 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         "f_pct_recent": pct_recent,
         "f_ext": f_ext,
         "f_rs": rs_strength,
+        # Features v3 dérivées du prix (Epic 3 S3) :
+        "close_vs_sma20": round(close_vs_sma20, 4) if close_vs_sma20 is not None else None,
+        "sub_dollar_flag": sub_dollar_flag,
+        # ponytail: reverse_split_flag None (stub neutre) — source propre = yfinance .splits ou
+        # 8-K EDGAR ; à câbler si le veto survie S5 en a besoin. Le modèle le tolère (ridge → ~0).
+        "reverse_split_flag": None,
     }
     return signals, "ok"
 
