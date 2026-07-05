@@ -232,6 +232,26 @@ def test_pass_a_accepts_healthy_uptrend():
     assert FILTERS["price_min"] <= signals["price"] <= FILTERS["price_max"]
 
 
+def test_reverse_split_flag_from_actions_column():
+    # Epic 3 S2 : reverse_split_flag lu depuis la colonne 'Stock Splits' du download (actions=True).
+    closes = [10.0 + i * 0.05 for i in range(200)]
+    df = _make_df(closes, [200_000] * 200)
+    s, _ = analyze_prices("NOSPLIT", df, None)
+    assert s["reverse_split_flag"] is None                      # pas de colonne → neutre
+
+    df2 = df.copy()
+    df2["Stock Splits"] = 0.0
+    df2.iloc[-30, df2.columns.get_loc("Stock Splits")] = 0.1    # 1-for-10 reverse → ratio ∈ ]0,1[
+    s2, _ = analyze_prices("REV", df2, None)
+    assert s2["reverse_split_flag"] is True
+
+    df3 = df.copy()
+    df3["Stock Splits"] = 0.0
+    df3.iloc[-30, df3.columns.get_loc("Stock Splits")] = 10.0   # forward split → PAS un reverse
+    s3, _ = analyze_prices("FWD", df3, None)
+    assert s3["reverse_split_flag"] is False
+
+
 def test_pass_a_accepts_price_below_rising_ma():
     # MA50 en hausse, prix repassé sous la MA50 (pullback tôt) : DÉSORMAIS accepté
     # (prix>MA50 n'est plus un filtre dur → on capte le début, pas seulement le déjà-reparti)
