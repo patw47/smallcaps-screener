@@ -96,7 +96,8 @@ own at roughly one snapshot per trading day.
 
 Tracks how past selections have performed over time. For each ticker it takes the first
 scan that flagged it (entry date/price from `data/history/` snapshots), fetches the current
-price, computes the return since flagged, and aggregates by score bucket and vs IWM.
+price, computes the return since flagged, and aggregates by score bucket, by **profile
+sleeve**, and vs IWM. This is the protocol's **Validation B** — the unbiased forward read.
 
 Query params: `high` (int, default 7) — the "high score" threshold for the bucket split.
 
@@ -107,6 +108,13 @@ Returns `{"n_picks": 0, ...}` until the scan history has entries.
 missing ticker is skipped, and a market-data outage or unreadable snapshot returns a
 well-formed empty payload carrying a `message` field instead of raising.
 
+**Profile sleeves (Epic 2)**: `sleeves` splits the tracked picks by their profile at first
+flag — `fusee`, `phenix`, `overall`, and `unknown` (pre-profile snapshots, backfill-safe;
+a stock can be in both `fusee` and `phenix`). Each sleeve carries `n` / `mean` / `median` /
+`hit` / `excess_mean` plus the **tail counts** `n_up50` / `n_up100` — the number of +50 % /
++100 % moves since selection (the protocol §1 forward numerators). A mixed history (old
+snapshots without profile fields + new ones) never errors; the old picks land in `unknown`.
+
 ```json
 {
   "n_picks": 137,
@@ -115,6 +123,12 @@ well-formed empty payload carrying a `message` field instead of raising.
   "excess_mean": 0.01,
   "high_score": { "n": 40, "mean": 0.05 },
   "low_score": { "n": 97, "mean": 0.01 },
+  "sleeves": {
+    "overall": { "n": 137, "mean": 0.02, "median": 0.01, "hit": 0.55, "excess_mean": 0.01, "n_up50": 3, "n_up100": 1 },
+    "fusee":   { "n": 88,  "mean": 0.04, "median": 0.02, "hit": 0.58, "excess_mean": 0.03, "n_up50": 2, "n_up100": 1 },
+    "phenix":  { "n": 49,  "mean": -0.01, "median": -0.02, "hit": 0.49, "excess_mean": -0.02, "n_up50": 1, "n_up100": 0 },
+    "unknown": { "n": 0,   "mean": null, "median": null, "hit": null, "excess_mean": null, "n_up50": 0, "n_up100": 0 }
+  },
   "rows": []
 }
 ```

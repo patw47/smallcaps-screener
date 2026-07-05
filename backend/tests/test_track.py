@@ -149,3 +149,65 @@ def test_run_tracker_computes_returns(tmp_path, monkeypatch):
     assert r["n_tracked"] == 1
     assert abs(r["overall"]["mean"] - 0.20) < 1e-9
     assert abs(r["excess_mean"] - 0.20) < 1e-9   # bench plat → excès = rendement
+
+
+# ---------------------------------------------------------------------------
+# Sleeves par profil (Validation B) + métriques de queue +50%/+100% (Sprint 4)
+# ---------------------------------------------------------------------------
+
+def test_run_tracker_sleeves_and_tail_counts(tmp_path, monkeypatch):
+    hd = tmp_path / "h"
+    _write_snap(hd, "20260101_000000.json",
+                {"scanned_at": "2026-01-01T00:00:00+00:00",
+                 "picks": [
+                     {"ticker": "FUS", "price": 10.0, "score": 8, "is_fusee": True, "is_phenix": False},
+                     {"ticker": "PHX", "price": 5.0, "score": 6, "is_fusee": False, "is_phenix": True},
+                 ]})
+    idx = pd.date_range("2026-01-01", periods=10, freq="D")
+    fus = pd.DataFrame({"Close": [10.0] * 9 + [16.0]}, index=idx)   # +60% → +50% oui, +100% non
+    phx = pd.DataFrame({"Close": [5.0] * 9 + [11.0]}, index=idx)    # +120% → +50% et +100%
+    iwm = pd.DataFrame({"Close": [100.0] * 10}, index=idx)
+    monkeypatch.setattr(track, "_download_prices",
+                        lambda tks, bench, period=None: {"FUS": fus, "PHX": phx, sb.FILTERS["rs_benchmark"]: iwm})
+
+    r = run_tracker(hd, quiet=True)
+    sl = r["sleeves"]
+    assert sl["fusee"]["n"] == 1 and sl["phenix"]["n"] == 1 and sl["overall"]["n"] == 2
+    assert sl["fusee"]["n_up50"] == 1 and sl["fusee"]["n_up100"] == 0
+    assert sl["phenix"]["n_up50"] == 1 and sl["phenix"]["n_up100"] == 1
+    assert sl["overall"]["n_up50"] == 2 and sl["overall"]["n_up100"] == 1
+    assert sl["unknown"]["n"] == 0
+
+
+def test_run_tracker_mixed_history_backfill(tmp_path, monkeypatch):
+    # Historique MIXTE : un vieux snapshot SANS champs profil + un nouveau AVEC.
+    # Ne doit jamais lever ; l'ancien tombe dans la sleeve "unknown".
+    hd = tmp_path / "h"
+    _write_snap(hd, "20260101_000000.json",
+                {"scanned_at": "2026-01-01T00:00:00+00:00",
+                 "picks": [{"ticker": "OLD", "price": 10.0, "score": 7}]})            # pré-profil
+    _write_snap(hd, "20260102_000000.json",
+                {"scanned_at": "2026-01-02T00:00:00+00:00",
+                 "picks": [{"ticker": "NEW", "price": 8.0, "score": 6, "is_fusee": True, "is_phenix": False}]})
+    idx = pd.date_range("2026-01-01", periods=10, freq="D")
+    old = pd.DataFrame({"Close": [10.0] * 10}, index=idx)                 # plat
+    new = pd.DataFrame({"Close": [8.0] * 9 + [12.0]}, index=idx)          # +50%
+    iwm = pd.DataFrame({"Close": [100.0] * 10}, index=idx)
+    monkeypatch.setattr(track, "_download_prices",
+                        lambda tks, bench, period=None: {"OLD": old, "NEW": new, sb.FILTERS["rs_benchmark"]: iwm})
+
+    r = run_tracker(hd, quiet=True)      # ne doit pas lever malgré l'historique mixte
+    assert r["n_tracked"] == 2
+    assert r["sleeves"]["unknown"]["n"] == 1     # OLD (sans profil) → unknown
+    assert r["sleeves"]["fusee"]["n"] == 1       # NEW → fusée
+    assert r["sleeves"]["fusee"]["n_up50"] == 1  # NEW +50% compté
+    assert r["sleeves"]["overall"]["n"] == 2
+
+
+def test_empty_result_carries_sleeves(tmp_path):
+    # Forme homogène : même sans historique, le bloc sleeves existe et est bien formé.
+    r = run_tracker(tmp_path / "vide", quiet=True)
+    for name in ("overall", "fusee", "phenix", "unknown"):
+        assert name in r["sleeves"]
+        assert r["sleeves"][name]["n"] == 0
+        assert r["sleeves"][name]["n_up50"] == 0 and r["sleeves"][name]["n_up100"] == 0
