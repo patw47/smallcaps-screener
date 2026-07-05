@@ -223,3 +223,51 @@ re-fitted)*
 <!-- VALIDATION_V3_VERDICT -->
 *(empty — the §7 decision rule applied to the §10 results; every statement must cite a §10 number)*
 <!-- /VALIDATION_V3_VERDICT -->
+
+## 12. Contingency — what remains if the verdict is bad
+
+Documented in advance so a bad verdict does not trigger improvised thesis-fishing. This section
+is a **decision map, not part of the frozen §7 criteria** — it changes nothing about how the
+judged run is scored. The verdict falls into two failure modes, which point to different next steps:
+
+- **Failure mode A — the survival veto adds nothing** (`value_of_survival.adds_value == False`:
+  the full model ≈ the technicals-only model). The left tail is not in the filings either. The
+  strongest lead is exhausted.
+- **Failure mode B — the veto helps but expectancy stays ≤ 0** (`adds_value == True` yet the
+  top-decile net expectancy is negative). A real signal exists, throttled by the survivor bias.
+
+**The single most important consequence of any bad verdict:** it re-opens the "no paid data"
+decision. v3 is the thesis survivorship handicaps *most* — the survival veto is asked to recognise
+delistings it has never seen (dead companies are absent from free data). A bad verdict is
+therefore partly "we could not test it fairly", which argues **for** revisiting the data question,
+not against.
+
+Ranked alternatives (do not implement until the verdict selects one — YAGNI):
+
+1. **Free delisted-company reconstruction** (honours the no-paid-data decision). Rebuild a partial
+   dead-companies set from free SEC filings (Form 25 delisting notices, deregistration, EDGAR
+   gaps) and feed it into the study to de-bias the survival training. Engineering, zero dollars.
+   **First move if the verdict is mode B.** Using it in the judged study requires a **protocol
+   v3.1 revision** (§2 currently fixes survivor-only data) — a fresh pre-registration, not a re-fit.
+2. **Buy delisted-inclusive data** (~40 USD/mo, Sharadar/Norgate). The clean version of (1).
+   Justified only if mode B shows a throttled real signal; pointless in mode A. This is the user's
+   money decision, currently DEFERRED.
+3. **Live tracker as sole judge** (already running). The free-data backtest can never *confirm*
+   anyway (§2). Deploy the score "non validé", let Validation B accumulate unbiased forward
+   evidence over months. A bad backtest verdict does not kill the score — it means "backtest can't
+   confirm, wait for live." Cost is time, not code.
+4. **Basket / position-sizing thesis.** Phénix has a real +100 % lift with matching −50 % crashes;
+   instead of screening the barbell away, size a diversified basket so the doublers pay for the
+   crashes — per-name positive expectancy stops being required. Out of the screener's scope
+   (portfolio construction) and needs the true crash rate → depends on (1)/(2).
+5. **Downgrade the product to a watchlist / research tool** (the terminal-kill of §7). Keep the
+   display; surface the extreme names for human research; drop any positive-expectancy claim.
+6. **Accept the null result and document it.** Three pre-registered failures on free data is itself
+   a real, publishable finding: retail-accessible free data does not support a micro-cap explosion
+   edge. This is already the Medium case study's thesis.
+
+**Recommended branch:** mode B → (1) free reconstruction as a protocol v3.1, with (3) the live
+tracker running in parallel. Mode A → (5) or (6): the signal is nowhere in free data; stop fishing,
+ship the honest watchlist and document the null. **Excluded in every case:** re-tuning thresholds
+or features after seeing the verdict to force a pass. A fourth thesis must be a new pre-registered
+epic, never a re-fit.
