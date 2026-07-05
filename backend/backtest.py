@@ -591,7 +591,7 @@ def _print_study(r: dict) -> None:
               f"(composite {'>' if (ic['mean'] or 0) > (bf['mean_ic'] or 0) else '≤'} meilleur facteur)")
         print(f"    Random (survivant moyen) net-excès {_pct(s['random_net_excess_mean'])}  "
               f"vs top-décile {_pct(s['topdecile_net_excess_mean'])}")
-        print(f"\n    Déciles (rendement moyen, net de coûts, EXCÈS d'IWM) :")
+        print("\n    Déciles (rendement moyen, net de coûts, EXCÈS d'IWM) :")
         for i, (e, ne, nm) in enumerate(zip(s["decile_excess"], s["decile_net_excess"], s["decile_net_median"]), 1):
             print(f"      D{i:<2} excès {_pct(e)}   net-excès moy {_pct(ne)}  méd {_pct(nm)}")
         print(f"    Spread D10−D1 (net-excès) : {_pct(s['decile_spread_net'])}")
@@ -599,13 +599,13 @@ def _print_study(r: dict) -> None:
         print(f"    D10>D1 — calib {cc[0]}/{cc[1]} ({_frac(cc)})   valid {cv[0]}/{cv[1]} ({_frac(cv)})")
         print(f"    Validation (2e moitié) : IC {_pct(icv['mean'])} t={_fmt(icv['t'])}  "
               f"top-décile net-excès {_pct(s['topdecile_net_excess_valid'])}")
-        print(f"    Par année (net-excès moyen) :")
+        print("    Par année (net-excès moyen) :")
         for y, st in s["by_year"].items():
             print(f"      {y} : moy {_pct(st['mean'])}  méd {_pct(st['median'])}  n={st['n']}")
-    print(f"\n  ⚠️  BIAIS DE SURVIE : univers = titres cotés AUJOURD'HUI (délistés absents) →")
-    print(f"      les edges affichés sont une BORNE SUPÉRIEURE. Signaux PRIX/VOLUME uniquement ;")
-    print(f"      l'insider EDGAR daté n'est PAS inclus dans cette study (extension future).")
-    print(f"      Voir docs/backtest_protocol.md.")
+    print("\n  ⚠️  BIAIS DE SURVIE : univers = titres cotés AUJOURD'HUI (délistés absents) →")
+    print("      les edges affichés sont une BORNE SUPÉRIEURE. Signaux PRIX/VOLUME uniquement ;")
+    print("      l'insider EDGAR daté n'est PAS inclus dans cette study (extension future).")
+    print("      Voir docs/backtest_protocol.md.")
     print(f"{'='*64}\n")
 
 
@@ -903,10 +903,10 @@ def _print_study_v2(r: dict) -> None:
                     fragile = (m["break_even_delisting"] is not None and m["break_even_delisting"] < 0.05)
                     frag = "  ⚠️ FRAGILE (break-even <5%)" if fragile else ""
                     print(f"         VERDICT §6 : {m['verdict']}{frag}")
-    print(f"\n  Règle §6 : Fusée PASS(A) = provisoire tant que Validation B (tracker) n'a pas confirmé ;")
-    print(f"  Phénix ne peut être que CONDITIONAL (money-gated, données délisting à acheter — §5).")
-    print(f"  ⚠️  BIAIS DE SURVIE : univers = titres cotés AUJOURD'HUI ; le break-even délisting")
-    print(f"      chiffre la fragilité de chaque lift. Validation A jugée UNE fois — aucun re-fit.")
+    print("\n  Règle §6 : Fusée PASS(A) = provisoire tant que Validation B (tracker) n'a pas confirmé ;")
+    print("  Phénix ne peut être que CONDITIONAL (money-gated, données délisting à acheter — §5).")
+    print("  ⚠️  BIAIS DE SURVIE : univers = titres cotés AUJOURD'HUI ; le break-even délisting")
+    print("      chiffre la fragilité de chaque lift. Validation A jugée UNE fois — aucun re-fit.")
     print(f"{'='*64}\n")
 
 
@@ -969,7 +969,9 @@ def _select_lam(X, y, pos, grid) -> float:
 def oof_predictions(X, y, pos, folds, grid=STUDY_V3_LAM_GRID) -> np.ndarray:
     """Prédictions OUT-OF-FOLD : chaque bloc test prédit par un modèle entraîné hors de lui
     (lambda choisi en CV interne). NaN si un fold n'a pas de quoi entraîner (une seule classe)."""
-    X = np.asarray(X, float); y = np.asarray(y, float); pos = np.asarray(pos)
+    X = np.asarray(X, float)
+    y = np.asarray(y, float)
+    pos = np.asarray(pos)
     names = [f"f{i}" for i in range(X.shape[1])]
     oof = np.full(len(y), np.nan)
     for tr, te in folds:
@@ -983,7 +985,8 @@ def oof_predictions(X, y, pos, folds, grid=STUDY_V3_LAM_GRID) -> np.ndarray:
 
 def _ne_top(p, fwd, cost: float, q: float = STUDY_V3_DECILE) -> float | None:
     """Espérance nette du top décile de `p` (obs valides seulement)."""
-    p = np.asarray(p, float); fwd = np.asarray(fwd, float)
+    p = np.asarray(p, float)
+    fwd = np.asarray(fwd, float)
     ok = ~np.isnan(p) & ~np.isnan(fwd)
     if ok.sum() < 20:
         return None
@@ -995,7 +998,8 @@ def _ne_top(p, fwd, cost: float, q: float = STUDY_V3_DECILE) -> float | None:
 
 def decile_metrics(oof, fwd, cost: float, seed: int = 0) -> dict | None:
     """Métriques §7 du décile haut de `oof` : lift +100 %, IC, garde queue gauche, espérance, break-even."""
-    oof = np.asarray(oof, float); fwd = np.asarray(fwd, float)
+    oof = np.asarray(oof, float)
+    fwd = np.asarray(fwd, float)
     ok = ~np.isnan(oof) & ~np.isnan(fwd)
     if ok.sum() < 20:
         return None
@@ -1211,8 +1215,8 @@ def _print_study_v3(r: dict) -> None:
           f"(ne {_fmt(bf['net_expectancy'] if bf else None, pct=True)}) · "
           f"Phénix v2 ne {_fmt(r.get('baseline_phenix_ne'), pct=True)}")
     if not r["signed_off"]:
-        print(f"\n  ⚠️  NON-BINDING — protocole v3 non signé (§0). Verdict NON écrit au run-log.")
-        print(f"      Rappel §2 : données gratuites = plafond optimiste ; le backtest ne peut que RÉFUTER.")
+        print("\n  ⚠️  NON-BINDING — protocole v3 non signé (§0). Verdict NON écrit au run-log.")
+        print("      Rappel §2 : données gratuites = plafond optimiste ; le backtest ne peut que RÉFUTER.")
     print(f"{'='*66}\n")
 
 
