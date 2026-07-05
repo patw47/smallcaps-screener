@@ -106,3 +106,34 @@ DATA_DIR=/tmp/bt2 PYTHONPATH=backend python backtest.py --study-v2 --period 5y
 
 # Validation B: accumulate live scans; /api/performance reports per-profile sleeves.
 ```
+
+The study lives in `backend/backtest.py` (`run_study_v2`). It reuses the production
+detectors verbatim (`profiles.detect_profiles`) on the tradable pool
+(`analyze_prices` in `pool_mode="tradability"`) — **no membership logic is duplicated**
+(protocol §3). Per as-of date it labels the full cross-section, then measures, per
+profile × window: the +50 %/+100 % tail lifts with bootstrap 95 % CI, the ≤ −50 % left-tail
+guard, mean net expectancy (−1 % round-trip), the break-even hidden-delisting rate (§5),
+and the explicit PASS/FAIL/CONDITIONAL verdict against §6. The +50 %/+100 % thresholds, the
+two windows, and the §6 criteria are frozen module constants in `backtest.py` (not tunable —
+outside `FILTERS`, like the tracker's tail thresholds).
+
+## 9. Run log — Validation A (judged ONCE)
+
+Validation A is executed a single time on the merged study code; its verdict is recorded
+here verbatim and never re-fitted. Any change to definitions after seeing this is a protocol
+revision + new epic decision (§6), not a rerun.
+
+<!-- VALIDATION_A_RUNLOG -->
+- **Status**: run launched on `feat/study-v2` (Epic 2 Sprint 5), 2026-07-05, full tradable
+  universe, `--period 5y`. Verdict table below is filled from that run's report output.
+- **Command**: `DATA_DIR=/tmp/bt2 PYTHONPATH=backend python backtest.py --study-v2 --n 0 --period 5y`
+- **Commit**: _(study code commit hash — filled in the run-log commit)_
+
+| Profile | fwd63 lift ≥+100× (CI95) | net expectancy | left-tail guard | break-even delisting | Verdict §6 |
+|---|---|---|---|---|---|
+| Fusée | _pending run_ | | | | |
+| Phénix | _pending run_ | | | | |
+
+The exploration window (2023-07 → 2026-06) is re-reported by the same command for context
+only — **in-sample, spent**, never part of the verdict.
+<!-- /VALIDATION_A_RUNLOG -->

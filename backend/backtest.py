@@ -37,6 +37,24 @@ from screener_backend import (
     FILTERS, discover_tickers, analyze_prices, _download_prices,
     _factor_composite, _binary_price_score, TECH_FACTORS,
 )
+from profiles import detect_profiles
+
+# ===========================================================================
+# Constantes PRÉ-ENREGISTRÉES du protocole v2 (docs/backtest_protocol_v2.md).
+# FIGÉES : ce ne sont pas des seuils réglables (fenêtres et critères de succès
+# gelés AVANT tout run) → hors FILTERS, exactement comme TAIL_THRESHOLDS de track.py.
+# Toute modification = révision du protocole + décision d'epic (jamais un re-fit).
+# ===========================================================================
+# §4 — fenêtres (bornes de dates inclusives). Exploration = in-sample « dépensée ».
+VALIDATION_A_WINDOW = ("2021-07-01", "2023-06-30")   # backward out-of-sample, jugée UNE fois
+EXPLORATION_WINDOW = ("2023-07-01", "2026-06-30")    # in-sample, contexte seulement
+# §1 — numérateurs forward : P(fwd ≥ +50 %) et P(fwd ≥ +100 %) ; garde P(fwd ≤ −50 %).
+STUDY_TAIL_UP = (0.50, 1.00)
+STUDY_TAIL_DOWN = -0.50
+# §6 — critères de succès (fenêtres de validation) : lift primaire et plafond garde.
+CRIT_LIFT_MIN = 1.4      # lift P(fwd63 ≥ +100 %) ≥ 1.4× avec IC95 bootstrap excluant 1.0×
+CRIT_GUARD_MAX = 1.5     # P(fwd63 ≤ −50 %) ≤ 1.5× le taux de base tradable
+STUDY_PRIMARY_HORIZON = 63   # §1 : horizon décisif ; 21 j reporté mais non décisif
 
 
 def _forward_return(close: pd.Series, as_of_idx: int, forward_days: int) -> float | None:
@@ -596,18 +614,315 @@ def _frac(pair):
     return "n/a" if pair[1] == 0 else f"{100*pair[0]/pair[1]:.0f}%"
 
 
+# ===========================================================================
+# STUDY v2 (Sprint 5) — chasse à la queue : lift des profils Fusée/Phénix vs base
+# tradable, garde de queue gauche, espérance nette, taux de délisting break-even,
+# verdict PASS/FAIL/CONDITIONAL contre le protocole v2 §6. Voir backtest_protocol_v2.md.
+#
+# Réutilise SANS duplication les détecteurs de production (profiles.detect_profiles)
+# et le pool tradable (screener_backend.analyze_prices en mode "tradability"). Aucune
+# définition d'appartenance n'est réécrite ici — c'est un bloqueur de revue (§3).
+# ===========================================================================
+
+# --- Fonctions statistiques PURES (testables hors ligne, valeurs à la main) ---
+
+def tail_frac(returns: list[float], threshold: float, upper: bool = True) -> float | None:
+    """
+    Fraction des rendements (None ignorés) franchissant `threshold` : queue DROITE
+    `r ≥ threshold` si upper, queue GAUCHE `r ≤ threshold` sinon. None si population vide.
+    """
+    xs = [r for r in returns if r is not None]
+    if not xs:
+        return None
+    hits = sum(1 for r in xs if (r >= threshold if upper else r <= threshold))
+    return hits / len(xs)
+
+
+def lift(p_member: float | None, p_base: float | None) -> float | None:
+    """Lift = P(membre) / P(base). None si l'un est None ou si la base est nulle."""
+    if p_member is None or p_base is None or p_base == 0:
+        return None
+    return p_member / p_base
+
+
+def bootstrap_lift_ci(member_returns: list[float], p_base: float | None, threshold: float,
+                      n_boot: int = 1000, seed: int = 0, alpha: float = 0.05,
+                      upper: bool = True) -> tuple[float | None, float | None]:
+    """
+    IC bootstrap (percentile) du LIFT de queue vs une base de taux FIXE `p_base` : à chaque
+    tirage on rééchantillonne les rendements membres (n avec remise), on recalcule la
+    fréquence de queue, divisée par `p_base`. La base = tout l'univers tradable (n immense,
+    variance négligeable) → l'incertitude dominante est celle du petit échantillon membre.
+    (None, None) si base nulle/None ou aucun membre.
+    """
+    xs = [r for r in member_returns if r is not None]
+    if not xs or p_base is None or p_base == 0:
+        return (None, None)
+    rng = random.Random(seed)
+    n = len(xs)
+    ratios = []
+    for _ in range(n_boot):
+        hits = 0
+        for _ in range(n):
+            r = xs[rng.randrange(n)]
+            if (r >= threshold if upper else r <= threshold):
+                hits += 1
+        ratios.append((hits / n) / p_base)
+    ratios.sort()
+    return (ratios[int(alpha / 2 * n_boot)], ratios[int((1 - alpha / 2) * n_boot) - 1])
+
+
+def break_even_delisting_rate(lift_value: float | None) -> float | None:
+    """
+    Protocole §5 : fraction des membres (population VRAIE, délisting inclus) qui devraient
+    être des −100 % cachés pour EFFACER le lift mesuré. Démonstration : membres observés n,
+    k succès de queue (p̂ = k/n) ; d membres cachés tout-perdants portent p à k/(n+d).
+    Lift effacé quand k/(n+d) = base ⇒ fraction cachée d/(n+d) = 1 − base/p̂ = 1 − 1/lift.
+    Ne dépend que du lift. None si lift ≤ 1 (aucun lift à effacer).
+    """
+    if lift_value is None or lift_value <= 1.0:
+        return None
+    return 1.0 - 1.0 / lift_value
+
+
+def net_expectancy(returns: list[float], cost: float) -> float | None:
+    """Espérance nette moyenne par ticket = moyenne(rendement − coût). None si vide."""
+    xs = [r for r in returns if r is not None]
+    if not xs:
+        return None
+    return statistics.mean(xs) - cost
+
+
+def study_verdict(profile: str, lift100: float | None, ci_low100: float | None,
+                  net_exp: float | None, guard_ok: bool) -> str:
+    """
+    Verdict §6 (fenêtre de validation) à partir des trois critères pré-enregistrés :
+    (1) lift P(fwd63≥+100%) ≥ 1.4× ET IC95 bas > 1.0× ; (2) espérance nette > 0 ;
+    (3) garde de queue gauche ≤ 1.5× base. Phénix qui passe → CONDITIONAL (money-gated,
+    délisting à confirmer) ; Fusée qui passe → PASS (provisoire tant que Validation B manque).
+    """
+    crit1 = (lift100 is not None and lift100 >= CRIT_LIFT_MIN
+             and ci_low100 is not None and ci_low100 > 1.0)
+    crit2 = net_exp is not None and net_exp > 0
+    if not (crit1 and crit2 and guard_ok):
+        return "FAIL"
+    return "CONDITIONAL" if profile == "phenix" else "PASS"
+
+
+# --- Orchestration de la study v2 ---
+
+def _window_of(date) -> str | None:
+    """Range une date as-of dans sa fenêtre de protocole (validation_a / exploration / None)."""
+    ds = str(date.date())
+    if VALIDATION_A_WINDOW[0] <= ds <= VALIDATION_A_WINDOW[1]:
+        return "validation_a"
+    if EXPLORATION_WINDOW[0] <= ds <= EXPLORATION_WINDOW[1]:
+        return "exploration"
+    return None
+
+
+def _profile_metrics(profile: str, member_rows: list[dict], base_rows: list[dict],
+                     h: int, seed: int) -> dict:
+    """
+    Toutes les métriques §1/§5/§6 d'un profil sur une fenêtre, horizon `h` : lifts de queue
+    +50%/+100% (IC95 bootstrap), garde queue gauche, espérance nette, break-even délisting,
+    et verdict. Base et membres déjà filtrés capacité en amont. `member_rows ⊆ base_rows`.
+    """
+    m_ret = [r["fwd"].get(h) for r in member_rows]
+    b_ret = [r["fwd"].get(h) for r in base_rows]
+    cost = FILTERS["study_cost_roundtrip"]
+    up1, up2 = STUDY_TAIL_UP
+
+    p_b_up1, p_b_up2 = tail_frac(b_ret, up1), tail_frac(b_ret, up2)
+    lift1 = lift(tail_frac(m_ret, up1), p_b_up1)
+    lift2 = lift(tail_frac(m_ret, up2), p_b_up2)
+    ci1 = bootstrap_lift_ci(m_ret, p_b_up1, up1, seed=seed)
+    ci2 = bootstrap_lift_ci(m_ret, p_b_up2, up2, seed=seed + 1)
+
+    # Garde de queue gauche : base nulle → garde OK ssi les membres n'ont aucun −50 %.
+    p_m_dn = tail_frac(m_ret, STUDY_TAIL_DOWN, upper=False)
+    p_b_dn = tail_frac(b_ret, STUDY_TAIL_DOWN, upper=False)
+    if p_b_dn in (None, 0):
+        guard_lift, guard_ok = None, (not p_m_dn)
+    else:
+        guard_lift = (p_m_dn or 0.0) / p_b_dn
+        guard_ok = guard_lift <= CRIT_GUARD_MAX
+
+    net_exp = net_expectancy(m_ret, cost)      # §1 espérance nette (horizon décisif = 63)
+    verdict = (study_verdict(profile, lift2, ci2[0], net_exp, guard_ok)
+               if h == STUDY_PRIMARY_HORIZON else None)
+    return {
+        "profile": profile, "horizon": h,
+        "n_member": sum(1 for r in m_ret if r is not None),
+        "n_base": sum(1 for r in b_ret if r is not None),
+        "lift_up50": lift1, "lift_up50_ci": ci1,
+        "lift_up100": lift2, "lift_up100_ci": ci2,
+        "guard_left_lift": guard_lift, "guard_ok": guard_ok,
+        "net_expectancy": net_exp,
+        "break_even_delisting": break_even_delisting_rate(lift2),
+        "verdict": verdict,
+    }
+
+
+def _study_v2_window(name: str, rows: list[dict], horizons: list[int], seed: int) -> dict:
+    """Métriques par profil (fusee / fusee_event / phenix) pour une fenêtre, tous horizons."""
+    cap_min_dv = FILTERS["study_position_usd"] / FILTERS["study_adv_max_frac"]   # filtre capacité §7
+    base = [r for r in rows if r["dv"] is not None and r["dv"] >= cap_min_dv]
+    profiles_out = {}
+    for prof, key in (("fusee", "is_fusee"), ("fusee_event", "fusee_event"), ("phenix", "is_phenix")):
+        members = [r for r in base if r.get(key)]
+        profiles_out[prof] = {h: _profile_metrics(prof, members, base, h, seed) for h in horizons}
+    return {"window": name, "n_base": len(base), "profiles": profiles_out}
+
+
+def run_study_v2(n_tickers: int | None = None, period: str = "5y", seed: int = 42) -> dict:
+    """
+    Study v2 (chasse à la queue) : cross-section roulante mensuelle sur l'univers TRADABLE.
+    À chaque date as-of on rejoue analyze_prices (pool tradability), on étiquette les profils
+    via detect_profiles (percentiles cross-sectionnels de la date), puis on mesure les queues
+    forward par profil × fenêtre. Validation A jugée UNE fois contre §6. Voir §1-§8.
+    """
+    step = FILTERS["study_step_days"]
+    horizons = list(FILTERS["study_horizons"])
+    hmax = max(horizons)
+    min_hist = FILTERS["vol_window_long"] + FILTERS["ma_slope_lookback"]
+
+    # pool_mode doit rester "tradability" pendant TOUT le run (discover + download + analyze) ;
+    # try/finally EXTERNE → restauré sur tous les chemins, y compris si discover_tickers lève.
+    prev_pool, prev_seed = FILTERS["pool_mode"], FILTERS["shuffle_seed"]
+    FILTERS["pool_mode"] = "tradability"        # la study v2 vit sur le pool tradable (§2)
+    try:
+        FILTERS["shuffle_seed"] = seed
+        try:
+            universe = discover_tickers()
+        finally:
+            FILTERS["shuffle_seed"] = prev_seed
+        if n_tickers:
+            universe = universe[:n_tickers]
+
+        print(f"\n{'='*64}\n  STUDY v2 (tail hunting) — {len(universe)} tickers · {period} · pas {step}j"
+              f" · horizons {horizons}\n  profils via profiles.detect_profiles (§3)"
+              f"  ·  voir docs/backtest_protocol_v2.md\n{'='*64}")
+        prices = _download_prices(universe, FILTERS["rs_benchmark"], period=period)
+        bench_df = prices.pop(FILTERS["rs_benchmark"], None)
+        bench_close = bench_df["Close"].dropna() if bench_df is not None and "Close" in bench_df else None
+
+        # Calendrier maître = index du benchmark (le plus complet des séries liquides).
+        cal = bench_close.index if bench_close is not None else _union_calendar(prices)
+        grid = [cal[i] for i in range(min_hist, max(len(cal) - hmax, min_hist), step)]
+
+        rows: list[dict] = []
+        for d in grid:
+            win = _window_of(d)
+            if win is None:
+                continue
+            bench_tr = bench_close[bench_close.index <= d] if bench_close is not None else None
+            at_date: list[dict] = []                      # signaux tradables de la cross-section à d
+            for tk, df in prices.items():
+                if "Close" not in df:
+                    continue
+                close = df["Close"].dropna()
+                sub = close.index[close.index <= d]
+                if len(sub) < min_hist:
+                    continue
+                as_of_idx = len(sub) - 1
+                fwd = {h: _forward_return(close, as_of_idx, h) for h in horizons}
+                if all(v is None for v in fwd.values()):
+                    continue                              # aucune donnée forward → inutile
+                signals, _ = analyze_prices(tk, df.loc[df.index <= d], bench_tr)
+                if signals is None:                       # non tradable (prix/liquidité/histo)
+                    continue
+                at_date.append({"signals": signals, "fwd": fwd,
+                                "dv": signals.get("dollar_volume")})
+            if not at_date:
+                continue
+            detect_profiles([o["signals"] for o in at_date])   # percentiles de LA date (§3)
+            for o in at_date:
+                s = o["signals"]
+                rows.append({"date": d, "window": win, "fwd": o["fwd"], "dv": o["dv"],
+                             "is_fusee": s.get("is_fusee"), "fusee_event": s.get("fusee_event"),
+                             "is_phenix": s.get("is_phenix")})
+    finally:
+        FILTERS["pool_mode"] = prev_pool
+
+    by_window = {}
+    for name in ("validation_a", "exploration"):
+        wr = [r for r in rows if r["window"] == name]
+        by_window[name] = _study_v2_window(name, wr, horizons, seed)
+
+    result = {"n_obs": len(rows), "n_tickers": len(universe), "period": period, "seed": seed,
+              "horizons": horizons, "primary_horizon": STUDY_PRIMARY_HORIZON,
+              "windows": {"validation_a": VALIDATION_A_WINDOW, "exploration": EXPLORATION_WINDOW},
+              "by_window": by_window}
+    _print_study_v2(result)
+    return result
+
+
+def _union_calendar(prices: dict) -> pd.DatetimeIndex:
+    """Calendrier de repli (union triée des dates) si le benchmark manque."""
+    idx = pd.DatetimeIndex([])
+    for df in prices.values():
+        if "Close" in df:
+            idx = idx.union(df["Close"].dropna().index)
+    return idx
+
+
+def _lift(x):
+    return "  n/a" if x is None else f"{x:4.2f}×"
+
+
+def _print_study_v2(r: dict) -> None:
+    print(f"\n{'='*64}\n  STUDY v2 — RÉSULTATS ({r['n_obs']} obs profil×date, {r['n_tickers']} tickers,"
+          f" {r['period']})\n  horizon décisif = {r['primary_horizon']}j  ·  seuils +50%/+100% (§1)"
+          f"\n{'='*64}")
+    for name in ("validation_a", "exploration"):
+        w = r["by_window"][name]
+        lo, hi = r["windows"][name]
+        tag = "JUGÉE UNE FOIS (out-of-sample)" if name == "validation_a" else "IN-SAMPLE, DÉPENSÉE — contexte seulement"
+        print(f"\n  ═══ Fenêtre {name}  [{lo} → {hi}]  ({w['n_base']} obs base) — {tag} ═══")
+        if w["n_base"] == 0:
+            print("    (aucune observation dans cette fenêtre — période téléchargée trop courte)")
+            continue
+        for prof in ("fusee", "fusee_event", "phenix"):
+            print(f"\n    ── {prof} ──")
+            for h in r["horizons"]:
+                m = w["profiles"][prof][h]
+                primary = " ◀ décisif" if h == r["primary_horizon"] else ""
+                c1lo, c1hi = m["lift_up50_ci"]
+                c2lo, c2hi = m["lift_up100_ci"]
+                print(f"      h={h:<2}  n_membre={m['n_member']:<4} / base {m['n_base']}{primary}")
+                print(f"         lift +50%  {_lift(m['lift_up50'])}  IC95[{_lift(c1lo)},{_lift(c1hi)}]"
+                      f"   lift +100% {_lift(m['lift_up100'])}  IC95[{_lift(c2lo)},{_lift(c2hi)}]")
+                print(f"         garde ≤−50% {_lift(m['guard_left_lift'])} ({'OK' if m['guard_ok'] else 'DÉPASSE'})"
+                      f"   espérance nette {_pct(m['net_expectancy'])}"
+                      f"   break-even délisting {_hit(m['break_even_delisting'])}")
+                if m["verdict"] is not None:
+                    fragile = (m["break_even_delisting"] is not None and m["break_even_delisting"] < 0.05)
+                    frag = "  ⚠️ FRAGILE (break-even <5%)" if fragile else ""
+                    print(f"         VERDICT §6 : {m['verdict']}{frag}")
+    print(f"\n  Règle §6 : Fusée PASS(A) = provisoire tant que Validation B (tracker) n'a pas confirmé ;")
+    print(f"  Phénix ne peut être que CONDITIONAL (money-gated, données délisting à acheter — §5).")
+    print(f"  ⚠️  BIAIS DE SURVIE : univers = titres cotés AUJOURD'HUI ; le break-even délisting")
+    print(f"      chiffre la fragilité de chaque lift. Validation A jugée UNE fois — aucun re-fit.")
+    print(f"{'='*64}\n")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Backtest forward du screener (signaux prix/volume)")
     ap.add_argument("--n", type=int, default=200, help="nombre de tickers échantillonnés")
     ap.add_argument("--forward", type=int, default=63, help="horizon forward en jours de bourse")
     ap.add_argument("--seed", type=int, default=42, help="seed de reproductibilité")
-    ap.add_argument("--period", type=str, default="2y", help="profondeur d'historique (yfinance)")
+    ap.add_argument("--period", type=str, default=None, help="profondeur d'historique (yfinance)")
     ap.add_argument("--sweep", action="store_true", help="balayer le poids de compression (rolling)")
-    ap.add_argument("--study", action="store_true", help="STUDY roulante multi-date (Sprint 6)")
+    ap.add_argument("--study", action="store_true", help="STUDY roulante v1 multi-date (Sprint 6)")
+    ap.add_argument("--study-v2", dest="study_v2", action="store_true",
+                    help="STUDY v2 tail-hunting : profils Fusée/Phénix vs base (protocole v2)")
     args = ap.parse_args()
-    if args.study:
-        run_study(n_tickers=(args.n if args.n else None), period=args.period, seed=args.seed)
+    if args.study_v2:
+        run_study_v2(n_tickers=(args.n if args.n else None), period=(args.period or "5y"), seed=args.seed)
+    elif args.study:
+        run_study(n_tickers=(args.n if args.n else None), period=(args.period or "3y"), seed=args.seed)
     elif args.sweep:
-        run_weight_sweep(n_tickers=args.n, forward_days=args.forward, seed=args.seed, period=args.period)
+        run_weight_sweep(n_tickers=args.n, forward_days=args.forward, seed=args.seed, period=(args.period or "2y"))
     else:
-        run_backtest(n_tickers=args.n, forward_days=args.forward, seed=args.seed, period=args.period)
+        run_backtest(n_tickers=args.n, forward_days=args.forward, seed=args.seed, period=(args.period or "2y"))
