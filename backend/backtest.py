@@ -1173,6 +1173,8 @@ def run_study_v3(n_tickers: int | None = None, period: str = "5y", seed: int = 4
                 surv = edgar.survival_signals(tk, now=d.to_pydatetime())  # point-in-time
                 if surv:
                     signals.update(surv)
+                nib = edgar.net_insider_buying(tk, now=d.to_pydatetime())  # achats nets, point-in-time
+                signals["insider_net_buying"] = nib["net_buying"] if nib else None
                 at_date.append({"sig": signals, "fwd63": fwd63, "dv": signals.get("dollar_volume")})
             if not at_date:
                 continue
