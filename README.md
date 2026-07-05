@@ -8,15 +8,18 @@ It is a decision-support tool: it discovers, scores, and ranks. It does not trad
 The final call stays human. The interface is in French; this documentation is in
 English.
 
-> **⚠️ Thesis pivot (Epic 2, in progress).** The original "catch quiet accumulation
-> early" thesis (described below) **failed its pre-registered study**: every score decile
-> was negative net-of-cost in excess of IWM, both horizons, every year. The project is
-> pivoting to **tail hunting** — two frozen profiles, **Fusée** (momentum extreme + volume
-> breakout) and **Phénix** (far below the 52-week high, volatility compressed, stabilizing),
-> judged on their **lift** in catching the right tail (+50 % / +100 % moves). The binding,
-> pre-registered specification is **[docs/backtest_protocol_v2.md](docs/backtest_protocol_v2.md)**
-> (single source of truth for the detectors, badges and the v2 study). The sections below
-> still describe the v1 screener that stays in production while the v2 profiles are built.
+> **⚠️ Thesis pivot (Epic 3, in progress).** Two pre-registered theses have failed. **v1**
+> ("catch quiet accumulation early", described below): every score decile negative net-of-cost
+> vs IWM, every year. **v2** (tail-hunting profiles **Fusée** / **Phénix**,
+> [docs/backtest_protocol_v2.md](docs/backtest_protocol_v2.md)): both FAIL Validation A — Fusée
+> no real lift, Phénix a real +100 % lift (4.59×) but a barbell eaten by the left tail
+> (net expectancy −11 %). The right tail is *found*; the failure is **not dying** (left tail) and
+> **honest measurement** under free, survivor-biased data. **Epic 3** pivots to
+> **survival-conditioned right-tail scoring**: an interpretable, calibrated `P(fwd63 ≥ +100 %)`
+> model over frozen price features **plus SEC/EDGAR survival signals** (dilution, going-concern,
+> reverse split, cash runway), validated by **purged walk-forward** and the live tracker. The
+> binding spec is **[docs/backtest_protocol_v3.md](docs/backtest_protocol_v3.md)**. The sections
+> below still describe the v1 screener that stays in production while v3 is built.
 
 ## How it works
 
