@@ -114,7 +114,16 @@ See [docs/backend.md](docs/backend.md) for the exact factors and functions.
   an explicit **PASS/FAIL/CONDITIONAL verdict** against the pre-registered criteria. It splits
   **Validation A** (2021-07→2023-06, judged once) from the spent **exploration** window. The frozen
   spec is [docs/backtest_protocol_v2.md](docs/backtest_protocol_v2.md); the Validation A run log is
-  its §9. Phénix can only ever be **CONDITIONAL** (money-gated pending delisted-inclusive data).
+  its §9.
+  - **Verdict (Validation A, run 2026-07-05, full universe 2519 tickers): both profiles FAIL.**
+    **Fusée** — no material +100 % lift at 63d (1.03×, CI95 [0.46, 1.71] spans 1.0×), net expectancy
+    −9.56 %, fragile (break-even delisting 2.7 %) → the momentum-tail sub-thesis is **dropped, no
+    re-fit** (§6). **Phénix** — a real right-tail lift (+100 % 4.59×, CI95 [2.30, 7.21] excludes 1.0×)
+    but a **barbell eaten by the left tail** (≤ −50 % guard 2.27× over the 1.5× cap, net expectancy
+    −11.02 %) → fails criteria (2) and (3); it stays **research-only, money-gated** pending
+    delisted-inclusive data (**purchase deferred** — see §9). Both badges therefore carry a **"non
+    validé"** marker. Validation B (the live tracker) keeps running and can still overturn this
+    forward.
 - **Live performance tracking**: every scan writes a dated snapshot of its picks to
   `data/history/` (ticker, entry price, score, key signals). `GET /api/performance` then
   measures each pick's return **since it was first flagged** and compares it to IWM — an
@@ -162,8 +171,10 @@ curl http://localhost:8000/api/performance
   ticker (small caps especially). The reliable signals are price/volume based.
 - The dashboard shows each stock's **tail-hunting profile** prominently: a 🚀 **Fusée** or
   🔥 **Phénix** badge (both if it qualifies for both), with a profile filter (All / Fusée /
-  Phénix) and per-profile counts. The **Phénix badge carries a "non validé" marker** — its
-  edge is not yet validated on delisted-inclusive data (survivorship bias, protocol v2 §5).
+  Phénix) and per-profile counts. **Both badges carry a "non validé" marker** since Validation A
+  failed for each (§6, see the study section above): the badges are **research signals, not
+  validated edges** — the hover tooltip carries the Sprint 5 numbers. They remain useful for
+  surfacing candidates; Validation B (the tracker) may still confirm a profile forward.
 - This is a screening tool, **not financial advice**.
 
 ## Stack

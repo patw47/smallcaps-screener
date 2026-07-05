@@ -33,11 +33,18 @@ function normalizeStocks(raw) {
   }));
 }
 
-// Profils tail-hunting (Epic 2) : chip coloré par profil. Phénix porte un marqueur
-// « non validé » VISIBLE (honnêteté : biais de survie non corrigé, protocole v2 §5).
+// Profils tail-hunting (Epic 2) : chip coloré par profil. Les DEUX profils portent un
+// marqueur « non validé » VISIBLE : Validation A (protocole v2 §6) les a fait ÉCHOUER —
+// signaux de recherche, aucun capital réel. Tooltip = chiffres du run Sprint 5 (§9).
 const PROFILE_STYLE = {
-  fusee: { emoji: "🚀", label: "Fusée", fg: "#00e69a", bg: "#00ff9d18", bd: "#00ff9d44" },
-  phenix: { emoji: "🔥", label: "Phénix", fg: "#ff9966", bg: "#ff6b6b18", bd: "#ff6b6b44" },
+  fusee: {
+    emoji: "🚀", label: "Fusée", fg: "#00e69a", bg: "#00ff9d18", bd: "#00ff9d44",
+    caveat: "Validation A ÉCHOUÉE (protocole v2 §6) : lift +100 % à 63j = 1.03× (IC95 [0.46, 1.71], couvre 1.0×), espérance nette −9.56 %, FRAGILE (break-even délisting 2.7 %). Sous-thèse momentum abandonnée — signal de recherche uniquement, aucun capital réel.",
+  },
+  phenix: {
+    emoji: "🔥", label: "Phénix", fg: "#ff9966", bg: "#ff6b6b18", bd: "#ff6b6b44",
+    caveat: "Validation A ÉCHOUÉE (protocole v2 §6) : lift droite réel (+100 % à 63j = 4.59×, IC95 [2.30, 7.21]) mais mangé par la queue gauche — garde ≤−50 % à 2.27× (> plafond 1.5×) et espérance nette −11.02 %. Money-gated : aucun capital tant que la validation sur données incluant les titres delisted n'est pas faite (§5).",
+  },
 };
 
 function ProfileBadge({ kind, strength, event }) {
@@ -56,8 +63,8 @@ function ProfileBadge({ kind, strength, event }) {
         <span title="Cassure déclenchée aujourd'hui (variant événement Fusée)"
               style={{ color: "#ffd24d", cursor: "help" }}>⚡</span>
       )}
-      {kind === "phenix" && (
-        <span title="Hypothèse — NON VALIDÉ : biais de survie non corrigé (protocole v2 §5). Aucun capital réel tant que la validation sur données incluant les titres delisted n'est pas faite."
+      {c.caveat && (
+        <span title={c.caveat}
               style={{
                 background: "#ffcc6622", color: "#ffcc66", fontSize: 9, fontWeight: 700,
                 padding: "1px 6px", borderRadius: 10, marginLeft: 3, cursor: "help",
@@ -389,9 +396,9 @@ Réponds en français. Structure:
               transition: "all 0.15s ease",
             }}>{label}</button>
           ))}
-          {profile === "Phénix" && (
+          {profile !== "All" && (
             <span style={{ color: "#ffcc66", fontSize: 11, fontFamily: "monospace" }}>
-              ⚠ Phénix : hypothèse non validée (biais de survie, protocole v2 §5)
+              ⚠ {profile} : Validation A échouée (protocole v2 §6) — signal de recherche, non validé
             </span>
           )}
         </div>
