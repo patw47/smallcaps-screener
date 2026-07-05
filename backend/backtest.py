@@ -1055,6 +1055,49 @@ def value_of_survival(X, y, pos, fwd, folds, cost: float) -> dict:
     }
 
 
+def study_v3_verdict(overall: dict | None, vos: dict, ne_random: float | None,
+                     ne_best_feat: float | None, ne_phenix: float | None) -> dict:
+    """
+    Règle de décision §7 appliquée aux résultats out-of-fold. Critères :
+    (1) lift P(fwd63≥+100%) ≥ 1.4× ET IC95 bas > 1.0× ; (2) le veto survie AJOUTE de la valeur ;
+    (3) garde queue gauche ≤ 1.5× ; (4) bat random / meilleure feature / Phénix v2 en espérance
+    nette > 0. Calibration (5) reportée, non bloquante. Mode A (veto n'aide pas) / B (aide mais
+    espérance ≤ 0) → branches de contingence §12. INCONCLUSIVE si trop peu de données.
+    """
+    if not overall:
+        return {"verdict": "INCONCLUSIVE", "reasons": ["observations insuffisantes"]}
+    ci_low = (overall.get("lift100_ci") or [None])[0]
+    c1 = (overall.get("lift100") is not None and overall["lift100"] >= CRIT_V3_LIFT_MIN
+          and ci_low is not None and ci_low > 1.0)
+    c2 = bool(vos.get("adds_value"))
+    c3 = bool(overall.get("guard_ok"))
+    ne = overall.get("net_expectancy")
+    beats = [b for b in (ne_random, ne_best_feat, ne_phenix) if b is not None]
+    c4 = ne is not None and ne > 0 and all(ne > b for b in beats)
+    if c1 and c2 and c3 and c4:
+        verdict = "PROVISIONAL_PASS"     # §7 : « pas encore réfuté » (jamais confirmé — §2)
+    elif (ne is None or ne <= 0) and not c2:
+        verdict = "TERMINAL_FAIL"         # §12 mode A : queue droite non-scorable en gratuit
+    elif not c2:
+        verdict = "FAIL_SURVIVAL_NO_VALUE"  # §12 mode A : le veto n'ajoute rien
+    else:
+        verdict = "FAIL"                  # §12 mode B : signal réel mais étouffé (espérance ≤ 0)
+    return {"verdict": verdict,
+            "criteria": {"ranking_lift": c1, "value_of_survival": c2,
+                         "guard": c3, "beats_baselines": c4},
+            "net_expectancy": ne}
+
+
+def _brier(oof, y) -> float | None:
+    """Score de Brier (calibration §7-5) sur les prédictions out-of-fold valides. Plus bas = mieux."""
+    oof = np.asarray(oof, float)
+    y = np.asarray(y, float)
+    ok = ~np.isnan(oof)
+    if ok.sum() == 0:
+        return None
+    return float(np.mean((oof[ok] - y[ok]) ** 2))
+
+
 def _regime_label(bench_close, date) -> str:
     """Régime de marché à `date` = signe du rendement IWM sur ~63 j de bourse glissants."""
     if bench_close is None:
@@ -1177,12 +1220,17 @@ def run_study_v3(n_tickers: int | None = None, period: str = "5y", seed: int = 4
                 best_feat = (j, ne)
         ph_idx = np.array([i for i, p in enumerate(phenix) if p])
         ne_phenix = net_expectancy(fwd[ph_idx].tolist(), cost) if len(ph_idx) else None
+        ne_random = net_expectancy(fwd.tolist(), cost)          # baseline : tirage au hasard
+        brier = _brier(vos["oof_full"], y)   # y déjà filtré par `keep` en amont
+        ne_best = best_feat[1] if best_feat else None
+        verdict = study_v3_verdict(overall, vos, ne_random, ne_best, ne_phenix)
         vos.pop("oof_full", None)
         result.update({
             "overall": overall, "by_regime": by_regime, "value_of_survival": vos,
             "baseline_best_feature": (None if best_feat is None else
                                       {"feature": FEATURE_NAMES[best_feat[0]], "net_expectancy": best_feat[1]}),
-            "baseline_phenix_ne": ne_phenix,
+            "baseline_phenix_ne": ne_phenix, "baseline_random_ne": ne_random,
+            "brier": brier, "verdict": verdict,
         })
     else:
         result["note"] = "trop peu d'observations ou une seule classe — plomberie seulement"
@@ -1213,10 +1261,21 @@ def _print_study_v3(r: dict) -> None:
     bf = r.get("baseline_best_feature")
     print(f"  BASELINES : meilleure feature seule = {bf['feature'] if bf else '—'} "
           f"(ne {_fmt(bf['net_expectancy'] if bf else None, pct=True)}) · "
-          f"Phénix v2 ne {_fmt(r.get('baseline_phenix_ne'), pct=True)}")
+          f"Phénix v2 ne {_fmt(r.get('baseline_phenix_ne'), pct=True)} · "
+          f"random ne {_fmt(r.get('baseline_random_ne'), pct=True)} · Brier {_fmt(r.get('brier'))}")
+    vd = r.get("verdict") or {}
+    crit = vd.get("criteria") or {}
+    print(f"\n  VERDICT §7 : {vd.get('verdict', '—')}   "
+          f"[lift {'✓' if crit.get('ranking_lift') else '✗'} · "
+          f"survie-ajoute {'✓' if crit.get('value_of_survival') else '✗'} · "
+          f"garde {'✓' if crit.get('guard') else '✗'} · "
+          f"bat-baselines {'✓' if crit.get('beats_baselines') else '✗'}]")
     if not r["signed_off"]:
-        print("\n  ⚠️  NON-BINDING — protocole v3 non signé (§0). Verdict NON écrit au run-log.")
+        print("\n  ⚠️  NON-BINDING — protocole v3 non signé (§0). Verdict ci-dessus NON écrit au run-log.")
         print("      Rappel §2 : données gratuites = plafond optimiste ; le backtest ne peut que RÉFUTER.")
+    else:
+        print("\n  ✅ RUN SIGNÉ — recopier ce bloc VERBATIM dans docs/backtest_protocol_v3.md §10.")
+        print("      Rappel §2 : un PROVISIONAL_PASS reste « non validé » jusqu'à Validation B (tracker).")
     print(f"{'='*66}\n")
 
 
