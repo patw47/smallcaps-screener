@@ -14,11 +14,15 @@
 
 **Minimal hard filters (tradable + not a falling knife) → rank by a technical score led by accumulation → enrich the top-scored names with fundamentals.** The thesis is to catch small caps *early* (quiet accumulation / tight base, before the move), so selection is driven by **scoring**, not by strict elimination.
 
-> **Epic 2 — tail-hunting pivot.** The v1 thesis above failed its pre-registered study; the
-> project is pivoting to two frozen profiles (**Fusée**, **Phénix**) specified in
-> [backtest_protocol_v2.md](backtest_protocol_v2.md) — the single source of truth for the
-> production detectors, the frontend badges and the v2 study. The v1 screener documented here
-> stays in production until the v2 profiles land.
+> **Epic 2 — tail-hunting pivot (FAILED).** The v1 thesis above failed its pre-registered study;
+> the project pivoted to two frozen profiles (**Fusée**, **Phénix**) in
+> [backtest_protocol_v2.md](backtest_protocol_v2.md). Both FAILED Validation A (§9-§10 there).
+>
+> **Epic 3 — survival-conditioned right-tail scoring (in progress).** The next thesis replaces the
+> hand-drawn profiles with an interpretable, calibrated `P(fwd63 ≥ +100 %)` model over frozen
+> price features **plus EDGAR survival signals**, validated by purged walk-forward. Binding spec:
+> [backtest_protocol_v3.md](backtest_protocol_v3.md). The v1 screener documented here stays in
+> production until v3 lands.
 
 ## Screener Configuration
 
