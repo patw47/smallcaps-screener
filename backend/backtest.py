@@ -1151,6 +1151,8 @@ def run_study_v3(n_tickers: int | None = None, period: str = "5y", seed: int = 4
         grid = [cal[i] for i in range(min_hist, max(len(cal) - hmax, min_hist), step)]
 
         Xrows, ys, poss, fwds, dvs, regimes, phenix = [], [], [], [], [], [], []
+        surv_keys = FEATURE_NAMES[N_TECH_FEATURES:]     # les 7 features de survie
+        surv_present = defaultdict(int)                 # couverture : nb de non-None par feature
         for d in grid:
             bench_tr = bench_close[bench_close.index <= d] if bench_close is not None else None
             reg = _regime_label(bench_close, d)
@@ -1185,6 +1187,9 @@ def run_study_v3(n_tickers: int | None = None, period: str = "5y", seed: int = 4
                 dvs.append(o["dv"])
                 regimes.append(reg)
                 phenix.append(bool(o["sig"].get("is_phenix")))
+                for k in surv_keys:
+                    if o["sig"].get(k) is not None:
+                        surv_present[k] += 1
     finally:
         FILTERS["pool_mode"] = prev_pool
 
@@ -1201,8 +1206,11 @@ def run_study_v3(n_tickers: int | None = None, period: str = "5y", seed: int = 4
     regimes = [r for r, k in zip(regimes, keep) if k]
     phenix = [p for p, k in zip(phenix, keep) if k]
 
+    n_collected = len(ys)
+    surv_coverage = {k: (surv_present[k] / n_collected if n_collected else 0.0) for k in surv_keys}
     result = {"n_obs": int(len(y)), "n_tickers": len(universe), "period": period,
-              "signed_off": signed_off, "base_rate_up100": tail_frac(fwd.tolist(), STUDY_TAIL_UP[1])}
+              "signed_off": signed_off, "base_rate_up100": tail_frac(fwd.tolist(), STUDY_TAIL_UP[1]),
+              "surv_coverage": surv_coverage}
     if len(y) >= STUDY_V3_K * 20 and len(np.unique(y)) == 2:
         folds = purged_fold_masks(pos, STUDY_V3_K, STUDY_V3_EMBARGO)
         vos = value_of_survival(X, y, pos, fwd, folds, cost)
@@ -1241,6 +1249,10 @@ def run_study_v3(n_tickers: int | None = None, period: str = "5y", seed: int = 4
 def _print_study_v3(r: dict) -> None:
     print(f"\n{'='*66}\n  STUDY v3 — {r['n_obs']} obs · base P(+100%)={_fmt(r.get('base_rate_up100'))}"
           f"\n{'='*66}")
+    cov = r.get("surv_coverage") or {}
+    if cov:
+        print("  COUVERTURE features survie (% non-None) : "
+              + " · ".join(f"{k.replace('_flag','')} {v*100:.0f}%" for k, v in cov.items()))
     if "overall" not in r:
         print(f"  {r.get('note', 'aucune métrique')}")
         print(f"{'='*66}\n")

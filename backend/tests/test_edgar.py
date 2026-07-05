@@ -131,12 +131,14 @@ def test_parse_form4_open_market_only():
 # ---------------------------------------------------------------------------
 
 def _make_survival_get(gc_text=None):
-    """fake_get servant company_tickers + submissions + le doc 10-Q (texte going-concern)."""
+    """fake_get servant company_tickers + submissions + doc 10-Q + companyfacts (cash runway)."""
     def fake_get(url):
         if "company_tickers.json" in url:
             return _Resp((FIX / "company_tickers.json").read_text())
         if "submissions/CIK" in url:
             return _Resp((FIX / "submissions_CIK0000000111.json").read_text())
+        if "companyfacts/CIK" in url:
+            return _Resp((FIX / "facts_CIK0000000111.json").read_text())
         if "test-10q.htm" in url:
             return _Resp(gc_text if gc_text is not None else (FIX / "test-10q.htm").read_text())
         return None
@@ -152,7 +154,7 @@ def test_survival_flags_full_window(edgar_env, monkeypatch):
     assert r["dilution_flag"] is True
     assert r["late_filing_flag"] is True
     assert r["going_concern_flag"] is True
-    assert r["cash_runway"] is None
+    assert r["cash_runway"] is not None   # XBRL companyfacts câblé (voir test dédié)
 
 
 def test_survival_point_in_time_excludes_future_filings(edgar_env, monkeypatch):
@@ -172,6 +174,45 @@ def test_survival_going_concern_absent(edgar_env, monkeypatch):
     r = edgar.survival_signals("TEST", now=NOW, window_days=180)
     assert r["going_concern_flag"] is False
     assert r["dilution_flag"] is True
+
+
+def test_cash_runway_point_in_time(edgar_env, monkeypatch):
+    # cash 1,0 M$ (fin mars, déposé 15/04) ; OCF −0,6 M$ sur 90 j → burn ~0,203 M$/mois →
+    # runway ~4,9 mois. as_of=2026-07-01 → visible.
+    monkeypatch.setattr(edgar, "_get", _make_survival_get())
+    r = edgar.survival_signals("TEST", now=NOW, window_days=180)
+    assert r["cash_runway"] is not None
+    assert 4.0 < r["cash_runway"] < 6.0
+
+    # as_of=2026-04-01 : le 10-Q (déposé 15/04) n'est pas encore public → pas d'OCF → None.
+    r2 = edgar.survival_signals("TEST", now=datetime(2026, 4, 1, tzinfo=timezone.utc))
+    assert r2["cash_runway"] is None
+
+
+def test_cash_runway_not_burning_is_safe(edgar_env, monkeypatch):
+    # OCF positif → ne brûle pas de cash → runway plafonné (sûr), jamais None.
+    facts = {"facts": {"us-gaap": {
+        "CashAndCashEquivalentsAtCarryingValue": {"units": {"USD": [
+            {"end": "2026-03-31", "val": 2000000, "filed": "2026-04-15"}]}},
+        "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [
+            {"start": "2026-01-01", "end": "2026-03-31", "val": 300000, "filed": "2026-04-15"}]}},
+    }}}
+    import json as _json
+
+    def fake_get(url):
+        if "company_tickers.json" in url:
+            return _Resp((FIX / "company_tickers.json").read_text())
+        if "submissions/CIK" in url:
+            return _Resp((FIX / "submissions_CIK0000000111.json").read_text())
+        if "companyfacts/CIK" in url:
+            return _Resp(_json.dumps(facts))
+        if "test-10q.htm" in url:
+            return _Resp((FIX / "test-10q.htm").read_text())
+        return None
+
+    monkeypatch.setattr(edgar, "_get", fake_get)
+    r = edgar.survival_signals("TEST", now=NOW)
+    assert r["cash_runway"] == edgar._RUNWAY_CAP
 
 
 def test_survival_none_when_disabled_or_unknown(edgar_env, monkeypatch):

@@ -19,7 +19,7 @@ import os
 import json
 import time
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -35,6 +35,14 @@ _USER_AGENT = os.environ.get("EDGAR_USER_AGENT", "").strip()
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik10}.json"
 _ARCHIVE_DOC = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/{doc}"
+_COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik10}.json"
+
+# Tags XBRL (us-gaap) pour le cash runway. On prend le PREMIER disponible dans l'ordre.
+_CASH_TAGS = ("CashAndCashEquivalentsAtCarryingValue",
+              "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash")
+_OCF_TAGS = ("NetCashProvidedByUsedInOperatingActivities",
+             "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations")
+_RUNWAY_CAP = 120.0   # mois : plafond (« ne brûle pas / très sûr ») pour borner les outliers
 
 # Throttle global (≤ 10 req/s) — la Passe B lance 2 threads, le verrou sérialise les requêtes.
 _throttle_lock = threading.Lock()
@@ -232,6 +240,68 @@ def _doc_text(cik: int, accession: str, doc: str) -> str | None:
     return resp.text
 
 
+def _latest_usd_fact(facts: dict, tags: tuple[str, ...], as_of: str,
+                     want_period: bool = False):
+    """
+    Valeur XBRL la plus récente (parmi `tags`, premier disponible) dont `filed ≤ as_of`
+    (POINT-IN-TIME : on filtre sur la date de DÉPÔT, pas la fin de période — un chiffre à fin
+    mars n'est public qu'au dépôt du 10-Q). Départage : `end` max, puis `filed` max.
+    Retourne val (ou (val, start, end) si want_period), None si introuvable.
+    """
+    gaap = facts.get("us-gaap", {})
+    best = None  # (end, filed, val, start)
+    for tag in tags:
+        node = gaap.get(tag)
+        if not node:
+            continue
+        units = node.get("units", {})
+        rows = units.get("USD") or (next(iter(units.values()), []) if units else [])
+        for r in rows:
+            filed, end, val = r.get("filed"), r.get("end"), r.get("val")
+            if filed is None or end is None or val is None or filed > as_of:
+                continue
+            if best is None or (end, filed) > (best[0], best[1]):
+                best = (end, filed, float(val), r.get("start"))
+        if best is not None:
+            break
+    if best is None:
+        return (None, None, None) if want_period else None
+    return (best[2], best[3], best[0]) if want_period else best[2]
+
+
+def _cash_runway(cik10: str, as_of: str) -> float | None:
+    """
+    Mois de trésorerie restants = cash / burn mensuel d'exploitation, POINT-IN-TIME, depuis les
+    XBRL companyfacts. Ne brûle pas de cash (OCF ≥ 0) → runway « long » (sûr, plafond). Données
+    manquantes / période aberrante → None (neutre). Parsing volontairement défensif (leçon EDGAR :
+    un faux chiffre est pire que pas de chiffre).
+    """
+    text = _cached_text(_COMPANYFACTS_URL.format(cik10=cik10), f"facts_{cik10}.json",
+                        FILTERS["edgar_cache_ttl_hours"] * 3600)
+    if text is None:
+        return None
+    try:
+        facts = json.loads(text).get("facts", {})
+    except Exception:
+        return None
+    cash = _latest_usd_fact(facts, _CASH_TAGS, as_of)
+    ocf, start, end = _latest_usd_fact(facts, _OCF_TAGS, as_of, want_period=True)
+    if cash is None or ocf is None or not start or not end:
+        return None
+    try:
+        period_days = (date.fromisoformat(end) - date.fromisoformat(start)).days
+    except (ValueError, TypeError):
+        return None
+    if period_days < 20:
+        return None                      # période aberrante (< ~1 mois) → on ne fait pas confiance
+    monthly_ocf = ocf / (period_days / 30.44)
+    if monthly_ocf >= 0:
+        return _RUNWAY_CAP               # ne brûle pas de cash → sûr
+    if cash <= 0:
+        return 0.0
+    return round(min(cash / (-monthly_ocf), _RUNWAY_CAP), 1)
+
+
 def survival_signals(ticker: str, now: datetime | None = None,
                      window_days: int | None = None) -> dict | None:
     """
@@ -302,10 +372,7 @@ def survival_signals(ticker: str, now: datetime | None = None,
         "dilution_flag": dilution,
         "late_filing_flag": late,
         "going_concern_flag": going_concern,
-        # ponytail: cash_runway via XBRL companyfacts (data.sec.gov/api/xbrl/companyfacts) —
-        # datable mais parsing fragile (annuel vs trimestriel, restatements). None = neutre
-        # au protocole v3 §3. À câbler si le modèle S3 montre que le veto survie en a besoin.
-        "cash_runway": None,
+        "cash_runway": _cash_runway(cik10, as_of),   # mois de trésorerie restants (XBRL, point-in-time)
         "window_days": window_days, "cutoff": cutoff, "as_of": as_of,
     }
 
