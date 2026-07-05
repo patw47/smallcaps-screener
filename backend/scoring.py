@@ -78,6 +78,19 @@ def fit_model(X: np.ndarray, y, lam: float = 1.0) -> ScoreModel:
     return ScoreModel(FEATURE_NAMES, lam=lam).fit(X, y)
 
 
+def load_model(path: str) -> ScoreModel | None:
+    """Charge un ScoreModel entraîné (JSON) depuis `path`, ou None si absent/illisible.
+
+    La production charge ce fichier tel quel ; il est produit UNE FOIS par l'étude S5 (après
+    sign-off du protocole). Absent → None → `p_explode` non calculé (honnête, pas de score).
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            return ScoreModel.from_json(f.read())
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def score_candidates(signals: list[dict], model: ScoreModel | None) -> None:
     """
     Pose `p_explode` (float|None) et `survival_risk` (bool) sur chaque signal (mutation en place).
