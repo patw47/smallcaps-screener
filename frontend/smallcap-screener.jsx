@@ -30,6 +30,9 @@ function normalizeStocks(raw) {
     fuseeStrength: s.fusee_strength ?? null,
     phenixStrength: s.phenix_strength ?? null,
     profileStrength: s.profile_strength ?? 0,
+    // Score de survie v3 (Epic 3) — P(+100 % à 63j) calibrée + drapeau risque survie.
+    pExplode: s.p_explode ?? null,          // null = modèle non entraîné (honnête, pas de score)
+    survivalRisk: !!s.survival_risk,
   }));
 }
 
@@ -85,6 +88,49 @@ function ProfileBadges({ stock }) {
   );
 }
 
+// Score de survie v3 (Epic 3) : LA nouvelle tête d'affiche — P(+100 % à 63j) estimée par le
+// modèle (logistique L2 + calibration), conditionnée à la survie. `pExplode==null` → modèle non
+// entraîné (l'étude S5 le produit après sign-off), affiché honnêtement. Marqueur « non validé »
+// PERMANENT : sur données gratuites (survivor-only) le backtest ne peut que réfuter (protocole
+// v3 §2) ; seule la Validation B (tracker live) peut valider. Drapeau rouge = risque de survie.
+function ExplodeScore({ stock }) {
+  const pct = stock.pExplode != null ? Math.round(stock.pExplode * 1000) / 10 : null;
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12,
+      background: "#7c5cff10", border: "1px solid #7c5cff33", borderRadius: 10, padding: "8px 12px",
+    }}>
+      <span style={{ fontSize: 12, color: "#b3a3ff", fontWeight: 700, letterSpacing: 0.3 }}>
+        🎯 P(+100 % / 63j)
+      </span>
+      {pct != null ? (
+        <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: "#d9ccff" }}>
+          {pct}%
+        </span>
+      ) : (
+        <span title="Le modèle v3 est produit une seule fois par l'étude S5, après sign-off du protocole. En attendant, aucun score n'est inventé."
+              style={{ fontFamily: "monospace", fontSize: 12, color: "#8888aa", cursor: "help" }}>
+          modèle non entraîné
+        </span>
+      )}
+      <span title="Données gratuites = survivor-only → le backtest ne peut que RÉFUTER, jamais confirmer (protocole v3 §2). Seul le tracker live (Validation B) peut valider ce score."
+            style={{
+              background: "#ffcc6622", color: "#ffcc66", fontSize: 9, fontWeight: 700,
+              padding: "1px 6px", borderRadius: 10, cursor: "help",
+              textTransform: "uppercase", letterSpacing: 0.4,
+            }}>non validé</span>
+      {stock.survivalRisk && (
+        <span title="Signal de survie levé (dilution / going-concern / reverse split / retard de dépôt / penny). Risque de queue gauche — l'action peut s'effondrer."
+              style={{
+                marginLeft: "auto", background: "#ff6b6b18", color: "#ff8080", fontSize: 10,
+                fontWeight: 700, padding: "3px 9px", borderRadius: 20, border: "1px solid #ff6b6b44",
+                cursor: "help",
+              }}>⚠ risque survie</span>
+      )}
+    </div>
+  );
+}
+
 function ScoreBar({ score }) {
   const color = score >= 8 ? "#00ff9d" : score >= 6 ? "#f0c040" : "#ff6b6b";
   return (
@@ -131,6 +177,7 @@ function StockCard({ stock, onAnalyze, analysis, isLoading }) {
         </div>
       </div>
 
+      <ExplodeScore stock={stock} />
       <ProfileBadges stock={stock} />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>

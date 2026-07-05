@@ -1076,7 +1076,18 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     # `score` est CONSERVÉ tel quel (l'UI actuelle le lit) ; setup_score en est l'alias.
     for s in candidates:
         s["setup_score"] = s["score"]
-    if FILTERS["pool_mode"] == "legacy":
+
+    # Epic 3 (S4) : score de survie v3 — pose p_explode (None tant qu'aucun modèle entraîné n'est
+    # présent) + survival_risk sur CHAQUE candidat. Additif : ne touche ni aux profils ni au score.
+    from scoring import score_candidates, load_model
+    model = load_model(str(Path(DATA_DIR) / "model_v3.json"))
+    score_candidates(candidates, model)
+
+    if model is not None:
+        # v3 : le modèle pilote l'ordre (dormant tant que S5 n'a pas produit model_v3.json).
+        candidates.sort(key=lambda x: (x.get("p_explode") or 0.0,
+                                       x.get("profile_strength") or 0.0), reverse=True)
+    elif FILTERS["pool_mode"] == "legacy":
         candidates.sort(key=lambda x: (x["score"], x.get("rs_strength") or 0), reverse=True)
     else:
         # Epic 2 : affichage classé par FORCE DE PROFIL. setup_score reste calculé pour
@@ -1091,6 +1102,7 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         "survivors_price_filter": n_tradable,   # ont passé les filtres durs (univers tradable)
         "profile_members": n_all,               # membres Fusée/Phénix retenus (== tradables en legacy)
         "pool_mode": FILTERS["pool_mode"],
+        "v3_model": model is not None,   # True → p_explode pilote l'ordre (Epic 3)
         "enriched": n_surv,
         "candidates": len(candidates),
         "stocks": candidates,
