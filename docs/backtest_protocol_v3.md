@@ -230,13 +230,63 @@ The run prints a `VERDICT §7` line (`PROVISIONAL_PASS` / `FAIL` / `FAIL_SURVIVA
 value-of-survival delta, the per-regime split and the baselines. **Paste that output block here
 verbatim once run** — then §11 applies the decision rule (and §12 the contingency branch).
 
-*(pending execution — awaiting the owner's judged run)*
+**Executed 2026-07-06** on the owner's Docker host (WSL2), code at commit `faaa6a8`
+(includes the `_facts_memo` OOM fix — pure memory plumbing, no frozen §3/§4/§7 change),
+`EDGAR_USER_AGENT` set (survival features live — coverage below confirms). Output verbatim:
+
+```text
+==================================================================
+  STUDY v3 (survival-conditioned) — 2519 tickers · 5y · pas 21j
+  purged 5-fold, embargo 73j · features scoring.§3
+  SIGNÉ (jugé)  ·  docs/backtest_protocol_v3.md
+==================================================================
+  STUDY v3 — 58229 obs · base P(+100%)=0.01
+==================================================================
+  COUVERTURE features survie (% non-None) : dilution 100% · reverse_split 100% · going_concern 100% · cash_runway 88% · sub_dollar 100% · late_filing 100% · insider_net_buying 100%
+  DÉCILE HAUT p_hat (fwd63) : lift +100% = 3.15× (IC95 2.66–3.63) · espérance nette -8.7% · garde ≤−50% 3.66× (DÉPASSE)
+  VALUE-OF-SURVIVAL : ne(complet)=-8.7% vs ne(technique-seul)=-7.4% · Δ=-1.4% · folds meilleurs 3/5 → N'AJOUTE PAS
+    [bull] lift +100% 3.31× · ne -10.2%
+    [bear] lift +100% 3.14× · ne -5.3%
+  BASELINES : meilleure feature seule = insider_net_buying (ne -1.2%) · Phénix v2 ne -5.6% · random ne -3.4% · Brier 0.01
+
+  VERDICT §7 : TERMINAL_FAIL   [lift ✓ · survie-ajoute ✗ · garde ✗ · bat-baselines ✗]
+
+  ✅ RUN SIGNÉ — recopier ce bloc VERBATIM dans docs/backtest_protocol_v3.md §10.
+      Rappel §2 : un PROVISIONAL_PASS reste « non validé » jusqu'à Validation B (tracker).
+==================================================================
+```
 <!-- /VALIDATION_V3_RUNLOG -->
 
 ## 11. Verdict application
 
 <!-- VALIDATION_V3_VERDICT -->
-*(empty — the §7 decision rule applied to the §10 results; every statement must cite a §10 number)*
+**VERDICT: TERMINAL_FAIL** (§7 terminal kill), applied 2026-07-06 to the §10 numbers:
+
+1. **Ranking power — PASS.** Top-decile lift `P(fwd63 ≥ +100%) = 3.15×` base, CI95
+   [2.66, 3.63] excludes 1.0× (§7.1 threshold 1.4×). The model *does* rank explosions —
+   consistently across regimes (bull 3.31×, bear 3.14×).
+2. **Value of survival — FAIL (the kill criterion).** Full-model top-decile net expectancy
+   −8.7% vs technicals-only −7.4%: Δ = **−1.4%** (the survival features make expectancy
+   *worse*), better in only 3/5 folds (needed ≥ 4/5, margin CI excluding 0). This is
+   **failure mode A** (§12): the left tail is not in the filings either. Coverage was real
+   (all survival features ≥ 88% non-None), so this is not a neutral-fallback artefact.
+3. **Left-tail guard — FAIL.** Top-decile `P(fwd63 ≤ −50%) = 3.66×` base (cap 1.5×). Same
+   barbell as v2 Phénix: the decile that concentrates doublers concentrates crashes harder.
+4. **Beats baselines — FAIL.** Top-decile net expectancy −8.7% loses to random tradable
+   picks (−3.4%), to the best single feature (`insider_net_buying`, −1.2%) and to raw v2
+   Phénix membership (−5.6%). The full model is the *worst* of the four.
+5. **Calibration — reported.** Brier 0.01 against a 0.01 base rate (uninformative at this
+   rarity; moot given 2–4).
+
+**Terminal-kill rule (§7):** top-decile net expectancy ≤ 0 even with survival features
+(−8.7%) **AND** criterion 2 fails → the micro-cap right tail is **unscoreable on free
+survivor data**. The survival-conditioning thesis is dead; no consolation re-fit; no v4
+fishing expedition. Three pre-registered theses (v1 accumulation, v2 tail profiles, v3
+survival-conditioned scoring) have now failed on free data — this is the recorded conclusion.
+
+No `data/model_v3.json` is persisted: `p_explode` stays `null` in production, the frontend
+keeps showing "modèle non entraîné" + the permanent "non validé" marker. §12 selects the
+follow-up branch.
 <!-- /VALIDATION_V3_VERDICT -->
 
 ## 12. Contingency — what remains if the verdict is bad
@@ -286,3 +336,15 @@ tracker running in parallel. Mode A → (5) or (6): the signal is nowhere in fre
 ship the honest watchlist and document the null. **Excluded in every case:** re-tuning thresholds
 or features after seeing the verdict to force a pass. A fourth thesis must be a new pre-registered
 epic, never a re-fit.
+
+---
+
+**Branch applied (2026-07-06, per the §11 verdict — failure mode A, terminal kill):**
+alternatives **(5) + (6)**. The product is a **watchlist / research tool** — it already behaves
+as one (no persisted model, `p_explode = null`, permanent "non validé" badges, live tracker
+running as Validation B of the *v2 profiles*, not of any expectancy claim). The null result is
+the documented conclusion: **retail-accessible free data does not support a micro-cap explosion
+edge** — three pre-registered failures (v1/v2/v3) are the evidence, and the Medium case study is
+its write-up. Alternatives (1)/(2) remain listed for a hypothetical future epic but are *not*
+selected: mode A means the survival signal added nothing even before the survivor-bias handicap,
+so buying or reconstructing delisted data attacks the wrong bottleneck.
