@@ -133,3 +133,54 @@ def notify_new_triggers(candidates: list[dict], *, state_path: Path = ALERT_STAT
         state[s["ticker"]] = now.isoformat()
     _save_state(state_path, state)
     return [s["ticker"] for s in fresh]
+
+
+# ---------------------------------------------------------------------------
+# Notification des nouvelles entrées en cohorte v4 (Epic 4 S3)
+# ---------------------------------------------------------------------------
+
+def notify_new_v4_entries(cohort: list[dict], *, state_path: Path = ALERT_STATE_FILE,
+                          dedup_days: int | None = None, now: datetime | None = None,
+                          send_fn=send_telegram) -> list[str]:
+    """
+    Notifie les tickers NOUVELLEMENT en cohorte v4 (protocole v4 §2 — la seule liste à
+    espérance historique positive). Même anti-doublon persistant que l'alerte cassure
+    (préfixe d'état « v4: » pour éviter toute collision avec elle). Le message rappelle
+    le statut : recherche statistique en validation forward, pas un conseil.
+    """
+    dedup_days = FILTERS["alert_dedup_days"] if dedup_days is None else dedup_days
+    now = now or datetime.now(tz=timezone.utc)
+
+    state = _load_state(state_path)
+    fresh: list[dict] = []
+    for e in cohort:
+        tk = e.get("ticker")
+        if not tk:
+            continue
+        last = state.get(f"v4:{tk}")
+        if last:
+            try:
+                if now - datetime.fromisoformat(last) < timedelta(days=dedup_days):
+                    continue
+            except (TypeError, ValueError):
+                pass
+        fresh.append(e)
+
+    if not fresh:
+        return []
+
+    def _line(e: dict) -> str:
+        resid = e.get("resid")
+        r = f" · résidu {resid:+.1%}" if resid is not None else ""
+        return f"• <b>{e.get('ticker')}</b> — {e.get('price')}$ · 1m {e.get('change_1m'):+.1%}{r}"
+
+    text = ("🧪 <b>Cohorte v4 — {} nouvelle(s) entrée(s)</b>\n".format(len(fresh))
+            + "\n".join(_line(e) for e in fresh)
+            + "\n<i>Recherche statistique en validation forward (t=0,47) — pas un conseil.</i>")
+    if not send_fn(text):
+        return []
+
+    for e in fresh:
+        state[f"v4:{e['ticker']}"] = now.isoformat()
+    _save_state(state_path, state)
+    return [e["ticker"] for e in fresh]

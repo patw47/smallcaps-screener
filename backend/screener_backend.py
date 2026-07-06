@@ -1039,11 +1039,12 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     # sélection, ni le tri, ni les alertes — elle est consignée dans le snapshot (§4).
     scan_state["phase"] = "v4_cohort"
     try:
-        from v4 import build_cohort
-        v4_cohort, v4_note = build_cohort(survivors, prices, bench_close)
+        from v4 import build_cohort, build_tracking
+        v4_cohort, v4_note, v4_mkt21, v4_prelist = build_cohort(survivors, prices, bench_close)
+        v4_tracking = build_tracking(prices, HISTORY_DIR)
     except Exception as e:  # jamais fatal : l'instrumentation ne casse pas le scan
-        v4_cohort, v4_note = [], f"erreur (ignorée) : {type(e).__name__}"
-    print(f"[v4] {v4_note}")
+        v4_cohort, v4_note, v4_mkt21, v4_prelist, v4_tracking = [], f"erreur (ignorée) : {type(e).__name__}", None, [], []
+    print(f"[v4] {v4_note} · suivi : {len(v4_tracking)} titres")
 
     # --- Sélection des survivants à enrichir (Passe B coûteuse) ---
     # Epic 2, mode "tradability" : la sélection est faite par les DÉTECTEURS DE PROFILS
@@ -1134,6 +1135,9 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         "v3_model": model is not None,   # True → p_explode pilote l'ordre (Epic 3)
         "v4_cohort": v4_cohort,          # Epic 4 : cohorte du jour (instrumentation forward)
         "v4_note": v4_note,              # raison lisible (marché haussier → cohorte vide)
+        "v4_mkt21": v4_mkt21,            # état du marché (IWM 21 j) affiché en tête
+        "v4_prelist": v4_prelist,        # jours haussiers : règles-titre seules, sans EDGAR
+        "v4_tracking": v4_tracking,      # suivi des cohortes passées (§A.6, affichage)
         "enriched": n_surv,
         "candidates": len(candidates),
         "stocks": candidates,
@@ -1143,13 +1147,14 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     OUTPUT_FILE.write_text(json.dumps(output, indent=2, ensure_ascii=False))
     _write_snapshot(output)   # historique daté pour le suivi de performance
 
-    # --- Alerte Telegram sur les NOUVEAUX déclenchés (Sprint 3) — jamais fatal ---
+    # --- Alerte Telegram sur les NOUVELLES entrées en cohorte v4 (Epic 4 S3) — jamais fatal.
+    # Remplace l'alerte cassure (déclencheur mesuré non-prédictif, 1.0× — protocole v4 A.1).
     # Import paresseux : évite un cycle d'import (alerts importe FILTERS d'ici).
     try:
-        from alerts import notify_new_triggers
-        alerted = notify_new_triggers(candidates)
+        from alerts import notify_new_v4_entries
+        alerted = notify_new_v4_entries(v4_cohort)
         if alerted:
-            print(f"[alert] {len(alerted)} déclenché(s) notifié(s) : {', '.join(alerted)}")
+            print(f"[alert] {len(alerted)} entrée(s) v4 notifiée(s) : {', '.join(alerted)}")
     except Exception as e:
         print(f"[alert] erreur (ignorée) : {e}")
 
