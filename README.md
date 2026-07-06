@@ -152,6 +152,16 @@ See [docs/backend.md](docs/backend.md) for the exact factors and functions.
   - **Total loss (bankruptcy/delisting) is not measurable here**: dead companies are absent from
     free data by construction, so even the left-tail numbers above are *underestimates*. This is
     the survivorship ceiling that caps every number in this README.
+  - **Basket math — the goal was never to beat the index on average** (an ETF does that); it was
+    asymmetric bets: cheap shares, many names, one doubler pays for the rest. That intuition is
+    computable: `P(≥1 doubler) = 1 − (1−p)^N`. At p≈3 % (v3 top decile) you need **~23 names for a
+    coin-flip** chance of catching one doubler and **~76 for 90 %**; at p≈4.6 % (Phénix), ~15 and
+    ~49. **The trap**: expectancy is additive — a basket of negative-EV names (−9 % to −11 % each,
+    *doublers already included in that mean*) is just a bigger negative-EV basket. Diversification
+    narrows the variance around a losing mean; it cannot flip its sign. The basket thesis only
+    works with per-name expectancy ≥ 0, which needs the true crash rate (delisted-inclusive data)
+    — pre-registered as contingency §12-alt-4, not pursued on free data. (Also: picks cluster in
+    time and regime, so the independence assumption makes these N slightly optimistic.)
   - These are descriptive backtest frequencies, not a live score and not investment advice.
 - **Live performance tracking**: every scan writes a dated snapshot of its picks to
   `data/history/` (ticker, entry price, score, key signals). `GET /api/performance` then
