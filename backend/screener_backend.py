@@ -1034,6 +1034,17 @@ def run_scan(tickers: list[str] | None = None) -> dict:
             cat = reason.split(":")[0]
             rejection_counts[cat] = rejection_counts.get(cat, 0) + 1
 
+    # --- Cohorte v4 (Epic 4, protocole SIGNÉ) : instrumentation forward, purement additive ---
+    # Calculée sur le pool tradable COMPLET, avant la sélection de profils. N'affecte ni la
+    # sélection, ni le tri, ni les alertes — elle est consignée dans le snapshot (§4).
+    scan_state["phase"] = "v4_cohort"
+    try:
+        from v4 import build_cohort
+        v4_cohort, v4_note = build_cohort(survivors, prices, bench_close)
+    except Exception as e:  # jamais fatal : l'instrumentation ne casse pas le scan
+        v4_cohort, v4_note = [], f"erreur (ignorée) : {type(e).__name__}"
+    print(f"[v4] {v4_note}")
+
     # --- Sélection des survivants à enrichir (Passe B coûteuse) ---
     # Epic 2, mode "tradability" : la sélection est faite par les DÉTECTEURS DE PROFILS
     # (Fusée/Phénix, percentiles cross-sectionnels du protocole v2 §3) — seuls les MEMBRES
@@ -1121,6 +1132,8 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         "profile_members": n_all,               # membres Fusée/Phénix retenus (== tradables en legacy)
         "pool_mode": FILTERS["pool_mode"],
         "v3_model": model is not None,   # True → p_explode pilote l'ordre (Epic 3)
+        "v4_cohort": v4_cohort,          # Epic 4 : cohorte du jour (instrumentation forward)
+        "v4_note": v4_note,              # raison lisible (marché haussier → cohorte vide)
         "enriched": n_surv,
         "candidates": len(candidates),
         "stocks": candidates,
@@ -1174,6 +1187,10 @@ def _write_snapshot(output: dict) -> None:
             "scanned_at": output["scanned_at"],
             "candidates": len(picks),
             "picks": picks,
+            # Epic 4 (protocole v4 §4) : la cohorte du jour, matière première du jugement
+            # forward. v4_note documente les jours à cohorte vide (marché haussier ≠ panne).
+            "v4_cohort": output.get("v4_cohort", []),
+            "v4_note": output.get("v4_note", ""),
         }
         ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         (HISTORY_DIR / f"{ts}.json").write_text(json.dumps(snap, indent=2, ensure_ascii=False))
