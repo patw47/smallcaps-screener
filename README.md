@@ -1,25 +1,34 @@
 # SmallCaps Screener
 
-A Dockerized dashboard that discovers and ranks US small-cap stocks. The goal is
-to surface promising names **early** — quiet accumulation and tight bases, *before*
-the move — rather than stocks that have already run.
-
-It is a decision-support tool: it discovers, scores, and ranks. It does not trade.
+A Dockerized dashboard that discovers and tracks US small-cap stocks. After three
+pre-registered theses failed honest backtests, it is now explicitly a **watchlist /
+research tool**: it surfaces candidates, displays the **measured historical
+probabilities** (with their two-sided risks), and runs a forward-validation
+experiment (protocol v4) — it does not claim an edge and it does not trade.
 The final call stays human. The interface is in French; this documentation is in
 English.
 
-> **⚠️ Thesis pivot (Epic 3, in progress).** Two pre-registered theses have failed. **v1**
-> ("catch quiet accumulation early", described below): every score decile negative net-of-cost
-> vs IWM, every year. **v2** (tail-hunting profiles **Fusée** / **Phénix**,
-> [docs/backtest_protocol_v2.md](docs/backtest_protocol_v2.md)): both FAIL Validation A — Fusée
-> no real lift, Phénix a real +100 % lift (4.59×) but a barbell eaten by the left tail
-> (net expectancy −11 %). The right tail is *found*; the failure is **not dying** (left tail) and
-> **honest measurement** under free, survivor-biased data. **Epic 3** pivots to
-> **survival-conditioned right-tail scoring**: an interpretable, calibrated `P(fwd63 ≥ +100 %)`
-> model over frozen price features **plus SEC/EDGAR survival signals** (dilution, going-concern,
-> reverse split, cash runway), validated by **purged walk-forward** and the live tracker. The
-> binding spec is **[docs/backtest_protocol_v3.md](docs/backtest_protocol_v3.md)**. The sections
-> below still describe the v1 screener that stays in production while v3 is built.
+> **⚠️ Where the project stands (2026-07-06).** Three pre-registered theses were judged and
+> **all three failed**:
+> **v1** ("catch quiet accumulation early"): every score decile negative net-of-cost vs IWM,
+> every year ([docs/backtest_protocol.md](docs/backtest_protocol.md)).
+> **v2** (tail-hunting profiles **Fusée** / **Phénix**): Fusée no real +100 % lift; Phénix a
+> real lift (4.59×) but a barbell eaten by the left tail — net expectancy −11 %
+> ([docs/backtest_protocol_v2.md](docs/backtest_protocol_v2.md)).
+> **v3** (survival-conditioned `P(fwd63 ≥ +100 %)` model on price + EDGAR features):
+> **TERMINAL_FAIL** — ranking works (3.15× lift) but expectancy stays negative and the
+> survival veto makes it *worse* ([docs/backtest_protocol_v3.md](docs/backtest_protocol_v3.md)).
+> The documented conclusion: **free, survivor-biased data does not support a micro-cap
+> explosion edge.** No score is presented as an edge; `p_explode` is permanently `null`.
+>
+> **Epic 4 (current, signed 2026-07-06)** runs a *forward-only* experiment on the one
+> historically positive cell found in the autopsies: the **washout reversion basket** —
+> cheap fallen stocks, no pending dilution, in a falling market (+5.9 % mean fwd63
+> in-sample, t=0.47 → statistically unproven, hence forward validation). The binding spec is
+> **[docs/backtest_protocol_v4.md](docs/backtest_protocol_v4.md)**: every scan records the
+> day's qualifying cohort; judgment starts after ≥ 12 months of independent windows
+> (≥ July 2027). Until then every number shown is a **descriptive historical frequency,
+> not advice**.
 
 ## How it works
 
@@ -51,10 +60,15 @@ you arrive after the party. Keeping the hard filters minimal and letting the **s
 rank means early setups aren't eliminated; the accumulation-led score floats the best
 candidates to the top.
 
-## Scoring model
+## Scoring model (internal funnel ranking only)
 
-The scoring approach is **not settled** — it is a config flag (`FILTERS["scoring_mode"]`),
-to be decided by a larger backtest:
+> **Status after the three verdicts:** the score **failed validation as an edge** (v1 study)
+> and is **no longer displayed in the frontend**. It survives only as the internal ranking
+> that decides which Pass A survivors get the expensive Pass B `.info` calls. Weight
+> calibration is permanently cancelled. The dashboard instead shows the v4 cohort, the
+> extreme-zone profiles with their two-sided measured stats, and the cohort tracking table.
+
+The scoring approach is a config flag (`FILTERS["scoring_mode"]`):
 
 - **`binary` (default)** — the original additive "checkbox" score. Known and conservative,
   but caps around 8 (some signals are near-unreachable).
@@ -89,10 +103,41 @@ Accumulation (4) is the top signal. **Sensors v2** (Sprint 4) reworked the two p
 without changing any weight: **compression** is now the self-percentile of ATR20/ATR90
 against the stock's *own* 252-day history (v1's raw `< 0.70` threshold fired on ~0.8 % of
 names — effectively dead), and **accumulation** is Chaikin Money Flow + the up/down volume
-ratio (more robust than v1's binary OBV on gappy names). The v1 sensors stay switchable via
-`FILTERS["sensors_version"]` for the Sprint 6 backtest. Weight calibration is Sprint 8.
+ratio (more robust than v1's binary OBV on gappy names).
 
 See [docs/backend.md](docs/backend.md) for the exact factors and functions.
+
+## Epic 4 — the washout reversion cohort (forward validation, running)
+
+The signed protocol [docs/backtest_protocol_v4.md](docs/backtest_protocol_v4.md) freezes
+**four entry rules** (§2). A stock enters the day's cohort only if **all four** hold:
+
+| # | Rule | Frozen threshold |
+| --- | --- | --- |
+| §2.1 | Cheap | price ≤ **8 $** |
+| §2.2 | No pending dilution | EDGAR `dilution_flag` strictly `False` (unknown/`None` does **not** qualify) |
+| §2.3 | Fallen | `change_1m` ≤ **−3 %** |
+| §2.4 | Falling market | IWM 21-trading-day return **< 0** |
+
+Every scan (`backend/v4.py`, wired into `run_scan`):
+
+- **Bear-market days** — builds the cohort (EDGAR checked only for names already passing the
+  price rules), computes observational beta/residual vs IWM (126 d window; `resid = chg1m −
+  β·mkt21`), sorts most-oversold first, writes it into the dated snapshot, and sends a
+  **Telegram alert** for genuinely new entries (dedup-persistent, disclaimer embedded).
+- **Rising-market days** — the method does not apply (§2.4); the dashboard shows a
+  **pre-list** instead (price rules only, no EDGAR, max 12) so you see what *would* qualify.
+- **Always** — a **tracking table** replays every past cohort entry against the frozen
+  trajectory checkpoints (§A.6): at 1 week, +3 % or better multiplies the historical odds of
+  a +100 % explosion by ~4 and halves crash odds — but stops **destroy** the combo's
+  reversion return (+1.4 % → −0.4 %), so checkpoints are information, never sell rules.
+  The 63-day window closes with an explosion (≥ +100 %) / crash (≤ −50 %) / close label.
+
+**Judgment (§4, first read ≥ 12 months, ≥ 8 non-overlapping 63 d windows):** success =
+cohort mean > 0 with t ≥ 2 **and** crashes ≤ 1.5× explosions; kill = mean ≤ 0 or t < 1
+after 8 windows, or crashes > 2× explosions. Any tweak = protocol revision + clock reset.
+Every UI label is defined in [docs/glossaire.md](docs/glossaire.md) with its measured
+number and source — new displayed metric ⇒ glossary entry + tooltip (review rule).
 
 ## Validation & monitoring
 
@@ -104,10 +149,10 @@ See [docs/backend.md](docs/backend.md) for the exact factors and functions.
   round-trip + a 1 %-of-ADV capacity filter), and baselines (**binary vs continuous vs best
   single factor vs random**). It follows a **pre-registered protocol** —
   [docs/backtest_protocol.md](docs/backtest_protocol.md) — with a **calibration / validation
-  split** and success criteria fixed *before* the first run. This study, and it alone,
-  authorizes the Sprint 8 weight calibration. Every report prints the **survivorship-bias**
-  warning (results are an upper bound). The older single-window `--sweep` / default modes
-  remain for quick checks.
+  split** and success criteria fixed *before* the first run. Its verdict (FAIL, all deciles
+  negative) permanently cancelled weight calibration. Every report prints the
+  **survivorship-bias** warning (results are an upper bound). The older single-window
+  `--sweep` / default modes remain for quick checks.
 - **The v2 tail-hunting study** (`backend/backtest.py --study-v2`): the study for the current
   thesis. On the **tradable** universe (no thesis filters), at each monthly as-of date it labels
   the full cross-section with the **production detectors** (`profiles.detect_profiles` — the same
@@ -198,8 +243,11 @@ curl http://localhost:8000/api/performance
 - **Setup vs trigger.** `setup_score` (alias of `score`) says *"the spring is coiled"* —
   a watchlist candidate. `triggered` says *"the breakout is happening now"* (close above the
   recent pivot **and** a volume surge). Every candidate carries both plus `days_since_trigger`.
-  A **Telegram alert** pings newly triggered names (`setup_score ≥ alert_min_score`,
-  deduped); set `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` to enable — absent, it's silently off.
+- **Telegram alerts fire on new v4 cohort entries** (Epic 4 — the only list with positive
+  historical expectancy), not on breakouts anymore. Set `TELEGRAM_BOT_TOKEN` /
+  `TELEGRAM_CHAT_ID` to enable — absent, alerting is silently off and the scan is unaffected.
+  Messages embed the disclaimer (forward validation, t=0.47, not advice) and are deduped
+  per ticker (`alert_dedup_days`).
 - **Yahoo rate-limits `.info` hard.** Hitting it with many parallel requests bans the
   IP (`YFRateLimitError`). Pass B therefore uses a small thread pool (2) + backoff, and
   only enriches the top ~150 survivors. This is by design — do not raise `enrich_workers`.
@@ -212,12 +260,12 @@ curl http://localhost:8000/api/performance
   batches (free); only the top ~150 survivors reach the costly `.info` calls.
 - Market data comes from public endpoints and `yfinance`; field quality varies by
   ticker (small caps especially). The reliable signals are price/volume based.
-- The dashboard shows each stock's **tail-hunting profile** prominently: a 🚀 **Fusée** or
-  🔥 **Phénix** badge (both if it qualifies for both), with a profile filter (All / Fusée /
-  Phénix) and per-profile counts. **Both badges carry a "non validé" marker** since Validation A
-  failed for each (§6, see the study section above): the badges are **research signals, not
-  validated edges** — the hover tooltip carries the Sprint 5 numbers. They remain useful for
-  surfacing candidates; Validation B (the tracker) may still confirm a profile forward.
+- The dashboard leads with the **v4 section** (today's cohort or the rising-market pre-list,
+  the frozen measured stats band, and the cohort tracking table), then the **extreme zones**:
+  🚀 **Fusée** / 🔥 **Phénix** badges with their **two-sided measured stats** (explosion lift
+  *and* crash lift) and a per-stock risk dossier. Every label has a tooltip mirrored in
+  [docs/glossaire.md](docs/glossaire.md). All profile badges carry the "non validé" marker
+  (Validation A failed for both); the technical score is no longer displayed.
 - This is a screening tool, **not financial advice**.
 
 ## Stack
@@ -269,7 +317,7 @@ Screener thresholds and weights live in the `FILTERS` dict at the top of
 | `ANTHROPIC_API_KEY` | Frontend (`VITE_ANTHROPIC_API_KEY`) | Only for AI analysis | Key for the browser-side Claude analysis button. |
 | `SCAN_EVERY_HOURS` | Backend | No (default 24) | Interval between automatic background scans. |
 | `SCAN_TRADING_DAYS_ONLY` | Backend | No (default `true`) | Skip weekend auto-scans (market closed → redundant snapshots). |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Backend | No | Enable breakout alerts. Absent → alerting silently disabled. |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Backend | No | Enable v4-cohort alerts. Absent → alerting silently disabled. |
 | `EDGAR_USER_AGENT` | Backend | No | SEC-compliant identifying UA (name + email) for Form 4 insider data. Absent → EDGAR disabled (neutral). |
 | `DATA_DIR` | Backend | No (default `/app/data`) | Where the cache and history are written (used by tests). |
 
@@ -291,13 +339,17 @@ Screener thresholds and weights live in the `FILTERS` dict at the top of
 backend/
 ├── screener_backend.py   # discovery, two-pass funnel, scoring, snapshots
 ├── api.py                # FastAPI app (non-blocking scan, daily scheduler, endpoints)
-├── backtest.py           # offline forward-return validation
+├── v4.py                 # Epic 4 cohort (frozen rules §2), pre-list, tracking (§A.6)
+├── alerts.py             # Telegram alerts (v4 cohort entries, persistent dedup)
+├── edgar.py              # SEC/EDGAR point-in-time survival signals (dilution, runway…)
+├── profiles.py           # Fusée/Phénix detectors (frozen, protocol v2)
+├── backtest.py           # judged studies v1/v2/v3 (archived verdicts) + quick checks
 ├── track.py              # live performance tracking of past selections
 └── tests/                # offline deterministic unit tests
 frontend/
-├── smallcap-screener.jsx # dashboard UI (Fusée/Phénix profile badges; editable since Epic 2)
+├── smallcap-screener.jsx # dashboard UI (v4 section, tracking, extreme zones, tooltips)
 └── src/main.jsx
-docs/                     # architecture, backend, api, frontend, deployment
+docs/                     # architecture, protocols v1–v4, glossary, api, frontend
 ```
 
 ## Documentation
@@ -307,6 +359,10 @@ docs/                     # architecture, backend, api, frontend, deployment
 - [API reference](docs/api.md)
 - [Frontend](docs/frontend.md)
 - [Deployment and operations](docs/deployment.md)
+- [Glossary — every displayed metric, its tooltip and its source](docs/glossaire.md)
+- Pre-registered protocols (frozen, with verdicts):
+  [v1](docs/backtest_protocol.md) · [v2](docs/backtest_protocol_v2.md) ·
+  [v3](docs/backtest_protocol_v3.md) · **[v4 (active, forward)](docs/backtest_protocol_v4.md)**
 
 ## Security note
 
