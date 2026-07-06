@@ -62,8 +62,8 @@ threshold) are *displayed*, never used to re-rank or tune.
 
 - The daily scan lists the qualifying names ("cohorte v4") with threshold margins.
 - Frozen historical stats shown next to them, labelled **in-sample 2021-2026, survivor-only,
-  post-hoc (t = 0.47)**: the §1 numbers and the checkpoint table (P(explosion) roughly ×4 /
-  P(crash) ÷2 above vs below the +3 % @ 1-week mark; full table in the case study).
+  post-hoc (t = 0.47)**: the Appendix A tables — A.3 (funnel), A.6 (trajectories and
+  checkpoint conditional probabilities). The UI displays THESE numbers verbatim, no others.
 - Checkpoints are **display-only**. No automatic exit rule: measured, tight stops *degrade*
   this basket (they cut the reversion that generates its return: E +1.4 % → −0.4 %).
 - Permanent disclaimer: "Recherche statistique en validation forward — espérance historique
@@ -111,3 +111,122 @@ frozen artifacts of the 2026-07-06 exploration — they are documentation, not p
 <!-- VALIDATION_V4_RUNLOG -->
 *(pending — instrumentation not yet live; protocol not yet signed)*
 <!-- /VALIDATION_V4_RUNLOG -->
+
+---
+
+## Appendix A — Measured evidence (exploration of 2026-07-06, ALL in-sample)
+
+Everything below was measured on the 5-year quarterly grid (2 519 tradable tickers, 19 666
+ticker×date observations, fwd63 labels, −1 % round-trip cost where "net"). Survivor-only
+data throughout → every number is an optimistic ceiling. These tables are **frozen
+documentation**: they are what the UI may display (§3) and what the forward judgment will be
+compared against — they are NOT tunable parameters.
+
+### A.1 Portrait-robot — the 161 explosions vs 1 932 same-date controls
+
+| Indicator at t0 | Exploders | Controls | Ratio |
+|---|---|---|---|
+| Going-concern flag (EDGAR) | 22.4 % | 5.1 % | **4.4×** |
+| Late filing (NT 10-Q/K) | 10.6 % | 3.0 % | **3.6×** |
+| Pending dilution (S-1/S-3/424B) | 37.9 % | 24.2 % | 1.6× |
+| Cash runway (median) | 21 months | 120 months | — |
+| Accumulation CMF > 0 | 46.0 % | 38.3 % | 1.2× |
+| Breakout trigger active | 1.2 % | 1.2 % | 1.0× |
+| Net insider buying | **0.0 %** | 3.4 % | 0× |
+| ≥1 8-K filed in next 95 days | 83.9 % | 82.7 % | 1.0× |
+| % of 52-week high (median) | 46 % | 73 % | — |
+| 1-month return (median) | −5.1 % | −3.0 % | — |
+| Price (median) | 6.5 $ | 13.2 $ | — |
+
+### A.2 Explosions vs crashes head-to-head (161 vs 740) — why distress cannot rank
+
+| Indicator at t0 | Exploders | Crashers |
+|---|---|---|
+| Going-concern (ratio vs own controls) | 4.35× | **5.19×** |
+| Late filing (ratio) | 3.57× | **3.86×** |
+| **Pending dilution (ratio)** | 1.57× | **2.14×** |
+| Cash runway (median) | 21.4 mo | 20.3 mo |
+| Price (median) | **6.46 $** | 14.16 $ |
+| 1-month return (median) | −5.1 % | −1.6 % |
+| CMF > 0 | 46.0 % | 40.1 % |
+| Phénix profile | 6.8 % | 10.0 % |
+
+Distress flags mark the barbell zone (both tails), slightly crash-biased → they can veto
+nothing and select nothing. The only clean explosion-side tilts: **cheaper price, fresher
+fall, absence of pending dilution** — the §2 entry rules.
+
+### A.3 The differentiator filter — measured funnel and stability
+
+| Set | n | P(expl) | P(crash) | E net fwd63 | Median net |
+|---|---|---|---|---|---|
+| Universe | 19 666 | 0.82 % | 3.77 % | −3.9 % | −4.8 % |
+| Price ≤ 8 $ | 5 053 | 2.02 % | 4.53 % | −0.4 % | −4.6 % |
+| Combo (price + no-dilution + fall) | 1 733 | 2.19 % | 2.77 % | +4.2 % | −0.4 % |
+| **Combo + falling market (= v4 entry)** | 1 193 | 2.0 % | 1.9 % | **+5.9 %** | **+1.6 %** |
+| Combo + CMF > 0 (not retained — n too small) | 322 | 3.73 % | 3.11 % | +6.4 % | −0.3 % |
+
+Stability: yearly E net = −6.2 % (2021), +0.6 % (2022), +9.8 % (2023), +6.9 % (2024),
++6.2 % (2025), −4.8 % (2026 partial) → 4/6 positive. Date-cohorts: 10/18 positive, range
+−27.4 % to +26.4 %. **Date-level t = 0.47** — the whole reason judgment is forward-only.
+Basket of 10 same-day names, 50 000 draws: E +1.4 %, median +0.9 %, worst-5 % −26.6 %,
+P(winning basket) 52 %.
+
+### A.4 Market × stock square (1-month direction) — why the market condition exists
+
+| Cell | P(crash) | E net fwd63 |
+|---|---|---|
+| Market ↓ · stock ↓ | 2.8 % | **+0.3 %** |
+| Market ↓ · stock ↑ (lone riser) | 6.7 % | −5.7 % |
+| Market ↑ · stock ↓ (lone faller) | 6.2 % | −7.3 % |
+| Market ↑ · stock ↑ | 4.0 % | −6.7 % |
+
+### A.5 Beta test — the oversold gradient inside the v4 entry (mechanism, §1)
+
+Residual = 1-month return − (126-day beta × IWM 21-day return):
+
+| Sub-group of v4 entry | n | P(expl) | P(crash) | E net | Median |
+|---|---|---|---|---|---|
+| Beta-explained fall (resid > −3 %) | 381 | 1.6 % | 2.6 % | +2.9 % | −0.3 % |
+| Mixed (−3 % to −10 %) | 366 | 1.4 % | 1.6 % | +5.1 % | +2.4 % |
+| **Deep overshoot (resid < −10 %)** | 406 | **3.2 %** | 1.7 % | **+11.2 %** | **+5.3 %** |
+
+Recorded per cohort name (observational, §4) — never an entry rule without a v4.1 revision.
+
+### A.6 Checkpoints — trajectories, conditional probabilities, and why exits are display-only
+
+Median cumulative return from t0 (161 explosions / 740 crashes):
+
+| Horizon | Exploders | Crashers |
+|---|---|---|
+| 3 days | +5.6 % | −1.2 % |
+| 1 week | +5.9 % | −5.7 % |
+| 2 weeks | +10.9 % | −10.6 % |
+| 1 month | +19.7 % | −23.1 % |
+| 2 months | +79.5 % | −45.0 % |
+| 3 months | +127.3 % | −59.3 % |
+| 6 months | +103.1 % | **−63.9 %** |
+
+Explosions mostly hold at 6 months (median keeps +103 %; 1/3 keep rising); crashes keep
+falling (majority lower at 6 months). **Whipsaw cost of early exits**: 32 % of future
+exploders were still negative at 3 days, 30 % at 2 weeks, 20 % at 1 month.
+
+Conditional on position at the 1-week checkpoint (all stocks):
+
+| At 1 week | P(explosion by 3 mo) | P(crash) | E[remaining return → 3 mo] |
+|---|---|---|---|
+| ≥ +3 % | **1.9 %** | **2.4 %** | −3.0 % |
+| < +3 % | 0.5 % | 4.2 % | −2.7 % |
+
+The checkpoint moves **probabilities** (×4 explosion odds, ÷2 crash odds) but not
+**expectancy**: the post-checkpoint residual return is negative everywhere and *worsens* as
+the bar rises (at 3 days: −3.2 % for keep-if-≥−10 % → −10.2 % for keep-if-≥+15 %) — early
+jumpers mean-revert. Exit-rule simulation (10-name baskets, 50 000 draws):
+
+| Rule | E (Phénix basket) | Worst 5 % | E (v4 combo basket) |
+|---|---|---|---|
+| Hold 63 days | −7.4 % | −36.8 % | **+1.4 %** |
+| Exit at 2 w if < 0 % | −7.0 % | −20.7 % | — |
+| Tight stop (3 d < 0, then 2 w < +5 %) | −3.3 % | −13.0 % | **−0.4 %** |
+
+On the v4 combo the tight stop **destroys** the return (it cuts the reversion that generates
+it) → §3: checkpoints inform, they never trigger exits.
