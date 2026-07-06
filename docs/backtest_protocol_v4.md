@@ -1,13 +1,17 @@
-# Pre-registered protocol v4 — "washout reversion basket" (DRAFT — NOT SIGNED)
+# Pre-registered protocol v4 — "washout reversion basket" (SIGNED)
+
+**Signed off by the owner on 2026-07-06.** Entry rules (§2), judgment scheme and criteria
+(§4) and the Appendix A display artifacts are now BINDING. Any change = v4.1 revision +
+forward clock restart.
 
 > Naming note: an earlier draft called this the "innocent-fall" basket, on the story that the
 > qualifying stocks fall *because of* the market. The per-stock beta test (2026-07-06, below)
 > **refuted that story** while leaving the entry rules intact — see §1. Renamed accordingly.
 
-**Status: DRAFT.** Non-binding until the owner signs it off (§0 of every protocol in this
-project: the anti-cheat barrier cannot self-approve). Written 2026-07-06, immediately after
-the Epic 3 TERMINAL_FAIL verdict and the exploration session documented in the Medium case
-study ("autopsie des explosions", "carré marché × titre", "filtre différenciateur").
+Written 2026-07-06, immediately after the Epic 3 TERMINAL_FAIL verdict and the exploration
+session documented in the Medium case study ("autopsie des explosions", "carré marché ×
+titre", "filtre différenciateur"). Drafted, challenged (mechanism corrected by the beta
+test), completed with the Appendix A evidence, then signed the same day.
 
 ## 0. What this is — and what it is NOT
 
