@@ -163,7 +163,13 @@ fall, absence of pending dilution** — the §2 entry rules.
 | Price ≤ 8 $ | 5 053 | 2.02 % | 4.53 % | −0.4 % | −4.6 % |
 | Combo (price + no-dilution + fall) | 1 733 | 2.19 % | 2.77 % | +4.2 % | −0.4 % |
 | **Combo + falling market (= v4 entry)** | 1 193 | 2.0 % | 1.9 % | **+5.9 %** | **+1.6 %** |
+| Combo + RISING market (counterfactual) | 540 | 2.6 % | 4.6 % | +0.4 % | −5.4 % |
 | Combo + CMF > 0 (not retained — n too small) | 322 | 3.73 % | 3.11 % | +6.4 % | −0.3 % |
+
+The falling-market condition is retained on this measured contrast (+5.9 % vs +0.4 %; the
+same holds inside the best sub-group: deep overshoot earns +11.2 % with the condition,
++6.0 % without). Note it rests on 9 down-market dates out of 18 — thin, like everything
+in-sample here. The refuted "innocence" story (§1) does NOT justify it; only these numbers do.
 
 Stability: yearly E net = −6.2 % (2021), +0.6 % (2022), +9.8 % (2023), +6.9 % (2024),
 +6.2 % (2025), −4.8 % (2026 partial) → 4/6 positive. Date-cohorts: 10/18 positive, range
