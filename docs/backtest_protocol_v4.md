@@ -1,4 +1,8 @@
-# Pre-registered protocol v4 — "innocent-fall reversion basket" (DRAFT — NOT SIGNED)
+# Pre-registered protocol v4 — "washout reversion basket" (DRAFT — NOT SIGNED)
+
+> Naming note: an earlier draft called this the "innocent-fall" basket, on the story that the
+> qualifying stocks fall *because of* the market. The per-stock beta test (2026-07-06, below)
+> **refuted that story** while leaving the entry rules intact — see §1. Renamed accordingly.
 
 **Status: DRAFT.** Non-binding until the owner signs it off (§0 of every protocol in this
 project: the anti-cheat barrier cannot self-approve). Written 2026-07-06, immediately after
@@ -17,16 +21,29 @@ positive-expectancy claim before the forward verdict.
 
 ## 1. Hypothesis (frozen)
 
-Cheap small caps in a **recent innocent decline** — falling *with* a falling market, not
-alone — and **without pending dilution**, mean-revert over the next 63 trading days with:
-(a) net expectancy ≥ 0, and (b) explosion rate (fwd63 ≥ +100 %) ≥ crash rate (fwd63 ≤ −50 %).
+Cheap small caps in a **recent decline during a falling market**, **without pending
+dilution**, mean-revert over the next 63 trading days with: (a) net expectancy ≥ 0, and
+(b) explosion rate (fwd63 ≥ +100 %) ≥ crash rate (fwd63 ≤ −50 %).
 
 Rationale (measured 2021-2026, in-sample, survivor-biased — all optimistic ceilings):
 - Combo cell (price/dilution/fall): E net +4.2 %, P(expl) 2.19 % vs P(crash) 2.77 % (n=1 733).
 - Conditioned on falling market: **E net +5.9 %, median +1.6 %**, P(expl) 2.0 % ≈ P(crash) 1.9 % (n=1 193).
-- Mechanism: the fall is the market's fault (beta), not the stock's (no dilution overhang);
-  reversion does the rest. The mirror cells are all negative (lone risers −5.7 %, lone
-  fallers −7.3 %, rising-market buys −6.6 %).
+- The mirror cells are all negative (lone risers in down markets −5.7 %, lone fallers in
+  rising markets −7.3 %, rising-market buys −6.6 %).
+
+**Mechanism — corrected by measurement.** The original "innocence" story (the stock falls
+*because of* the market, beta-driven) was tested at stock level: each observation's trailing
+126-day beta/correlation vs IWM, decomposing the 1-month fall into a market-explained part
+and an idiosyncratic **residual** (`chg1m − beta × mkt21`). Result — the gradient runs the
+**other way**: within the combo, beta-explained falls (residual > −3 %) earn +2.9 %, while
+falls far in excess of beta (residual < −10 %) earn **+11.2 %** (median +5.3 %, P(expl)
+3.2 %, P(crash) 1.7 %, n=406). The working mechanism is therefore **oversold overshoot in a
+market-wide washout** — cheap names crushed beyond their beta, with no dilution overhang,
+while the whole tape is being purged. The falling-market condition still contributes (same
+cell without it: +6.0 %) — a purging market appears to manufacture overshoot without
+stock-specific rot, whereas the lone faller in a rising market (the −7.3 % cell) has real
+problems. The residual gradient is recorded as **measured heterogeneity, NOT an entry rule**
+(a fifth threshold chosen after this split would be post-hoc squared: n=406, ~9 dates).
 
 ## 2. Entry definition (frozen — no tuning after sign-off)
 
@@ -58,6 +75,12 @@ threshold) are *displayed*, never used to re-rank or tune.
   entry price and margins to the dated snapshots (`data/history/`). Zero trading, zero claim —
   bookkeeping only. Forward data has **no survivorship bias**: delistings are observed live,
   so a forward pass is a real pass (unlike any backtest in this project).
+- **Observational fields** (recorded, NEVER judged on): each cohort entry also stores the
+  name's trailing 126-day beta and correlation vs IWM and its 21-day residual
+  (`chg1m − beta × mkt21`). Pre-registered **secondary analysis** at judgment time: does the
+  §1 oversold gradient (deeper residual → better forward return) reproduce on fresh data?
+  Descriptive only — it cannot pass or kill the hypothesis, and it must not be promoted to an
+  entry rule without a v4.1 revision.
 - **Cohorts**: one cohort per trading day; outcomes measured at 63 trading days (net of the
   standard −1 % round-trip haircut). Judgment uses **non-overlapping** cohort windows only
   (≈ one independent observation per quarter).
