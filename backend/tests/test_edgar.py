@@ -56,6 +56,7 @@ def edgar_env(tmp_path, monkeypatch):
     monkeypatch.setattr(edgar, "_cik_map", None)          # reset du cache mémoire inter-tests
     monkeypatch.setattr(edgar, "_last_request_ts", 0.0)
     monkeypatch.setitem(edgar.FILTERS, "edgar_rate_limit_s", 0.0)  # pas de sleep en test
+    edgar.reset_pit_memos()                                # mémos point-in-time frais par test
     return tmp_path
 
 

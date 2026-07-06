@@ -1150,6 +1150,34 @@ def run_study_v3(n_tickers: int | None = None, period: str = "5y", seed: int = 4
         cal = bench_close.index if bench_close is not None else _union_calendar(prices)
         grid = [cal[i] for i in range(min_hist, max(len(cal) - hmax, min_hist), step)]
 
+        # Pré-chauffe EDGAR EN PARALLÈLE (remplit mémos + cache disque une fois par ticker) : le
+        # fetch série ne tirait que ~2 req/s alors que la SEC en autorise 9. Les threads comblent
+        # la latence réseau ; le verrou de débit global (_throttle) garantit ≤9 req/s (conforme).
+        from concurrent.futures import ThreadPoolExecutor
+        cikmap = edgar._load_cik_map() or {}
+        last_dt = grid[-1].to_pydatetime() if grid else None
+
+        def _warm(tk):
+            try:
+                cik = cikmap.get(tk.upper())
+                if cik is None:
+                    return
+                cik10 = f"{cik:010d}"
+                edgar._form4_transactions(cik, cik10)     # le gros du coût (Form 4)
+                edgar._facts(cik10)                        # companyfacts (cash_runway)
+                if last_dt is not None:
+                    edgar.survival_signals(tk, now=last_dt)  # chauffe going-concern + submissions
+            except Exception:
+                pass
+
+        if last_dt is not None and cikmap:
+            tks = list(prices.keys())
+            print(f"  [warm] pré-chauffe EDGAR de {len(tks)} tickers en parallèle (≤9 req/s)…")
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                for _ in ex.map(_warm, tks):
+                    pass
+            print("  [warm] terminé — mémos chauds, la grille de dates tourne en mémoire.")
+
         Xrows, ys, poss, fwds, dvs, regimes, phenix = [], [], [], [], [], [], []
         surv_keys = FEATURE_NAMES[N_TECH_FEATURES:]     # les 7 features de survie
         surv_present = defaultdict(int)                 # couverture : nb de non-None par feature

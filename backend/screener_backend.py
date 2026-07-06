@@ -111,7 +111,7 @@ FILTERS = {
     "survival_window_days": 180,    # fenêtre des signaux de survie EDGAR (dilution, NT) — Epic 3 S2
     "edgar_cache_ttl_hours": 24,    # TTL cache des listes de filings (soumissions par CIK)
     "edgar_rate_limit_s": 0.12,     # ≥0.11 → ≤ ~9 req/s (SEC exige ≤ 10 req/s)
-    "edgar_max_filings": 40,        # garde-fou : nb max de Form 4 parsés par ticker
+    "edgar_max_filings": 12,        # garde-fou : nb max de Form 4 parsés par ticker (récents ; ~3-6 mois d'activité)
     # --- Backtest study (Sprint 6) : l'instrument de mesure (aucun ajustement de poids ici) ---
     "study_cost_roundtrip": 0.01,   # décote aller-retour (1%) appliquée aux rendements nets
     "study_position_usd": 10_000,   # position notionnelle pour la contrainte de capacité
