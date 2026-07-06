@@ -127,6 +127,32 @@ See [docs/backend.md](docs/backend.md) for the exact factors and functions.
     delisted-inclusive data (**purchase deferred** — see §9). Both badges therefore carry a **"non
     validé"** marker. Validation B (the live tracker) keeps running and can still overturn this
     forward.
+- **The v3 survival-conditioned study** (`backend/backtest.py --study-v3`): purged walk-forward
+  (K=5, 73-day embargo) over the tradable universe, training the frozen 13-feature logistic model
+  and measuring **value-of-survival** — does the EDGAR survival veto beat the same model on
+  technicals alone? Frozen spec: [docs/backtest_protocol_v3.md](docs/backtest_protocol_v3.md);
+  the judged run log is its §10.
+  - **Verdict (judged run 2026-07-06, 2519 tickers, 5y, 58,229 obs): TERMINAL_FAIL.** Ranking
+    works (top-decile +100 % lift 3.15×, CI95 [2.66, 3.63]) but the survival features **worsen**
+    net expectancy (−8.7 % vs −7.4 % technicals-only), the ≤ −50 % guard blows (3.66× vs 1.5× cap)
+    and the model loses to random picks (−8.7 % vs −3.4 %). Pre-registered terminal kill: **the
+    micro-cap right tail is not scoreable on free survivor-only data.** No model is deployed
+    (`p_explode` stays `null`); the product is a **watchlist / research tool** (§12 branch 5+6).
+- **The measured odds, in plain numbers** (all from the judged studies; all are **optimistic
+  ceilings** — free data contains only companies that survived):
+  - A random tradable small/micro cap: **~1 in 100** chance of a +100 % move within 3 months
+    (v3 base rate over 5 years; single windows vary with regime — the 2021-23 diagnostic
+    measured up to 2.7 %).
+  - The v3 model's preferred decile: **~3 in 100** (3.15× base, CI95 [2.66, 3.63]).
+  - A pure v2 Phénix profile: **4.59× base** — order of 4–5 in 100 (CI95 [2.30, 7.21]).
+  - **The other side of the coin**: the same names lose half their value **2.27×** (Phénix) to
+    **3.66×** (v3 top decile) more often than average, and mean net expectancy per position is
+    **−9 % to −11 %** — worse than random picks. Higher doubling odds never translated into
+    positive expectancy in any of the three studies.
+  - **Total loss (bankruptcy/delisting) is not measurable here**: dead companies are absent from
+    free data by construction, so even the left-tail numbers above are *underestimates*. This is
+    the survivorship ceiling that caps every number in this README.
+  - These are descriptive backtest frequencies, not a live score and not investment advice.
 - **Live performance tracking**: every scan writes a dated snapshot of its picks to
   `data/history/` (ticker, entry price, score, key signals). `GET /api/performance` then
   measures each pick's return **since it was first flagged** and compares it to IWM — an
@@ -146,8 +172,8 @@ docker compose exec backend python backtest.py --study --n 0 --period 3y
 # The v2 tail-hunting study (Fusée/Phénix lifts + Validation A verdict). --n 0 = full universe.
 docker compose exec backend python backtest.py --study-v2 --n 0 --period 5y
 
-# The v3 survival-conditioned study (purged walk-forward). Dry-run/NON-BINDING by default;
-# add --signed-off ONLY once docs/backtest_protocol_v3.md is signed off (judged once).
+# The v3 survival-conditioned study (purged walk-forward). Judged ONCE on 2026-07-06:
+# TERMINAL_FAIL (protocol §10-§11) — do NOT re-run with --signed-off for judgement.
 docker compose exec backend python backtest.py --study-v3 --n 0 --period 5y
 
 # Quick single-window backtest
