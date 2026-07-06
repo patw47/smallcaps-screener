@@ -309,7 +309,12 @@ def _form4_transactions(cik: int, cik10: str) -> list[dict] | None:
 
 
 def _facts(cik10: str) -> dict:
-    """Facts us-gaap XBRL, MÉMOÏSÉS par cik10 (le JSON companyfacts est gros → parse 1×)."""
+    """Facts us-gaap XBRL, MÉMOÏSÉS par cik10 (le JSON companyfacts est gros → parse 1×).
+
+    Ne garde en mémo QUE les tags utilisés (_CASH_TAGS + _OCF_TAGS) : le dict us-gaap
+    complet pèse des Mo par ticker — le mémoïser pour tout l'univers (~2 500 tickers)
+    fait exploser la RAM (crash WSL/OOM constaté sur le run --study-v3).
+    """
     with _pit_lock:
         if cik10 in _facts_memo:
             return _facts_memo[cik10]
@@ -318,7 +323,9 @@ def _facts(cik10: str) -> dict:
     facts = {}
     if text is not None:
         try:
-            facts = json.loads(text).get("facts", {})
+            gaap = json.loads(text).get("facts", {}).get("us-gaap", {})
+            keep = _CASH_TAGS + _OCF_TAGS
+            facts = {"us-gaap": {t: gaap[t] for t in keep if t in gaap}}
         except Exception:
             facts = {}
     with _pit_lock:
