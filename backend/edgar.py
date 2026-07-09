@@ -19,7 +19,7 @@ import os
 import json
 import time
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -35,6 +35,14 @@ _USER_AGENT = os.environ.get("EDGAR_USER_AGENT", "").strip()
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik10}.json"
 _ARCHIVE_DOC = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/{doc}"
+_COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik10}.json"
+
+# Tags XBRL (us-gaap) pour le cash runway. On prend le PREMIER disponible dans l'ordre.
+_CASH_TAGS = ("CashAndCashEquivalentsAtCarryingValue",
+              "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash")
+_OCF_TAGS = ("NetCashProvidedByUsedInOperatingActivities",
+             "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations")
+_RUNWAY_CAP = 120.0   # mois : plafond (« ne brûle pas / très sûr ») pour borner les outliers
 
 # Throttle global (≤ 10 req/s) — la Passe B lance 2 threads, le verrou sérialise les requêtes.
 _throttle_lock = threading.Lock()
@@ -43,6 +51,24 @@ _last_request_ts = 0.0
 # Cache mémoire du mapping ticker→CIK (fichier volumineux, stable).
 _cik_map = None
 _cik_map_lock = threading.Lock()
+
+# Mémos EN MÉMOIRE des ARTEFACTS PARSÉS par CIK — évitent de re-parser à chaque date de l'étude
+# walk-forward (60 dates × 2519 tickers). Le filtrage point-in-time se fait ensuite en mémoire.
+# CRUCIAL pour la perf : sans ça, l'étude re-parse ~40 Form 4 XML par (ticker × date) → des heures.
+_pit_lock = threading.Lock()
+_subs_memo: dict[str, tuple | None] = {}     # cik10 -> (forms, accs, fdates, docs)
+_tx_memo: dict[str, list[dict] | None] = {}  # cik10 -> transactions Form 4 P/S (datées + filed)
+_facts_memo: dict[str, dict] = {}            # cik10 -> facts us-gaap
+_gc_memo: dict[str, bool] = {}               # accession -> « substantial doubt » (doc parsé une fois)
+
+
+def reset_pit_memos() -> None:
+    """Vide les mémos point-in-time (isolation des tests ; sans effet en production)."""
+    with _pit_lock:
+        _subs_memo.clear()
+        _tx_memo.clear()
+        _facts_memo.clear()
+        _gc_memo.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +227,243 @@ def _filing_xml(cik: int, accession: str, doc: str) -> str | None:
 # Achats nets d'insiders
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Signaux de SURVIE (Epic 3 S2) — la queue gauche que le prix ne voit pas
+# ---------------------------------------------------------------------------
+
+# Émissions d'actions à venir (registrations / prospectus) → dilution.
+_DILUTION_PREFIXES = ("S-1", "S-3", "F-1", "F-3", "424B")
+# Rapports périodiques en retard → détresse de reporting.
+_LATE_FORMS = ("NT 10-Q", "NT 10-K")
+# Rapports périodiques de base (texte scanné pour le going-concern).
+_PERIODIC_FORMS = ("10-Q", "10-K")
+
+
+def _doc_text(cik: int, accession: str, doc: str) -> str | None:
+    """Texte du document primaire d'un filing (IMMUABLE → cache permanent). Générique.
+
+    Comme pour le Form 4, `primaryDocument` peut porter un préfixe de rendu XSL : on vise le
+    nom nu (dernier segment). Jamais fatal ; None si indisponible.
+    """
+    raw = doc.split("/")[-1]
+    name = f"doc_{accession.replace('-', '')}_{raw}"
+    cached = _read_cache(name, None)  # filing immuable → jamais périmé
+    if cached is not None:
+        return cached
+    url = _ARCHIVE_DOC.format(cik=cik, acc_nodash=accession.replace("-", ""), doc=raw)
+    resp = _get(url)
+    if resp is None:
+        return None
+    _write_cache(name, resp.text)
+    return resp.text
+
+
+def _recent(cik10: str) -> tuple | None:
+    """(forms, accs, fdates, docs) des soumissions récentes, MÉMOÏSÉ par cik10 (parse JSON 1×)."""
+    with _pit_lock:
+        if cik10 in _subs_memo:
+            return _subs_memo[cik10]
+    subs_text = _cached_text(_SUBMISSIONS_URL.format(cik10=cik10), f"submissions_{cik10}.json",
+                             FILTERS["edgar_cache_ttl_hours"] * 3600)
+    out = None
+    if subs_text is not None:
+        try:
+            r = json.loads(subs_text)["filings"]["recent"]
+            out = (r["form"], r["accessionNumber"], r["filingDate"], r["primaryDocument"])
+        except Exception:
+            out = None
+    with _pit_lock:
+        _subs_memo[cik10] = out
+    return out
+
+
+def _form4_transactions(cik: int, cik10: str) -> list[dict] | None:
+    """
+    TOUTES les transactions Form 4 (P/S) d'un émetteur, parsées UNE fois et mémoïsées (chacune
+    porte sa `date` de transaction ET sa `filed` de dépôt). Le point-in-time (filed ≤ as_of) et la
+    fenêtre (date ≥ cutoff) sont appliqués APRÈS, en mémoire, par `net_insider_buying`.
+    """
+    with _pit_lock:
+        if cik10 in _tx_memo:
+            return _tx_memo[cik10]
+    rec = _recent(cik10)
+    txs: list[dict] | None = None
+    if rec is not None:
+        forms, accs, fdates, docs = rec
+        txs = []
+        parsed = 0
+        for form, acc, fdate, doc in zip(forms, accs, fdates, docs):
+            if form != "4":
+                continue
+            if parsed >= FILTERS["edgar_max_filings"]:
+                break
+            xml = _filing_xml(cik, acc, doc)
+            parsed += 1
+            if xml is not None:
+                for t in _parse_form4(xml):
+                    t["filed"] = fdate
+                    txs.append(t)
+    with _pit_lock:
+        _tx_memo[cik10] = txs
+    return txs
+
+
+def _facts(cik10: str) -> dict:
+    """Facts us-gaap XBRL, MÉMOÏSÉS par cik10 (le JSON companyfacts est gros → parse 1×).
+
+    Ne garde en mémo QUE les tags utilisés (_CASH_TAGS + _OCF_TAGS) : le dict us-gaap
+    complet pèse des Mo par ticker — le mémoïser pour tout l'univers (~2 500 tickers)
+    fait exploser la RAM (crash WSL/OOM constaté sur le run --study-v3).
+    """
+    with _pit_lock:
+        if cik10 in _facts_memo:
+            return _facts_memo[cik10]
+    text = _cached_text(_COMPANYFACTS_URL.format(cik10=cik10), f"facts_{cik10}.json",
+                        FILTERS["edgar_cache_ttl_hours"] * 3600)
+    facts = {}
+    if text is not None:
+        try:
+            gaap = json.loads(text).get("facts", {}).get("us-gaap", {})
+            keep = _CASH_TAGS + _OCF_TAGS
+            facts = {"us-gaap": {t: gaap[t] for t in keep if t in gaap}}
+        except Exception:
+            facts = {}
+    with _pit_lock:
+        _facts_memo[cik10] = facts
+    return facts
+
+
+def _latest_usd_fact(facts: dict, tags: tuple[str, ...], as_of: str,
+                     want_period: bool = False):
+    """
+    Valeur XBRL la plus récente (parmi `tags`, premier disponible) dont `filed ≤ as_of`
+    (POINT-IN-TIME : on filtre sur la date de DÉPÔT, pas la fin de période — un chiffre à fin
+    mars n'est public qu'au dépôt du 10-Q). Départage : `end` max, puis `filed` max.
+    Retourne val (ou (val, start, end) si want_period), None si introuvable.
+    """
+    gaap = facts.get("us-gaap", {})
+    best = None  # (end, filed, val, start)
+    for tag in tags:
+        node = gaap.get(tag)
+        if not node:
+            continue
+        units = node.get("units", {})
+        rows = units.get("USD") or (next(iter(units.values()), []) if units else [])
+        for r in rows:
+            filed, end, val = r.get("filed"), r.get("end"), r.get("val")
+            if filed is None or end is None or val is None or filed > as_of:
+                continue
+            if best is None or (end, filed) > (best[0], best[1]):
+                best = (end, filed, float(val), r.get("start"))
+        if best is not None:
+            break
+    if best is None:
+        return (None, None, None) if want_period else None
+    return (best[2], best[3], best[0]) if want_period else best[2]
+
+
+def _cash_runway(cik10: str, as_of: str) -> float | None:
+    """
+    Mois de trésorerie restants = cash / burn mensuel d'exploitation, POINT-IN-TIME, depuis les
+    XBRL companyfacts. Ne brûle pas de cash (OCF ≥ 0) → runway « long » (sûr, plafond). Données
+    manquantes / période aberrante → None (neutre). Parsing volontairement défensif (leçon EDGAR :
+    un faux chiffre est pire que pas de chiffre).
+    """
+    facts = _facts(cik10)
+    if not facts:
+        return None
+    cash = _latest_usd_fact(facts, _CASH_TAGS, as_of)
+    ocf, start, end = _latest_usd_fact(facts, _OCF_TAGS, as_of, want_period=True)
+    if cash is None or ocf is None or not start or not end:
+        return None
+    try:
+        period_days = (date.fromisoformat(end) - date.fromisoformat(start)).days
+    except (ValueError, TypeError):
+        return None
+    if period_days < 20:
+        return None                      # période aberrante (< ~1 mois) → on ne fait pas confiance
+    monthly_ocf = ocf / (period_days / 30.44)
+    if monthly_ocf >= 0:
+        return _RUNWAY_CAP               # ne brûle pas de cash → sûr
+    if cash <= 0:
+        return 0.0
+    return round(min(cash / (-monthly_ocf), _RUNWAY_CAP), 1)
+
+
+def survival_signals(ticker: str, now: datetime | None = None,
+                     window_days: int | None = None) -> dict | None:
+    """
+    Signaux de SURVIE datés depuis EDGAR (Epic 3 S2) — l'information de queue gauche que le
+    prix ne contient pas. POINT-IN-TIME STRICT : seuls les filings dont `filingDate ≤ as_of`
+    sont vus (aucun look-ahead), donc réutilisable tel quel par l'étude walk-forward.
+
+    - `dilution_flag`      : registration / prospectus (S-1/S-3/F-1/F-3/424B) dans la fenêtre
+                             → émission d'actions à venir.
+    - `late_filing_flag`   : NT 10-Q / NT 10-K dans la fenêtre → rapport en retard (détresse).
+    - `going_concern_flag` : « substantial doubt » (langage ASC 205-40) dans le dernier
+                             10-Q/10-K ≤ as_of → le signal de faillite le plus direct.
+    - `cash_runway`        : mois de trésorerie restants (XBRL companyfacts, point-in-time).
+
+    Booléens : filing absent → False (pas de mauvaise nouvelle), jamais None pour « donnée
+    manquante ». None UNIQUEMENT si EDGAR est indisponible / désactivé / ticker inconnu
+    (neutre, ne pénalise pas — même contrat que `net_insider_buying`).
+    """
+    if not _USER_AGENT:
+        return None
+    window_days = window_days or FILTERS["survival_window_days"]
+    now = now or datetime.now(tz=timezone.utc)
+    as_of = now.date().isoformat()
+    cutoff = (now - timedelta(days=window_days)).date().isoformat()
+
+    cik_map = _load_cik_map()
+    if not cik_map:
+        return None
+    cik = cik_map.get(ticker.upper())
+    if cik is None:
+        return None  # ticker absent d'EDGAR → neutre
+
+    cik10 = f"{cik:010d}"
+    rec = _recent(cik10)
+    if rec is None:
+        return None
+    forms, accs, fdates, docs = rec
+
+    dilution = late = False
+    gc = None  # (filingDate, accession, doc) du dernier 10-Q/10-K ≤ as_of
+    for form, acc, fdate, doc in zip(forms, accs, fdates, docs):
+        if fdate > as_of:
+            continue  # POINT-IN-TIME : filing postérieur à la date de scan → invisible
+        f = form.strip()
+        if cutoff <= fdate <= as_of:
+            if f.startswith(_DILUTION_PREFIXES):
+                dilution = True
+            if f in _LATE_FORMS:
+                late = True
+        if f in _PERIODIC_FORMS and (gc is None or fdate > gc[0]):
+            gc = (fdate, acc, doc)
+
+    going_concern = False
+    if gc is not None:
+        acc = gc[1]
+        with _pit_lock:
+            memo = _gc_memo.get(acc)
+        if memo is None:                     # doc parsé UNE fois par accession, puis mémoïsé
+            text = _doc_text(cik, gc[1], gc[2])
+            memo = bool(text is not None and "substantial doubt" in text.lower())
+            with _pit_lock:
+                _gc_memo[acc] = memo
+        going_concern = memo
+
+    return {
+        "ticker": ticker.upper(), "cik": cik,
+        "dilution_flag": dilution,
+        "late_filing_flag": late,
+        "going_concern_flag": going_concern,
+        "cash_runway": _cash_runway(cik10, as_of),   # mois de trésorerie restants (XBRL, point-in-time)
+        "window_days": window_days, "cutoff": cutoff, "as_of": as_of,
+    }
+
+
 def net_insider_buying(ticker: str, window_days: int | None = None,
                        now: datetime | None = None) -> dict | None:
     """
@@ -215,6 +478,7 @@ def net_insider_buying(ticker: str, window_days: int | None = None,
         return None
     window_days = window_days or FILTERS["insider_window_days"]
     now = now or datetime.now(tz=timezone.utc)
+    as_of = now.date().isoformat()
     cutoff = (now - timedelta(days=window_days)).date().isoformat()
 
     cik_map = _load_cik_map()
@@ -225,35 +489,14 @@ def net_insider_buying(ticker: str, window_days: int | None = None,
         return None  # ticker absent d'EDGAR → neutre
 
     cik10 = f"{cik:010d}"
-    subs_text = _cached_text(
-        _SUBMISSIONS_URL.format(cik10=cik10), f"submissions_{cik10}.json",
-        FILTERS["edgar_cache_ttl_hours"] * 3600)
-    if subs_text is None:
-        return None
-    try:
-        recent = json.loads(subs_text)["filings"]["recent"]
-        forms, accs = recent["form"], recent["accessionNumber"]
-        fdates, docs = recent["filingDate"], recent["primaryDocument"]
-    except Exception:
+    txs = _form4_transactions(cik, cik10)   # TOUTES les transactions, parsées 1× et mémoïsées
+    if txs is None:
         return None
 
-    transactions: list[dict] = []
-    parsed = 0
-    # recent[] est trié du plus récent au plus ancien : on s'arrête dès qu'un filing est
-    # déposé avant le cutoff (transactionDate ≤ filingDate → forcément hors fenêtre).
-    for form, acc, fdate, doc in zip(forms, accs, fdates, docs):
-        if form != "4":
-            continue
-        if fdate < cutoff:
-            break
-        if parsed >= FILTERS["edgar_max_filings"]:
-            break
-        xml = _filing_xml(cik, acc, doc)
-        parsed += 1
-        if xml is not None:
-            transactions.extend(_parse_form4(xml))
-
-    inwin = [t for t in transactions if t["date"] and t["date"] >= cutoff]
+    # Point-in-time + fenêtre appliqués EN MÉMOIRE : dépôt ≤ as_of (pas de look-ahead) ET
+    # transactionDate ≥ cutoff (dans la fenêtre).
+    inwin = [t for t in txs
+             if t.get("filed", "") <= as_of and t["date"] and t["date"] >= cutoff]
     buys = sum(t["value"] for t in inwin if t["code"] == "P")
     sells = sum(t["value"] for t in inwin if t["code"] == "S")
     return {

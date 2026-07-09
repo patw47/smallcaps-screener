@@ -31,6 +31,7 @@ import random
 import statistics
 from collections import defaultdict
 
+import numpy as np
 import pandas as pd
 
 from screener_backend import (
@@ -38,6 +39,8 @@ from screener_backend import (
     _factor_composite, _binary_price_score, TECH_FACTORS,
 )
 from profiles import detect_profiles
+from scoring import FEATURE_NAMES
+from model import ScoreModel
 
 # ===========================================================================
 # Constantes PRÉ-ENREGISTRÉES du protocole v2 (docs/backtest_protocol_v2.md).
@@ -588,7 +591,7 @@ def _print_study(r: dict) -> None:
               f"(composite {'>' if (ic['mean'] or 0) > (bf['mean_ic'] or 0) else '≤'} meilleur facteur)")
         print(f"    Random (survivant moyen) net-excès {_pct(s['random_net_excess_mean'])}  "
               f"vs top-décile {_pct(s['topdecile_net_excess_mean'])}")
-        print(f"\n    Déciles (rendement moyen, net de coûts, EXCÈS d'IWM) :")
+        print("\n    Déciles (rendement moyen, net de coûts, EXCÈS d'IWM) :")
         for i, (e, ne, nm) in enumerate(zip(s["decile_excess"], s["decile_net_excess"], s["decile_net_median"]), 1):
             print(f"      D{i:<2} excès {_pct(e)}   net-excès moy {_pct(ne)}  méd {_pct(nm)}")
         print(f"    Spread D10−D1 (net-excès) : {_pct(s['decile_spread_net'])}")
@@ -596,13 +599,13 @@ def _print_study(r: dict) -> None:
         print(f"    D10>D1 — calib {cc[0]}/{cc[1]} ({_frac(cc)})   valid {cv[0]}/{cv[1]} ({_frac(cv)})")
         print(f"    Validation (2e moitié) : IC {_pct(icv['mean'])} t={_fmt(icv['t'])}  "
               f"top-décile net-excès {_pct(s['topdecile_net_excess_valid'])}")
-        print(f"    Par année (net-excès moyen) :")
+        print("    Par année (net-excès moyen) :")
         for y, st in s["by_year"].items():
             print(f"      {y} : moy {_pct(st['mean'])}  méd {_pct(st['median'])}  n={st['n']}")
-    print(f"\n  ⚠️  BIAIS DE SURVIE : univers = titres cotés AUJOURD'HUI (délistés absents) →")
-    print(f"      les edges affichés sont une BORNE SUPÉRIEURE. Signaux PRIX/VOLUME uniquement ;")
-    print(f"      l'insider EDGAR daté n'est PAS inclus dans cette study (extension future).")
-    print(f"      Voir docs/backtest_protocol.md.")
+    print("\n  ⚠️  BIAIS DE SURVIE : univers = titres cotés AUJOURD'HUI (délistés absents) →")
+    print("      les edges affichés sont une BORNE SUPÉRIEURE. Signaux PRIX/VOLUME uniquement ;")
+    print("      l'insider EDGAR daté n'est PAS inclus dans cette study (extension future).")
+    print("      Voir docs/backtest_protocol.md.")
     print(f"{'='*64}\n")
 
 
@@ -900,11 +903,428 @@ def _print_study_v2(r: dict) -> None:
                     fragile = (m["break_even_delisting"] is not None and m["break_even_delisting"] < 0.05)
                     frag = "  ⚠️ FRAGILE (break-even <5%)" if fragile else ""
                     print(f"         VERDICT §6 : {m['verdict']}{frag}")
-    print(f"\n  Règle §6 : Fusée PASS(A) = provisoire tant que Validation B (tracker) n'a pas confirmé ;")
-    print(f"  Phénix ne peut être que CONDITIONAL (money-gated, données délisting à acheter — §5).")
-    print(f"  ⚠️  BIAIS DE SURVIE : univers = titres cotés AUJOURD'HUI ; le break-even délisting")
-    print(f"      chiffre la fragilité de chaque lift. Validation A jugée UNE fois — aucun re-fit.")
+    print("\n  Règle §6 : Fusée PASS(A) = provisoire tant que Validation B (tracker) n'a pas confirmé ;")
+    print("  Phénix ne peut être que CONDITIONAL (money-gated, données délisting à acheter — §5).")
+    print("  ⚠️  BIAIS DE SURVIE : univers = titres cotés AUJOURD'HUI ; le break-even délisting")
+    print("      chiffre la fragilité de chaque lift. Validation A jugée UNE fois — aucun re-fit.")
     print(f"{'='*64}\n")
+
+
+# ===========================================================================
+# STUDY v3 (Epic 3 S5) — score conditionné à la survie : purged walk-forward,
+# lift du décile haut de P(+100 %), VALUE-OF-SURVIVAL (le veto améliore-t-il ?),
+# garde queue gauche, par régime. Réutilise scoring.assemble_matrix (features
+# gelées §3) + model.ScoreModel — zéro définition dupliquée.
+#
+# Constantes FIGÉES au protocole v3 §4/§7 (hors FILTERS). JAMAIS jugé avant le
+# sign-off du protocole (§0) : --study-v3 imprime NON-BINDING tant qu'il n'est pas signé.
+# ===========================================================================
+STUDY_V3_K = 5                             # purged k-fold
+STUDY_V3_EMBARGO = 73                       # jours de bourse (horizon 63 + buffer 10) — purge la fuite
+STUDY_V3_LAM_GRID = (0.03, 0.1, 0.3, 1.0)   # grille §4 (choix par CV interne)
+STUDY_V3_DECILE = 0.90                       # top décile de p_hat jugé
+CRIT_V3_LIFT_MIN = 1.4                       # §7 (1)
+CRIT_V3_GUARD_MAX = 1.5                      # §7 (3)
+N_TECH_FEATURES = 6                          # 6 premières features = techniques ; le reste = survie
+
+
+def purged_fold_masks(pos, k: int, embargo: int) -> list[tuple[np.ndarray, np.ndarray]]:
+    """
+    CV purgée temporelle (López de Prado). `pos` = position de chaque obs dans le calendrier
+    maître (jours de bourse). Découpe les DATES uniques en `k` blocs contigus ; pour chaque bloc
+    = test, l'entraînement exclut toute obs à moins de `embargo` positions du bloc (purge la
+    fuite de label des DEUX côtés). Retourne [(train_idx, test_idx)].
+    """
+    pos = np.asarray(pos)
+    uniq = np.unique(pos)
+    k = max(1, min(k, len(uniq)))
+    out = []
+    for blk in np.array_split(uniq, k):
+        lo, hi = int(blk.min()), int(blk.max())
+        test = np.where((pos >= lo) & (pos <= hi))[0]
+        train = np.where((pos < lo - embargo) | (pos > hi + embargo))[0]
+        out.append((train, test))
+    return out
+
+
+def _select_lam(X, y, pos, grid) -> float:
+    """Choix de lambda par UN split temporel interne (derniers ~20 % des dates = validation)."""
+    uniq = np.unique(pos)
+    if len(uniq) < 3:
+        return grid[-1]
+    cut = uniq[int(len(uniq) * 0.8)]
+    tr, va = pos < cut, pos >= cut
+    if tr.sum() == 0 or va.sum() == 0 or len(np.unique(y[tr])) < 2:
+        return grid[-1]
+    best, best_ll = grid[-1], float("inf")
+    for lam in grid:
+        m = ScoreModel([f"f{i}" for i in range(X.shape[1])], lam=lam).fit(X[tr], y[tr])
+        p = np.clip(m.predict_proba(X[va]), 1e-6, 1 - 1e-6)
+        ll = -np.mean(y[va] * np.log(p) + (1 - y[va]) * np.log(1 - p))
+        if ll < best_ll:
+            best_ll, best = ll, lam
+    return best
+
+
+def oof_predictions(X, y, pos, folds, grid=STUDY_V3_LAM_GRID) -> np.ndarray:
+    """Prédictions OUT-OF-FOLD : chaque bloc test prédit par un modèle entraîné hors de lui
+    (lambda choisi en CV interne). NaN si un fold n'a pas de quoi entraîner (une seule classe)."""
+    X = np.asarray(X, float)
+    y = np.asarray(y, float)
+    pos = np.asarray(pos)
+    names = [f"f{i}" for i in range(X.shape[1])]
+    oof = np.full(len(y), np.nan)
+    for tr, te in folds:
+        if len(tr) < 20 or len(np.unique(y[tr])) < 2:
+            continue
+        lam = _select_lam(X[tr], y[tr], pos[tr], grid)
+        m = ScoreModel(names, lam=lam).fit(X[tr], y[tr])
+        oof[te] = m.predict_proba(X[te])
+    return oof
+
+
+def _ne_top(p, fwd, cost: float, q: float = STUDY_V3_DECILE) -> float | None:
+    """Espérance nette du top décile de `p` (obs valides seulement)."""
+    p = np.asarray(p, float)
+    fwd = np.asarray(fwd, float)
+    ok = ~np.isnan(p) & ~np.isnan(fwd)
+    if ok.sum() < 20:
+        return None
+    p, fwd = p[ok], fwd[ok]
+    thr = np.quantile(p, q)
+    top = fwd[p >= thr]
+    return float(top.mean() - cost) if len(top) else None
+
+
+def decile_metrics(oof, fwd, cost: float, seed: int = 0) -> dict | None:
+    """Métriques §7 du décile haut de `oof` : lift +100 %, IC, garde queue gauche, espérance, break-even."""
+    oof = np.asarray(oof, float)
+    fwd = np.asarray(fwd, float)
+    ok = ~np.isnan(oof) & ~np.isnan(fwd)
+    if ok.sum() < 20:
+        return None
+    p, f = oof[ok], fwd[ok]
+    thr = np.quantile(p, STUDY_V3_DECILE)
+    top = f[p >= thr].tolist()
+    base = f.tolist()
+    up = STUDY_TAIL_UP[1]
+    p_base_up = tail_frac(base, up)
+    lift100 = lift(tail_frac(top, up), p_base_up)
+    ci = bootstrap_lift_ci(top, p_base_up, up, seed=seed)
+    p_base_dn = tail_frac(base, STUDY_TAIL_DOWN, upper=False)
+    p_top_dn = tail_frac(top, STUDY_TAIL_DOWN, upper=False)
+    guard = None if p_base_dn in (None, 0) else (p_top_dn or 0.0) / p_base_dn
+    return {
+        "n_top": len(top), "n_base": len(base),
+        "lift100": lift100, "lift100_ci": ci,
+        "net_expectancy": net_expectancy(top, cost),
+        "guard_left": guard, "guard_ok": (guard is not None and guard <= CRIT_V3_GUARD_MAX),
+        "break_even_delisting": break_even_delisting_rate(lift100),
+    }
+
+
+def value_of_survival(X, y, pos, fwd, folds, cost: float) -> dict:
+    """
+    Critère §7 (2) — le veto survie AJOUTE-t-il de la valeur ? Compare l'espérance nette du top
+    décile du modèle COMPLET vs le modèle SANS features de survie (les 6 techniques seules), sur
+    les prédictions out-of-fold, globalement ET par fold (≥ 4/5 folds meilleurs requis).
+    """
+    X = np.asarray(X, float)
+    oof_full = oof_predictions(X, y, pos, folds)
+    oof_tech = oof_predictions(X[:, :N_TECH_FEATURES], y, pos, folds)
+    fwd = np.asarray(fwd, float)
+    ne_full = _ne_top(oof_full, fwd, cost)
+    ne_tech = _ne_top(oof_tech, fwd, cost)
+    better = 0
+    n_folds = 0
+    for _, te in folds:
+        ff = _ne_top(oof_full[te], fwd[te], cost)
+        ft = _ne_top(oof_tech[te], fwd[te], cost)
+        if ff is None or ft is None:
+            continue
+        n_folds += 1
+        if ff > ft:
+            better += 1
+    return {
+        "ne_full": ne_full, "ne_tech": ne_tech,
+        "delta": (None if ne_full is None or ne_tech is None else ne_full - ne_tech),
+        "folds_better": better, "n_folds": n_folds,
+        "adds_value": (ne_full is not None and ne_tech is not None
+                       and ne_full > ne_tech and n_folds > 0 and better >= n_folds - 1),
+        "oof_full": oof_full,
+    }
+
+
+def study_v3_verdict(overall: dict | None, vos: dict, ne_random: float | None,
+                     ne_best_feat: float | None, ne_phenix: float | None) -> dict:
+    """
+    Règle de décision §7 appliquée aux résultats out-of-fold. Critères :
+    (1) lift P(fwd63≥+100%) ≥ 1.4× ET IC95 bas > 1.0× ; (2) le veto survie AJOUTE de la valeur ;
+    (3) garde queue gauche ≤ 1.5× ; (4) bat random / meilleure feature / Phénix v2 en espérance
+    nette > 0. Calibration (5) reportée, non bloquante. Mode A (veto n'aide pas) / B (aide mais
+    espérance ≤ 0) → branches de contingence §12. INCONCLUSIVE si trop peu de données.
+    """
+    if not overall:
+        return {"verdict": "INCONCLUSIVE", "reasons": ["observations insuffisantes"]}
+    ci_low = (overall.get("lift100_ci") or [None])[0]
+    c1 = (overall.get("lift100") is not None and overall["lift100"] >= CRIT_V3_LIFT_MIN
+          and ci_low is not None and ci_low > 1.0)
+    c2 = bool(vos.get("adds_value"))
+    c3 = bool(overall.get("guard_ok"))
+    ne = overall.get("net_expectancy")
+    beats = [b for b in (ne_random, ne_best_feat, ne_phenix) if b is not None]
+    c4 = ne is not None and ne > 0 and all(ne > b for b in beats)
+    if c1 and c2 and c3 and c4:
+        verdict = "PROVISIONAL_PASS"     # §7 : « pas encore réfuté » (jamais confirmé — §2)
+    elif (ne is None or ne <= 0) and not c2:
+        verdict = "TERMINAL_FAIL"         # §12 mode A : queue droite non-scorable en gratuit
+    elif not c2:
+        verdict = "FAIL_SURVIVAL_NO_VALUE"  # §12 mode A : le veto n'ajoute rien
+    else:
+        verdict = "FAIL"                  # §12 mode B : signal réel mais étouffé (espérance ≤ 0)
+    return {"verdict": verdict,
+            "criteria": {"ranking_lift": c1, "value_of_survival": c2,
+                         "guard": c3, "beats_baselines": c4},
+            "net_expectancy": ne}
+
+
+def _brier(oof, y) -> float | None:
+    """Score de Brier (calibration §7-5) sur les prédictions out-of-fold valides. Plus bas = mieux."""
+    oof = np.asarray(oof, float)
+    y = np.asarray(y, float)
+    ok = ~np.isnan(oof)
+    if ok.sum() == 0:
+        return None
+    return float(np.mean((oof[ok] - y[ok]) ** 2))
+
+
+def _regime_label(bench_close, date) -> str:
+    """Régime de marché à `date` = signe du rendement IWM sur ~63 j de bourse glissants."""
+    if bench_close is None:
+        return "all"
+    sub = bench_close[bench_close.index <= date]
+    if len(sub) < STUDY_PRIMARY_HORIZON + 1:
+        return "all"
+    r = float(sub.iloc[-1] / sub.iloc[-(STUDY_PRIMARY_HORIZON + 1)] - 1)
+    return "bull" if r >= 0 else "bear"
+
+
+def run_study_v3(n_tickers: int | None = None, period: str = "5y", seed: int = 42,
+                 signed_off: bool = False) -> dict:
+    """
+    Study v3 (protocole v3) : cross-section roulante sur l'univers tradable ; à chaque date on
+    rejoue analyze_prices + fusionne les signaux de survie EDGAR point-in-time, on assemble les
+    features gelées (scoring §3), on labellise y = 1 si fwd63 ≥ +100 %, puis PURGED WALK-FORWARD
+    (k-fold + embargo) → prédictions out-of-fold → métriques §7 + value-of-survival + par régime.
+
+    `signed_off=False` → run NON-BINDING (plomberie / dry-run) : le protocole §0 interdit tout
+    jugement avant sign-off humain. Le verdict n'est écrit au run-log que sur un run signé.
+    """
+    from scoring import assemble_matrix
+    import edgar
+
+    step = FILTERS["study_step_days"]
+    hmax = STUDY_PRIMARY_HORIZON
+    min_hist = FILTERS["vol_window_long"] + FILTERS["ma_slope_lookback"]
+    cost = FILTERS["study_cost_roundtrip"]
+
+    prev_pool, prev_seed = FILTERS["pool_mode"], FILTERS["shuffle_seed"]
+    FILTERS["pool_mode"] = "tradability"
+    try:
+        FILTERS["shuffle_seed"] = seed
+        try:
+            universe = discover_tickers()
+        finally:
+            FILTERS["shuffle_seed"] = prev_seed
+        if n_tickers:
+            universe = universe[:n_tickers]
+
+        tag = "SIGNÉ (jugé)" if signed_off else "DRY-RUN / NON-BINDING (protocole non signé §0)"
+        print(f"\n{'='*66}\n  STUDY v3 (survival-conditioned) — {len(universe)} tickers · {period}"
+              f" · pas {step}j\n  purged {STUDY_V3_K}-fold, embargo {STUDY_V3_EMBARGO}j · "
+              f"features scoring.§3\n  {tag}  ·  docs/backtest_protocol_v3.md\n{'='*66}")
+
+        prices = _download_prices(universe, FILTERS["rs_benchmark"], period=period)
+        bench_df = prices.pop(FILTERS["rs_benchmark"], None)
+        bench_close = bench_df["Close"].dropna() if bench_df is not None and "Close" in bench_df else None
+        cal = bench_close.index if bench_close is not None else _union_calendar(prices)
+        grid = [cal[i] for i in range(min_hist, max(len(cal) - hmax, min_hist), step)]
+
+        # Pré-chauffe EDGAR EN PARALLÈLE (remplit mémos + cache disque une fois par ticker) : le
+        # fetch série ne tirait que ~2 req/s alors que la SEC en autorise 9. Les threads comblent
+        # la latence réseau ; le verrou de débit global (_throttle) garantit ≤9 req/s (conforme).
+        from concurrent.futures import ThreadPoolExecutor
+        cikmap = edgar._load_cik_map() or {}
+        last_dt = grid[-1].to_pydatetime() if grid else None
+
+        def _warm(tk):
+            try:
+                cik = cikmap.get(tk.upper())
+                if cik is None:
+                    return
+                cik10 = f"{cik:010d}"
+                edgar._form4_transactions(cik, cik10)     # le gros du coût (Form 4)
+                edgar._facts(cik10)                        # companyfacts (cash_runway)
+                if last_dt is not None:
+                    edgar.survival_signals(tk, now=last_dt)  # chauffe going-concern + submissions
+            except Exception:
+                pass
+
+        if last_dt is not None and cikmap:
+            tks = list(prices.keys())
+            print(f"  [warm] pré-chauffe EDGAR de {len(tks)} tickers en parallèle (≤9 req/s)…")
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                for _ in ex.map(_warm, tks):
+                    pass
+            print("  [warm] terminé — mémos chauds, la grille de dates tourne en mémoire.")
+
+        Xrows, ys, poss, fwds, dvs, regimes, phenix = [], [], [], [], [], [], []
+        surv_keys = FEATURE_NAMES[N_TECH_FEATURES:]     # les 7 features de survie
+        surv_present = defaultdict(int)                 # couverture : nb de non-None par feature
+        for d in grid:
+            bench_tr = bench_close[bench_close.index <= d] if bench_close is not None else None
+            reg = _regime_label(bench_close, d)
+            at_date = []
+            for tk, df in prices.items():
+                if "Close" not in df:
+                    continue
+                close = df["Close"].dropna()
+                sub = close.index[close.index <= d]
+                if len(sub) < min_hist:
+                    continue
+                fwd63 = _forward_return(close, len(sub) - 1, hmax)
+                if fwd63 is None:
+                    continue                       # pas de forward → inutilisable (labellisation)
+                signals, _ = analyze_prices(tk, df.loc[df.index <= d], bench_tr)
+                if signals is None:
+                    continue
+                surv = edgar.survival_signals(tk, now=d.to_pydatetime())  # point-in-time
+                if surv:
+                    signals.update(surv)
+                nib = edgar.net_insider_buying(tk, now=d.to_pydatetime())  # achats nets, point-in-time
+                signals["insider_net_buying"] = nib["net_buying"] if nib else None
+                at_date.append({"sig": signals, "fwd63": fwd63, "dv": signals.get("dollar_volume")})
+            if not at_date:
+                continue
+            detect_profiles([o["sig"] for o in at_date])          # baseline v2 (Phénix)
+            Xd = assemble_matrix([o["sig"] for o in at_date])      # features gelées §3
+            pos = int(cal.get_loc(d))
+            for o, xr in zip(at_date, Xd):
+                Xrows.append(xr)
+                ys.append(1.0 if o["fwd63"] >= STUDY_TAIL_UP[1] else 0.0)
+                poss.append(pos)
+                fwds.append(o["fwd63"])
+                dvs.append(o["dv"])
+                regimes.append(reg)
+                phenix.append(bool(o["sig"].get("is_phenix")))
+                for k in surv_keys:
+                    if o["sig"].get(k) is not None:
+                        surv_present[k] += 1
+    finally:
+        FILTERS["pool_mode"] = prev_pool
+
+    X = np.array(Xrows, float) if Xrows else np.zeros((0, len(FEATURE_NAMES)))
+    y = np.array(ys, float)
+    pos = np.array(poss)
+    fwd = np.array(fwds, float)
+    dv = np.array(dvs, float)
+
+    # Filtre capacité §7 (position ≤ 1 % du dollar-volume) appliqué avant jugement.
+    cap_min_dv = FILTERS["study_position_usd"] / FILTERS["study_adv_max_frac"]
+    keep = dv >= cap_min_dv
+    X, y, pos, fwd = X[keep], y[keep], pos[keep], fwd[keep]
+    regimes = [r for r, k in zip(regimes, keep) if k]
+    phenix = [p for p, k in zip(phenix, keep) if k]
+
+    n_collected = len(ys)
+    surv_coverage = {k: (surv_present[k] / n_collected if n_collected else 0.0) for k in surv_keys}
+    result = {"n_obs": int(len(y)), "n_tickers": len(universe), "period": period,
+              "signed_off": signed_off, "base_rate_up100": tail_frac(fwd.tolist(), STUDY_TAIL_UP[1]),
+              "surv_coverage": surv_coverage}
+    if len(y) >= STUDY_V3_K * 20 and len(np.unique(y)) == 2:
+        folds = purged_fold_masks(pos, STUDY_V3_K, STUDY_V3_EMBARGO)
+        vos = value_of_survival(X, y, pos, fwd, folds, cost)
+        overall = decile_metrics(vos["oof_full"], fwd, cost, seed=seed)
+        by_regime = {}
+        for rg in ("bull", "bear"):
+            idx = np.array([i for i, r in enumerate(regimes) if r == rg])
+            if len(idx):
+                by_regime[rg] = decile_metrics(vos["oof_full"][idx], fwd[idx], cost, seed=seed)
+        # baseline : meilleure feature seule (espérance nette top décile) + Phénix v2 brut
+        best_feat = None
+        for j in range(X.shape[1]):
+            ne = _ne_top(X[:, j], fwd, cost)
+            if ne is not None and (best_feat is None or ne > best_feat[1]):
+                best_feat = (j, ne)
+        ph_idx = np.array([i for i, p in enumerate(phenix) if p])
+        ne_phenix = net_expectancy(fwd[ph_idx].tolist(), cost) if len(ph_idx) else None
+        ne_random = net_expectancy(fwd.tolist(), cost)          # baseline : tirage au hasard
+        brier = _brier(vos["oof_full"], y)   # y déjà filtré par `keep` en amont
+        ne_best = best_feat[1] if best_feat else None
+        verdict = study_v3_verdict(overall, vos, ne_random, ne_best, ne_phenix)
+        vos.pop("oof_full", None)
+        result.update({
+            "overall": overall, "by_regime": by_regime, "value_of_survival": vos,
+            "baseline_best_feature": (None if best_feat is None else
+                                      {"feature": FEATURE_NAMES[best_feat[0]], "net_expectancy": best_feat[1]}),
+            "baseline_phenix_ne": ne_phenix, "baseline_random_ne": ne_random,
+            "brier": brier, "verdict": verdict,
+        })
+    else:
+        result["note"] = "trop peu d'observations ou une seule classe — plomberie seulement"
+    _print_study_v3(result)
+    return result
+
+
+def _print_study_v3(r: dict) -> None:
+    print(f"\n{'='*66}\n  STUDY v3 — {r['n_obs']} obs · base P(+100%)={_fmt(r.get('base_rate_up100'))}"
+          f"\n{'='*66}")
+    cov = r.get("surv_coverage") or {}
+    if cov:
+        print("  COUVERTURE features survie (% non-None) : "
+              + " · ".join(f"{k.replace('_flag','')} {v*100:.0f}%" for k, v in cov.items()))
+    if "overall" not in r:
+        print(f"  {r.get('note', 'aucune métrique')}")
+        print(f"{'='*66}\n")
+        return
+    o = r["overall"] or {}
+    v = r["value_of_survival"]
+    print(f"  DÉCILE HAUT p_hat (fwd63) : lift +100% = {_fmt(o.get('lift100'))}× "
+          f"(IC95 {_fmt((o.get('lift100_ci') or [None])[0])}–{_fmt((o.get('lift100_ci') or [None,None])[1])})"
+          f" · espérance nette {_fmt(o.get('net_expectancy'), pct=True)}"
+          f" · garde ≤−50% {_fmt(o.get('guard_left'))}× ({'OK' if o.get('guard_ok') else 'DÉPASSE'})")
+    print(f"  VALUE-OF-SURVIVAL : ne(complet)={_fmt(v['ne_full'], pct=True)} vs "
+          f"ne(technique-seul)={_fmt(v['ne_tech'], pct=True)} · Δ={_fmt(v['delta'], pct=True)}"
+          f" · folds meilleurs {v['folds_better']}/{v['n_folds']} → "
+          f"{'AJOUTE de la valeur' if v['adds_value'] else 'N’AJOUTE PAS'}")
+    for rg, m in (r.get("by_regime") or {}).items():
+        if m:
+            print(f"    [{rg}] lift +100% {_fmt(m.get('lift100'))}× · ne {_fmt(m.get('net_expectancy'), pct=True)}")
+    bf = r.get("baseline_best_feature")
+    print(f"  BASELINES : meilleure feature seule = {bf['feature'] if bf else '—'} "
+          f"(ne {_fmt(bf['net_expectancy'] if bf else None, pct=True)}) · "
+          f"Phénix v2 ne {_fmt(r.get('baseline_phenix_ne'), pct=True)} · "
+          f"random ne {_fmt(r.get('baseline_random_ne'), pct=True)} · Brier {_fmt(r.get('brier'))}")
+    vd = r.get("verdict") or {}
+    crit = vd.get("criteria") or {}
+    print(f"\n  VERDICT §7 : {vd.get('verdict', '—')}   "
+          f"[lift {'✓' if crit.get('ranking_lift') else '✗'} · "
+          f"survie-ajoute {'✓' if crit.get('value_of_survival') else '✗'} · "
+          f"garde {'✓' if crit.get('guard') else '✗'} · "
+          f"bat-baselines {'✓' if crit.get('beats_baselines') else '✗'}]")
+    if not r["signed_off"]:
+        print("\n  ⚠️  NON-BINDING — protocole v3 non signé (§0). Verdict ci-dessus NON écrit au run-log.")
+        print("      Rappel §2 : données gratuites = plafond optimiste ; le backtest ne peut que RÉFUTER.")
+    else:
+        print("\n  ✅ RUN SIGNÉ — recopier ce bloc VERBATIM dans docs/backtest_protocol_v3.md §10.")
+        print("      Rappel §2 : un PROVISIONAL_PASS reste « non validé » jusqu'à Validation B (tracker).")
+    print(f"{'='*66}\n")
+
+
+def _fmt(x, pct: bool = False) -> str:
+    if x is None:
+        return "—"
+    return f"{x*100:.1f}%" if pct else f"{x:.2f}"
 
 
 if __name__ == "__main__":
@@ -917,8 +1337,15 @@ if __name__ == "__main__":
     ap.add_argument("--study", action="store_true", help="STUDY roulante v1 multi-date (Sprint 6)")
     ap.add_argument("--study-v2", dest="study_v2", action="store_true",
                     help="STUDY v2 tail-hunting : profils Fusée/Phénix vs base (protocole v2)")
+    ap.add_argument("--study-v3", dest="study_v3", action="store_true",
+                    help="STUDY v3 survival-conditioned : purged walk-forward (protocole v3)")
+    ap.add_argument("--signed-off", dest="signed_off", action="store_true",
+                    help="autorise le JUGEMENT v3 (protocole v3 signé §0) ; sinon dry-run NON-BINDING")
     args = ap.parse_args()
-    if args.study_v2:
+    if args.study_v3:
+        run_study_v3(n_tickers=(args.n if args.n else None), period=(args.period or "5y"),
+                     seed=args.seed, signed_off=args.signed_off)
+    elif args.study_v2:
         run_study_v2(n_tickers=(args.n if args.n else None), period=(args.period or "5y"), seed=args.seed)
     elif args.study:
         run_study(n_tickers=(args.n if args.n else None), period=(args.period or "3y"), seed=args.seed)
