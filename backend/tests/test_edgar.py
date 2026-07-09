@@ -56,6 +56,7 @@ def edgar_env(tmp_path, monkeypatch):
     monkeypatch.setattr(edgar, "_cik_map", None)          # reset du cache mémoire inter-tests
     monkeypatch.setattr(edgar, "_last_request_ts", 0.0)
     monkeypatch.setitem(edgar.FILTERS, "edgar_rate_limit_s", 0.0)  # pas de sleep en test
+    edgar.reset_pit_memos()                                # mémos point-in-time frais par test
     return tmp_path
 
 
@@ -76,6 +77,16 @@ def test_net_buying_aggregation(edgar_env, monkeypatch):
     assert all("date" in t for t in r["transactions"])
     # l'achat de 2025 (hors fenêtre) est exclu
     assert all(t["date"] >= r["cutoff"] for t in r["transactions"])
+
+
+def test_net_buying_point_in_time_excludes_future_filings(edgar_env, monkeypatch):
+    # as_of=2026-05-15 : le Form 4 déposé le 2026-06-10 (form4_0002) est POSTÉRIEUR → invisible.
+    # Reste form4_0001 (2026-05-02) : 2 achats P (10000 + 6000), aucune vente → net 16000.
+    monkeypatch.setattr(edgar, "_get", _make_fake_get({"n": 0}))
+    r = edgar.net_insider_buying("TEST", window_days=180,
+                                 now=datetime(2026, 5, 15, tzinfo=timezone.utc))
+    assert r["net_buying"] == 16000.0     # sans la vente 3300 ni l'achat 2000 du filing du 06-10
+    assert r["n_sells"] == 0
 
 
 def test_filing_url_strips_xsl_render_prefix(edgar_env, monkeypatch):
@@ -124,6 +135,102 @@ def test_parse_form4_open_market_only():
     txs = edgar._parse_form4((FIX / "form4_0001.xml").read_text())
     assert [t["code"] for t in txs] == ["P", "P"]   # l'award « A » (9999) est ignoré
     assert txs[0]["value"] == 10000.0               # 1000 × 10.00
+
+
+# ---------------------------------------------------------------------------
+# Signaux de survie (Epic 3 S2) — dilution / retard / going-concern, point-in-time
+# ---------------------------------------------------------------------------
+
+def _make_survival_get(gc_text=None):
+    """fake_get servant company_tickers + submissions + doc 10-Q + companyfacts (cash runway)."""
+    def fake_get(url):
+        if "company_tickers.json" in url:
+            return _Resp((FIX / "company_tickers.json").read_text())
+        if "submissions/CIK" in url:
+            return _Resp((FIX / "submissions_CIK0000000111.json").read_text())
+        if "companyfacts/CIK" in url:
+            return _Resp((FIX / "facts_CIK0000000111.json").read_text())
+        if "test-10q.htm" in url:
+            return _Resp(gc_text if gc_text is not None else (FIX / "test-10q.htm").read_text())
+        return None
+    return fake_get
+
+
+def test_survival_flags_full_window(edgar_env, monkeypatch):
+    # as_of = 2026-07-01 : S-3 (03-01) + 424B5 (03-05) → dilution ; NT 10-Q (04-20) → retard ;
+    # 10-Q (05-15) contient « substantial doubt » → going concern.
+    monkeypatch.setattr(edgar, "_get", _make_survival_get())
+    r = edgar.survival_signals("TEST", now=NOW, window_days=180)
+    assert r is not None
+    assert r["dilution_flag"] is True
+    assert r["late_filing_flag"] is True
+    assert r["going_concern_flag"] is True
+    assert r["cash_runway"] is not None   # XBRL companyfacts câblé (voir test dédié)
+
+
+def test_survival_point_in_time_excludes_future_filings(edgar_env, monkeypatch):
+    # as_of = 2026-04-01 : S-3/424B5 déjà déposés (≤ as_of) → dilution ; MAIS NT 10-Q (04-20)
+    # et 10-Q (05-15) sont POSTÉRIEURS → invisibles. Aucun look-ahead.
+    monkeypatch.setattr(edgar, "_get", _make_survival_get())
+    r = edgar.survival_signals("TEST", now=datetime(2026, 4, 1, tzinfo=timezone.utc), window_days=180)
+    assert r["dilution_flag"] is True
+    assert r["late_filing_flag"] is False      # NT 10-Q pas encore déposé à cette date
+    assert r["going_concern_flag"] is False     # aucun 10-Q/10-K ≤ as_of
+
+
+def test_survival_going_concern_absent(edgar_env, monkeypatch):
+    # 10-Q présent mais SANS « substantial doubt » → going_concern False (dilution/late intacts).
+    clean = "<html><body>Operations are profitable. No liquidity issues.</body></html>"
+    monkeypatch.setattr(edgar, "_get", _make_survival_get(gc_text=clean))
+    r = edgar.survival_signals("TEST", now=NOW, window_days=180)
+    assert r["going_concern_flag"] is False
+    assert r["dilution_flag"] is True
+
+
+def test_cash_runway_point_in_time(edgar_env, monkeypatch):
+    # cash 1,0 M$ (fin mars, déposé 15/04) ; OCF −0,6 M$ sur 90 j → burn ~0,203 M$/mois →
+    # runway ~4,9 mois. as_of=2026-07-01 → visible.
+    monkeypatch.setattr(edgar, "_get", _make_survival_get())
+    r = edgar.survival_signals("TEST", now=NOW, window_days=180)
+    assert r["cash_runway"] is not None
+    assert 4.0 < r["cash_runway"] < 6.0
+
+    # as_of=2026-04-01 : le 10-Q (déposé 15/04) n'est pas encore public → pas d'OCF → None.
+    r2 = edgar.survival_signals("TEST", now=datetime(2026, 4, 1, tzinfo=timezone.utc))
+    assert r2["cash_runway"] is None
+
+
+def test_cash_runway_not_burning_is_safe(edgar_env, monkeypatch):
+    # OCF positif → ne brûle pas de cash → runway plafonné (sûr), jamais None.
+    facts = {"facts": {"us-gaap": {
+        "CashAndCashEquivalentsAtCarryingValue": {"units": {"USD": [
+            {"end": "2026-03-31", "val": 2000000, "filed": "2026-04-15"}]}},
+        "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [
+            {"start": "2026-01-01", "end": "2026-03-31", "val": 300000, "filed": "2026-04-15"}]}},
+    }}}
+    import json as _json
+
+    def fake_get(url):
+        if "company_tickers.json" in url:
+            return _Resp((FIX / "company_tickers.json").read_text())
+        if "submissions/CIK" in url:
+            return _Resp((FIX / "submissions_CIK0000000111.json").read_text())
+        if "companyfacts/CIK" in url:
+            return _Resp(_json.dumps(facts))
+        if "test-10q.htm" in url:
+            return _Resp((FIX / "test-10q.htm").read_text())
+        return None
+
+    monkeypatch.setattr(edgar, "_get", fake_get)
+    r = edgar.survival_signals("TEST", now=NOW)
+    assert r["cash_runway"] == edgar._RUNWAY_CAP
+
+
+def test_survival_none_when_disabled_or_unknown(edgar_env, monkeypatch):
+    monkeypatch.setattr(edgar, "_get", _make_survival_get())
+    assert edgar.survival_signals("NOPE", now=NOW) is None      # ticker inconnu → neutre
+    monkeypatch.setattr(edgar, "_USER_AGENT", "")
+    assert edgar.survival_signals("TEST", now=NOW) is None      # EDGAR désactivé → neutre
 
 
 # ---------------------------------------------------------------------------

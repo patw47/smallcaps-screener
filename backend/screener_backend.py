@@ -108,9 +108,10 @@ FILTERS = {
     "short_interest_high": 15.0,
     # --- Insiders EDGAR Form 4 (Sprint 5) : achats nets datés, point-in-time ---
     "insider_window_days": 180,     # fenêtre d'agrégation des achats nets (3-6 mois)
+    "survival_window_days": 180,    # fenêtre des signaux de survie EDGAR (dilution, NT) — Epic 3 S2
     "edgar_cache_ttl_hours": 24,    # TTL cache des listes de filings (soumissions par CIK)
     "edgar_rate_limit_s": 0.12,     # ≥0.11 → ≤ ~9 req/s (SEC exige ≤ 10 req/s)
-    "edgar_max_filings": 40,        # garde-fou : nb max de Form 4 parsés par ticker
+    "edgar_max_filings": 12,        # garde-fou : nb max de Form 4 parsés par ticker (récents ; ~3-6 mois d'activité)
     # --- Backtest study (Sprint 6) : l'instrument de mesure (aucun ajustement de poids ici) ---
     "study_cost_roundtrip": 0.01,   # décote aller-retour (1%) appliquée aux rendements nets
     "study_position_usd": 10_000,   # position notionnelle pour la contrainte de capacité
@@ -129,6 +130,7 @@ FILTERS = {
     "discovery_marketcaps": ("Small", "Micro"),          # catégories cap pré-filtrées côté API
     "max_tickers": None,           # None → univers COMPLET (aucun échantillonnage) ; int → soupape (tests/debug)
     "download_chunk": 100,         # taille des lots yf.download
+    "download_retries": 3,         # retries + backoff sur lot prix throttlé (429) — anti-perte silencieuse
     "history_period": "1y",        # 1 an : requis pour plus-haut 52 sem. + ATR90 (Palier 2)
     "enrich_workers": 2,           # threads .info en Passe B — BAS : Yahoo bannit l'IP au-delà
     "enrich_jitter_s": 0.5,        # jitter aléatoire par appel .info (anti-throttle Yahoo)
@@ -672,20 +674,33 @@ def _download_prices(tickers: list[str], bench_symbol: str,
 
     for idx in range(0, len(all_syms), chunk):
         part = all_syms[idx:idx + chunk]
-        try:
-            data = yf.download(
-                part, period=period, interval="1d",
-                group_by="ticker", auto_adjust=True,
-                threads=True, progress=False,
-            )
-        except Exception as e:
-            print(f"[download] lot {idx // chunk + 1}/{n_chunks} erreur: {e}")
-            continue
-        for sym in part:
-            df = _extract_symbol(data, sym)
-            if df is not None:
-                prices[sym] = df
-        print(f"[download] lot {idx // chunk + 1}/{n_chunks} → {len(prices)} séries")
+        got = 0
+        # Retry + backoff exponentiel sur lot vide/throttlé (429) : un lot throttlé NE DOIT PAS
+        # être abandonné silencieusement — sinon l'univers du run jugé est tronqué (biais).
+        for attempt in range(FILTERS["download_retries"] + 1):
+            try:
+                data = yf.download(
+                    part, period=period, interval="1d",
+                    group_by="ticker", auto_adjust=True, actions=True,
+                    threads=True, progress=False,
+                )
+            except Exception as e:
+                data = None
+                print(f"[download] lot {idx // chunk + 1}/{n_chunks} tentative {attempt+1} erreur: {e}")
+            if data is not None and len(data):
+                for sym in part:
+                    df = _extract_symbol(data, sym)
+                    if df is not None:
+                        prices[sym] = df
+                        got += 1
+                if got:
+                    break
+            if attempt < FILTERS["download_retries"]:      # throttlé/vide → pause avant retry
+                time.sleep(FILTERS["enrich_backoff_s"] * (2 ** attempt) + random.uniform(0, 1.0))
+        if got == 0:                                        # pas de perte silencieuse (§ no silent caps)
+            print(f"[download] lot {idx // chunk + 1}/{n_chunks} PERDU après retries — {len(part)} tickers absents")
+        else:
+            print(f"[download] lot {idx // chunk + 1}/{n_chunks} → {len(prices)} séries")
         time.sleep(FILTERS["rate_limit_s"])
     return prices
 
@@ -699,8 +714,11 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     """Filtres durs prix/volume + signaux techniques. Retourne (signaux, 'ok') ou (None, raison)."""
     if df is None or "Close" not in df or "Volume" not in df:
         return None, "history:cols"
-    close = df["Close"].dropna()
-    volume = df["Volume"].dropna()
+    # Aligne Close et Volume sur les barres où les deux existent : un dropna() séparé
+    # désaligne les index (NaN sur l'un seulement) et casse tout indexage booléen croisé.
+    valid = df["Close"].notna() & df["Volume"].notna()
+    close = df["Close"][valid]
+    volume = df["Volume"][valid]
     if len(close) < FILTERS["vol_window_long"] + FILTERS["ma_slope_lookback"]:
         return None, f"history:{len(close)}j"
 
@@ -818,6 +836,16 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     # (f_accum et f_compression sont calculés plus haut selon sensors_version)
     f_ext = (price / ma50 - 1) if ma50 else None
 
+    # --- Features v3 dérivées du prix (Epic 3 S3) : close vs SMA20, penny stock récent ---
+    close_vs_sma20 = (price / sma20 - 1) if sma20 else None   # T6 (stabilisation)
+    sub_dollar_flag = bool(float(close.tail(63).min()) < 1.0)  # S5 (a récemment touché < 1 $)
+    # Reverse split récent (ratio ∈ ]0,1[) depuis la colonne d'actions yfinance — signal de
+    # détresse / conformité de cotation (S2). Point-in-time : df est déjà tronqué à la date as-of.
+    reverse_split_flag = None
+    if "Stock Splits" in df.columns:
+        sp = df["Stock Splits"].tail(FILTERS["high_window"])
+        reverse_split_flag = bool(((sp > 0) & (sp < 1)).any())
+
     signals = {
         "price": round(price, 2),
         "change_1d": round(change_1d, 4) if change_1d is not None else None,
@@ -854,6 +882,10 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         "f_pct_recent": pct_recent,
         "f_ext": f_ext,
         "f_rs": rs_strength,
+        # Features v3 dérivées du prix (Epic 3 S3) :
+        "close_vs_sma20": round(close_vs_sma20, 4) if close_vs_sma20 is not None else None,
+        "sub_dollar_flag": sub_dollar_flag,
+        "reverse_split_flag": reverse_split_flag,   # S2 (reverse split récent = détresse)
     }
     return signals, "ok"
 
@@ -1005,6 +1037,32 @@ def run_scan(tickers: list[str] | None = None) -> dict:
             cat = reason.split(":")[0]
             rejection_counts[cat] = rejection_counts.get(cat, 0) + 1
 
+    # --- Cohorte v4 (Epic 4, protocole SIGNÉ) : instrumentation forward, purement additive ---
+    # Calculée sur le pool tradable COMPLET, avant la sélection de profils. N'affecte ni la
+    # sélection, ni le tri, ni les alertes — elle est consignée dans le snapshot (§4).
+    scan_state["phase"] = "v4_cohort"
+    try:
+        from v4 import build_cohort, build_tracking
+        v4_cohort, v4_note, v4_mkt21, v4_prelist = build_cohort(survivors, prices, bench_close)
+        v4_tracking = build_tracking(prices, HISTORY_DIR)
+    except Exception as e:  # jamais fatal : l'instrumentation ne casse pas le scan
+        v4_cohort, v4_note, v4_mkt21, v4_prelist, v4_tracking = [], f"erreur (ignorée) : {type(e).__name__}", None, [], []
+    print(f"[v4] {v4_note} · suivi : {len(v4_tracking)} titres")
+
+    # --- Cohortes v5 (Epic 5, protocole SIGNÉ 2026-07-09) : trois fenêtres pré-déclarées
+    # (7/14/21) + drapeau ⚡. Instrumentation additive (Validation D) — jamais fatal.
+    scan_state["phase"] = "v5_cohorts"
+    try:
+        from v5 import build_cohorts as v5_build_cohorts, build_tracking as v5_build_tracking
+        v5_data = v5_build_cohorts(survivors, prices, bench_close)
+        v5_data["tracking"] = v5_build_tracking(prices, HISTORY_DIR)
+    except Exception as e:
+        v5_data = {"windows": {}, "flash": False, "flash_ret3": None, "tracking": [],
+                   "note": f"erreur (ignorée) : {type(e).__name__}"}
+    v5_counts = " · ".join(f"{w}j:{len(b.get('cohort', []))}" for w, b in v5_data["windows"].items())
+    print(f"[v5] cohortes {{{v5_counts}}} · ⚡ {'OUI' if v5_data['flash'] else 'non'}"
+          f" · suivi : {len(v5_data['tracking'])} lignes")
+
     # --- Sélection des survivants à enrichir (Passe B coûteuse) ---
     # Epic 2, mode "tradability" : la sélection est faite par les DÉTECTEURS DE PROFILS
     # (Fusée/Phénix, percentiles cross-sectionnels du protocole v2 §3) — seuls les MEMBRES
@@ -1065,7 +1123,18 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     # `score` est CONSERVÉ tel quel (l'UI actuelle le lit) ; setup_score en est l'alias.
     for s in candidates:
         s["setup_score"] = s["score"]
-    if FILTERS["pool_mode"] == "legacy":
+
+    # Epic 3 (S4) : score de survie v3 — pose p_explode (None tant qu'aucun modèle entraîné n'est
+    # présent) + survival_risk sur CHAQUE candidat. Additif : ne touche ni aux profils ni au score.
+    from scoring import score_candidates, load_model
+    model = load_model(str(Path(DATA_DIR) / "model_v3.json"))
+    score_candidates(candidates, model)
+
+    if model is not None:
+        # v3 : le modèle pilote l'ordre (dormant tant que S5 n'a pas produit model_v3.json).
+        candidates.sort(key=lambda x: (x.get("p_explode") or 0.0,
+                                       x.get("profile_strength") or 0.0), reverse=True)
+    elif FILTERS["pool_mode"] == "legacy":
         candidates.sort(key=lambda x: (x["score"], x.get("rs_strength") or 0), reverse=True)
     else:
         # Epic 2 : affichage classé par FORCE DE PROFIL. setup_score reste calculé pour
@@ -1080,6 +1149,13 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         "survivors_price_filter": n_tradable,   # ont passé les filtres durs (univers tradable)
         "profile_members": n_all,               # membres Fusée/Phénix retenus (== tradables en legacy)
         "pool_mode": FILTERS["pool_mode"],
+        "v3_model": model is not None,   # True → p_explode pilote l'ordre (Epic 3)
+        "v4_cohort": v4_cohort,          # Epic 4 : cohorte du jour (instrumentation forward)
+        "v4_note": v4_note,              # raison lisible (marché haussier → cohorte vide)
+        "v4_mkt21": v4_mkt21,            # état du marché (IWM 21 j) affiché en tête
+        "v4_prelist": v4_prelist,        # jours haussiers : règles-titre seules, sans EDGAR
+        "v4_tracking": v4_tracking,      # suivi des cohortes passées (§A.6, affichage)
+        "v5": v5_data,                   # Epic 5 : cohortes 7/14/21 + ⚡ + suivi (Validation D)
         "enriched": n_surv,
         "candidates": len(candidates),
         "stocks": candidates,
@@ -1089,15 +1165,25 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     OUTPUT_FILE.write_text(json.dumps(output, indent=2, ensure_ascii=False))
     _write_snapshot(output)   # historique daté pour le suivi de performance
 
-    # --- Alerte Telegram sur les NOUVEAUX déclenchés (Sprint 3) — jamais fatal ---
+    # --- Alerte Telegram sur les NOUVELLES entrées en cohorte v4 (Epic 4 S3) — jamais fatal.
+    # Remplace l'alerte cassure (déclencheur mesuré non-prédictif, 1.0× — protocole v4 A.1).
     # Import paresseux : évite un cycle d'import (alerts importe FILTERS d'ici).
     try:
-        from alerts import notify_new_triggers
-        alerted = notify_new_triggers(candidates)
+        from alerts import notify_new_v4_entries
+        alerted = notify_new_v4_entries(v4_cohort)
         if alerted:
-            print(f"[alert] {len(alerted)} déclenché(s) notifié(s) : {', '.join(alerted)}")
+            print(f"[alert] {len(alerted)} entrée(s) v4 notifiée(s) : {', '.join(alerted)}")
     except Exception as e:
         print(f"[alert] erreur (ignorée) : {e}")
+
+    # --- Alerte Telegram sur les NOUVELLES entrées v5, toutes fenêtres — jamais fatal.
+    try:
+        from alerts import notify_new_v5_entries
+        alerted_v5 = notify_new_v5_entries(v5_data.get("windows", {}))
+        if alerted_v5:
+            print(f"[alert] {len(alerted_v5)} entrée(s) v5 notifiée(s) : {', '.join(alerted_v5)}")
+    except Exception as e:
+        print(f"[alert] erreur v5 (ignorée) : {e}")
 
     scan_state.update({"scanning": False, "phase": "idle"})
     return output
@@ -1133,6 +1219,21 @@ def _write_snapshot(output: dict) -> None:
             "scanned_at": output["scanned_at"],
             "candidates": len(picks),
             "picks": picks,
+            # Epic 4 (protocole v4 §4) : la cohorte du jour, matière première du jugement
+            # forward. v4_note documente les jours à cohorte vide (marché haussier ≠ panne).
+            "v4_cohort": output.get("v4_cohort", []),
+            "v4_note": output.get("v4_note", ""),
+            # Epic 5 (protocole v5 §9) : les trois cohortes du jour + ⚡ — sans pré-liste
+            # ni tracking (dérivables), seule la matière première du jugement forward.
+            "v5": {
+                "windows": {
+                    w: {"mkt": b.get("mkt"), "note": b.get("note", ""),
+                        "cohort": b.get("cohort", [])}
+                    for w, b in (output.get("v5") or {}).get("windows", {}).items()
+                },
+                "flash": (output.get("v5") or {}).get("flash", False),
+                "flash_ret3": (output.get("v5") or {}).get("flash_ret3"),
+            },
         }
         ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         (HISTORY_DIR / f"{ts}.json").write_text(json.dumps(snap, indent=2, ensure_ascii=False))
