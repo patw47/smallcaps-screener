@@ -714,8 +714,11 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     """Filtres durs prix/volume + signaux techniques. Retourne (signaux, 'ok') ou (None, raison)."""
     if df is None or "Close" not in df or "Volume" not in df:
         return None, "history:cols"
-    close = df["Close"].dropna()
-    volume = df["Volume"].dropna()
+    # Aligne Close et Volume sur les barres où les deux existent : un dropna() séparé
+    # désaligne les index (NaN sur l'un seulement) et casse tout indexage booléen croisé.
+    valid = df["Close"].notna() & df["Volume"].notna()
+    close = df["Close"][valid]
+    volume = df["Volume"][valid]
     if len(close) < FILTERS["vol_window_long"] + FILTERS["ma_slope_lookback"]:
         return None, f"history:{len(close)}j"
 
@@ -1046,6 +1049,20 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         v4_cohort, v4_note, v4_mkt21, v4_prelist, v4_tracking = [], f"erreur (ignorée) : {type(e).__name__}", None, [], []
     print(f"[v4] {v4_note} · suivi : {len(v4_tracking)} titres")
 
+    # --- Cohortes v5 (Epic 5, protocole SIGNÉ 2026-07-09) : trois fenêtres pré-déclarées
+    # (7/14/21) + drapeau ⚡. Instrumentation additive (Validation D) — jamais fatal.
+    scan_state["phase"] = "v5_cohorts"
+    try:
+        from v5 import build_cohorts as v5_build_cohorts, build_tracking as v5_build_tracking
+        v5_data = v5_build_cohorts(survivors, prices, bench_close)
+        v5_data["tracking"] = v5_build_tracking(prices, HISTORY_DIR)
+    except Exception as e:
+        v5_data = {"windows": {}, "flash": False, "flash_ret3": None, "tracking": [],
+                   "note": f"erreur (ignorée) : {type(e).__name__}"}
+    v5_counts = " · ".join(f"{w}j:{len(b.get('cohort', []))}" for w, b in v5_data["windows"].items())
+    print(f"[v5] cohortes {{{v5_counts}}} · ⚡ {'OUI' if v5_data['flash'] else 'non'}"
+          f" · suivi : {len(v5_data['tracking'])} lignes")
+
     # --- Sélection des survivants à enrichir (Passe B coûteuse) ---
     # Epic 2, mode "tradability" : la sélection est faite par les DÉTECTEURS DE PROFILS
     # (Fusée/Phénix, percentiles cross-sectionnels du protocole v2 §3) — seuls les MEMBRES
@@ -1138,6 +1155,7 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         "v4_mkt21": v4_mkt21,            # état du marché (IWM 21 j) affiché en tête
         "v4_prelist": v4_prelist,        # jours haussiers : règles-titre seules, sans EDGAR
         "v4_tracking": v4_tracking,      # suivi des cohortes passées (§A.6, affichage)
+        "v5": v5_data,                   # Epic 5 : cohortes 7/14/21 + ⚡ + suivi (Validation D)
         "enriched": n_surv,
         "candidates": len(candidates),
         "stocks": candidates,
@@ -1157,6 +1175,15 @@ def run_scan(tickers: list[str] | None = None) -> dict:
             print(f"[alert] {len(alerted)} entrée(s) v4 notifiée(s) : {', '.join(alerted)}")
     except Exception as e:
         print(f"[alert] erreur (ignorée) : {e}")
+
+    # --- Alerte Telegram sur les NOUVELLES entrées v5, toutes fenêtres — jamais fatal.
+    try:
+        from alerts import notify_new_v5_entries
+        alerted_v5 = notify_new_v5_entries(v5_data.get("windows", {}))
+        if alerted_v5:
+            print(f"[alert] {len(alerted_v5)} entrée(s) v5 notifiée(s) : {', '.join(alerted_v5)}")
+    except Exception as e:
+        print(f"[alert] erreur v5 (ignorée) : {e}")
 
     scan_state.update({"scanning": False, "phase": "idle"})
     return output
@@ -1196,6 +1223,17 @@ def _write_snapshot(output: dict) -> None:
             # forward. v4_note documente les jours à cohorte vide (marché haussier ≠ panne).
             "v4_cohort": output.get("v4_cohort", []),
             "v4_note": output.get("v4_note", ""),
+            # Epic 5 (protocole v5 §9) : les trois cohortes du jour + ⚡ — sans pré-liste
+            # ni tracking (dérivables), seule la matière première du jugement forward.
+            "v5": {
+                "windows": {
+                    w: {"mkt": b.get("mkt"), "note": b.get("note", ""),
+                        "cohort": b.get("cohort", [])}
+                    for w, b in (output.get("v5") or {}).get("windows", {}).items()
+                },
+                "flash": (output.get("v5") or {}).get("flash", False),
+                "flash_ret3": (output.get("v5") or {}).get("flash_ret3"),
+            },
         }
         ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         (HISTORY_DIR / f"{ts}.json").write_text(json.dumps(snap, indent=2, ensure_ascii=False))
