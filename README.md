@@ -3,8 +3,8 @@
 A Dockerized dashboard that discovers and tracks US small-cap stocks. After three
 pre-registered theses failed honest backtests, it is now explicitly a **watchlist /
 research tool**: it surfaces candidates, displays the **measured historical
-probabilities** (with their two-sided risks), and runs a forward-validation
-experiment (protocol v4) — it does not claim an edge and it does not trade.
+probabilities** (with their two-sided risks), and runs two forward-validation
+experiments (protocols v4 and v5) — it does not claim an edge and it does not trade.
 The final call stays human. The interface is in French; this documentation is in
 English.
 
@@ -29,6 +29,12 @@ English.
 > day's qualifying cohort; judgment starts after ≥ 12 months of independent windows
 > (≥ July 2027). Until then every number shown is a **descriptive historical frequency,
 > not advice**.
+>
+> **Epic 5 (current, signed 2026-07-09)** adds a second forward experiment on the same
+> washout mechanism, tightened by the dead-vs-exploded autopsy: deeper falls (≥ 15 %) on
+> **three pre-declared market windows** (7/14/21 d, switchable in the UI, primary variant
+> 14 d), quiet-volume + money-flow filters, and a display-only ⚡ flash-crash flag. Binding
+> spec: **[docs/backtest_protocol_v5.md](docs/backtest_protocol_v5.md)** (Validation D).
 
 ## How it works
 
@@ -139,6 +145,20 @@ after 8 windows, or crashes > 2× explosions. Any tweak = protocol revision + cl
 Every UI label is defined in [docs/glossaire.md](docs/glossaire.md) with its measured
 number and source — new displayed metric ⇒ glossary entry + tooltip (review rule).
 
+## Epic 5 — the multi-window washout cohorts (forward validation, running)
+
+The signed protocol [docs/backtest_protocol_v5.md](docs/backtest_protocol_v5.md)
+(2026-07-09) freezes **six entry rules** over **three pre-declared market windows**
+(7/14/21 trading days — primary variant at judgment: **14 d**): price ≤ 8 $, no pending
+dilution (EDGAR), stock down ≥ **15 %** over the window, IWM < 0 over the **same** window,
+CMF(20) > −0.10, and a *quiet-volume* fall (window volume ≤ 1.25× the prior-60-session
+base). A ⚡ *flash-crash* flag (IWM 3-day return ≤ −8 %, the 0.5th percentile of 26 years)
+is display-only, never a rule. Every scan (`backend/v5.py`) records the three cohorts in
+the dated snapshot (Validation D) and the header's 7/14/21 switch drives the v5 section of
+the dashboard; the v4 cohort keeps running unchanged on its own 21 d rule. All v5 backtest
+numbers are in-sample, survivor-only, t < 0.5 — forward data is the only judge. The
+exploration scripts behind the protocol tables live in `docs/exploration_v5/`.
+
 ## Validation & monitoring
 
 - **The study** (`backend/backtest.py --study`): a **rolling multi-date cross-section** over
@@ -243,11 +263,12 @@ curl http://localhost:8000/api/performance
 - **Setup vs trigger.** `setup_score` (alias of `score`) says *"the spring is coiled"* —
   a watchlist candidate. `triggered` says *"the breakout is happening now"* (close above the
   recent pivot **and** a volume surge). Every candidate carries both plus `days_since_trigger`.
-- **Telegram alerts fire on new v4 cohort entries** (Epic 4 — the only list with positive
-  historical expectancy), not on breakouts anymore. Set `TELEGRAM_BOT_TOKEN` /
-  `TELEGRAM_CHAT_ID` to enable — absent, alerting is silently off and the scan is unaffected.
-  Messages embed the disclaimer (forward validation, t=0.47, not advice) and are deduped
-  per ticker (`alert_dedup_days`).
+- **Telegram alerts fire on new v4 AND v5 cohort entries** (not on breakouts anymore —
+  measured non-predictive). Set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` to enable —
+  absent, alerting is silently off and the scan is unaffected. Messages embed the
+  disclaimer (forward validation, not advice) and are deduped per ticker
+  (`alert_dedup_days`); a v5 name qualifying on several windows sends one line listing
+  its windows.
 - **Yahoo rate-limits `.info` hard.** Hitting it with many parallel requests bans the
   IP (`YFRateLimitError`). Pass B therefore uses a small thread pool (2) + backoff, and
   only enriches the top ~150 survivors. This is by design — do not raise `enrich_workers`.
@@ -260,8 +281,10 @@ curl http://localhost:8000/api/performance
   batches (free); only the top ~150 survivors reach the costly `.info` calls.
 - Market data comes from public endpoints and `yfinance`; field quality varies by
   ticker (small caps especially). The reliable signals are price/volume based.
-- The dashboard leads with the **v4 section** (today's cohort or the rising-market pre-list,
-  the frozen measured stats band, and the cohort tracking table), then the **extreme zones**:
+- The dashboard header carries the **7/14/21 d market switch** (+ ⚡ flash-crash badge when
+  IWM ≤ −8 % over 3 sessions); it drives the **v5 section**. The **v4 section** sits above
+  it, collapsed by default (it auto-expands the days a v4 cohort exists), then the
+  **extreme zones**:
   🚀 **Fusée** / 🔥 **Phénix** badges with their **two-sided measured stats** (explosion lift
   *and* crash lift) and a per-stock risk dossier. Every label has a tooltip mirrored in
   [docs/glossaire.md](docs/glossaire.md). All profile badges carry the "non validé" marker
@@ -360,6 +383,7 @@ docs/                     # architecture, protocols v1–v4, glossary, api, fron
 - [Frontend](docs/frontend.md)
 - [Deployment and operations](docs/deployment.md)
 - [Glossary — every displayed metric, its tooltip and its source](docs/glossaire.md)
+- [Guide de lecture de l'interface — ce qu'on voit, étage par étage](docs/guide_interface.md)
 - Pre-registered protocols (frozen, with verdicts):
   [v1](docs/backtest_protocol.md) · [v2](docs/backtest_protocol_v2.md) ·
   [v3](docs/backtest_protocol_v3.md) · **[v4 (active, forward)](docs/backtest_protocol_v4.md)**

@@ -62,5 +62,18 @@ avec les chiffres sources. Chaque chiffre cité provient d'une table gelée :
 | **Cônes / trajectoires** | Les chemins médians mesurés : explosions +5,6 % dès 3 j → +127 % à 3 mois (et tiennent à 6 mois) ; crashs −1,2 % → −59 % (et continuent). « Entre les cônes » = ni l'un ni l'autre. | A.6 |
 | **Whipsaw** | Le coût caché des ventes automatiques précoces : 32 % des futures explosions étaient encore NÉGATIVES à 3 jours (30 % à 2 semaines). C'est pourquoi les checkpoints informent et ne vendent jamais : le stop serré fait passer le panier v4 de +1,4 % à −0,4 %. | A.6 |
 
-*Ajouté en S3 (Epic 4). Toute nouvelle métrique affichée doit entrer ici ET avoir son
-infobulle — c'est une règle de revue.*
+## Cohorte v5 — multi-fenêtres (protocole v5, signé 2026-07-09)
+
+| Terme | Définition | Chiffre source |
+|---|---|---|
+| **Sélecteur 7 j / 14 j / 21 j** | Le même thermomètre marché (IWM) mesuré sur trois rétroviseurs. Les fenêtres courtes voient les purges éclair (juillet 2024 : −10 % en 16 séances, jamais vue par le 21 j), les longues voient les glissades de plusieurs mois. Le choix pilote la liste v5 ; la v4 reste jugée sur 21 j. | v5 §3.2-§3.3 |
+| **Chute fenêtre (règle −15 %)** | Le titre doit avoir perdu ≥ 15 % sur la fenêtre choisie. Gradient mesuré : plus la chute est profonde, plus le rebond moyen est fort — jusqu'à −20 % ; au-delà, les crashs doublent. | v5 §4 |
+| **Volume calme (≤ 1,25×)** | Volume moyen pendant la chute / volume habituel (60 séances précédentes). Bas = le titre baisse « dans l'indifférence » — signature des futurs doubleurs (1,1×) ; les futurs morts chutaient SUR volume (1,4-1,6×). | v5 §5 |
+| **CMF > −0,10 (règle v5)** | Flux d'argent Chaikin sur 20 séances : les futurs morts avaient un CMF deux fois plus négatif (−0,15) que les futurs doubleurs (−0,07). | v5 §5 |
+| **⚡ Krach éclair** | IWM ≤ −8 % en 3 séances — le pire demi-percentile de 26 ans (~1×/2 ans : COVID, 2022, yen-carry 2024, tarifs 2025). Information de contexte, jamais une règle d'entrée ; payoff mesuré sur UN épisode seulement. | v5 §7 |
+| **Variante primaire (14 j)** | Trois fenêtres = trois chances de faux positif. Le jugement forward ne validera la méthode que si la 14 j (désignée d'avance) passe ses critères ; 7 j et 21 j sont secondaires. | v5 §9 |
+| **P(−50 %) « 0 %* »** | Le zéro crash mesuré à 7/14 j est un artefact d'échantillon (70-151 cas, vrai taux ~2 %) — dimensionner comme si c'était ~2 %. | v5 §6.2 |
+| **Validation D** | Le jugement forward des cohortes v5 : ≥ 4 cohortes non chevauchantes pour une première lecture, ≥ 8 (~24 mois) pour le jugement final. | v5 §9 |
+
+*Ajouté en S3 (Epic 4), complété Epic 5. Toute nouvelle métrique affichée doit entrer ici ET
+avoir son infobulle — c'est une règle de revue.*
