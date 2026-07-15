@@ -1,0 +1,25 @@
+# config/local.example.yml — modèle de configuration locale.
+#
+# Copier vers config/local.yml (gitignoré) puis renseigner les vraies valeurs :
+#   cp config/local.example.yml config/local.yml
+#
+# Chargé au démarrage du backend s'il existe ; sans fichier, les defaults du
+# code s'appliquent tels quels. Trois sections autorisées : filters, v4, v5.
+# Toute autre section, ou toute clé absente des defaults, fait échouer le
+# démarrage (protection typo — une faute de frappe ne doit jamais laisser
+# silencieusement la valeur par défaut).
+#
+# Sur le VPS, poser REQUIRE_LOCAL_CONFIG=1 : le backend refuse alors de
+# démarrer sans ce fichier (protège le live tracker des valeurs neutres).
+
+# Surcharges de FILTERS (backend/screener_backend.py) — merge profond,
+# clé par clé. Exemples (placeholders neutres, valeurs = defaults du code) :
+filters: {}
+#   price_min: 2.0
+#   score_weights:
+#     compression: 2
+
+# Constantes v4 / v5 (protocoles gelés) — sections réservées, consommées au
+# Sprint 2 de l'epic 6. Laisser vides d'ici là.
+v4: {}
+v5: {}

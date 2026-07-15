@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
 import yfinance as yf
 import pandas as pd
 
@@ -153,6 +154,67 @@ FILTERS = {
         "phenix_sma_window": 20,   # close ≥ SMA20 : garde de stabilisation (booléenne, pas un percentile)
     },
 }
+
+# ---------------------------------------------------------------------------
+# Overlay de config locale (Epic 6 S1) — config/local.yml, gitignoré, YAML.
+# Sans fichier : defaults inchangés. REQUIRE_LOCAL_CONFIG=1 (VPS) : refus de
+# démarrer sans fichier — protège le live tracker de tourner en valeurs neutres
+# après l'extraction de l'edge (Sprint 2).
+# ---------------------------------------------------------------------------
+CONFIG_FILE = Path(os.environ.get("CONFIG_FILE", "/app/config/local.yml"))
+
+V4_CONFIG: dict = {}  # sections v4:/v5: du YAML — réservées, consommées au Sprint 2
+V5_CONFIG: dict = {}
+
+
+class LocalConfigError(RuntimeError):
+    """Config locale invalide, ou absente alors que REQUIRE_LOCAL_CONFIG=1."""
+
+
+def _deep_merge(base: dict, overlay: dict, path: str) -> None:
+    """Merge récursif overlay → base ; clé absente des defaults = erreur (anti-typo)."""
+    for key, value in overlay.items():
+        if key not in base:
+            raise LocalConfigError(f"config locale : clé inconnue '{path}{key}'")
+        if isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value, f"{path}{key}.")
+        else:
+            base[key] = value
+
+
+def load_local_config(path: Path | None = None, filters: dict | None = None) -> None:
+    """Surcharge `filters` (défaut : FILTERS) avec config/local.yml si présent."""
+    path = CONFIG_FILE if path is None else path
+    filters = FILTERS if filters is None else filters
+    if not path.exists():
+        if os.environ.get("REQUIRE_LOCAL_CONFIG") == "1":
+            raise LocalConfigError(
+                f"REQUIRE_LOCAL_CONFIG=1 mais {path} absent — refus de démarrer "
+                "(un scan sans overlay tournerait en valeurs neutres)"
+            )
+        return
+    raw = yaml.safe_load(path.read_text())
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        raise LocalConfigError(f"config locale : la racine de {path} doit être un mapping YAML")
+    for key, value in raw.items():
+        value = value or {}
+        if not isinstance(value, dict):
+            raise LocalConfigError(f"config locale : la section '{key}' doit être un mapping")
+        if key == "filters":
+            _deep_merge(filters, value, "filters.")
+        elif key == "v4":
+            V4_CONFIG.update(value)
+        elif key == "v5":
+            V5_CONFIG.update(value)
+        else:
+            raise LocalConfigError(
+                f"config locale : section inconnue '{key}' (attendu : filters, v4, v5)"
+            )
+
+
+load_local_config()
 
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
 os.makedirs(DATA_DIR, exist_ok=True)
