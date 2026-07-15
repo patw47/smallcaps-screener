@@ -23,3 +23,9 @@ CLAUDE.md
 .epic.md
 .sprint.md
 .conventions
+
+# Local Claude Code tooling — generated per project, never committed
+.claude/worktrees/
+.claude/settings.local.json
+.claude/memory/
+.claude/agents/
