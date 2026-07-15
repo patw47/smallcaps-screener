@@ -1,5 +1,8 @@
 .env
 .env.local
+
+# Config locale (edge non versionné — seul local.example.yml est committé)
+config/local.yml
 screener_data.json
 __pycache__/
 *.pyc
@@ -15,3 +18,14 @@ CLAUDE.md
 
 # Sprint handoff summaries (live in Obsidian, not in the repo)
 .sprint-*-summary.md
+
+# Machine-specific symlinks into the Obsidian vault (remapped per epic/sprint)
+.epic.md
+.sprint.md
+.conventions
+
+# Local Claude Code tooling — generated per project, never committed
+.claude/worktrees/
+.claude/settings.local.json
+.claude/memory/
+.claude/agents/
