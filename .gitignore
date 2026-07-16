@@ -29,3 +29,6 @@ CLAUDE.md
 .claude/settings.local.json
 .claude/memory/
 .claude/agents/
+
+# Données runtime du tracker (snapshots extraits du volume docker pour le test d'invariance)
+data/

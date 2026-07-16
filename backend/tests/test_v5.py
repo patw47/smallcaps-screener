@@ -12,7 +12,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from v5 import build_cohorts, build_tracking, V5_WINDOWS, V5_FLASH_THR
+import v5
+from v5 import build_cohorts, build_tracking
 
 
 def _series(returns, start=10.0):
@@ -58,8 +59,8 @@ def edgar_stub(monkeypatch):
 def test_three_windows_present_and_market_up_pause(edgar_stub):
     out = build_cohorts([("AAA", {"price": 5.0, "cmf": 0.1})],
                         {"AAA": _stock_df(chg7=-0.20)}, _bench(+0.002))
-    assert set(out["windows"]) == {str(w) for w in V5_WINDOWS}
-    for w in V5_WINDOWS:
+    assert set(out["windows"]) == {str(w) for w in v5.CFG["windows"]}
+    for w in v5.CFG["windows"]:
         block = out["windows"][str(w)]
         assert block["cohort"] == []
         assert "haussier" in block["note"]
@@ -70,7 +71,7 @@ def test_three_windows_present_and_market_up_pause(edgar_stub):
 
 def test_no_benchmark(edgar_stub):
     out = build_cohorts([("AAA", {"price": 5.0, "cmf": 0.1})], {}, None)
-    for w in V5_WINDOWS:
+    for w in v5.CFG["windows"]:
         assert "indisponible" in out["windows"][str(w)]["note"]
     assert out["flash"] is False and out["flash_ret3"] is None
 
@@ -80,9 +81,9 @@ def test_entry_rules_bear_market(edgar_stub):
     edgar_stub.update({"OK": False, "DIL": True, "MUTE": None})
     tradables = [
         ("OK",      {"price": 5.0, "cmf": 0.10}),   # qualifie (7 j)
-        ("PRICEY",  {"price": 9.0, "cmf": 0.10}),   # prix > 8
-        ("SHALLOW", {"price": 5.0, "cmf": 0.10}),   # chute 7 j > −15 %
-        ("CMFBAD",  {"price": 5.0, "cmf": -0.30}),  # CMF ≤ −0,10
+        ("PRICEY",  {"price": 9.0, "cmf": 0.10}),   # prix > seuil
+        ("SHALLOW", {"price": 5.0, "cmf": 0.10}),   # chute 7 j insuffisante
+        ("CMFBAD",  {"price": 5.0, "cmf": -0.30}),  # CMF ≤ seuil
         ("LOUD",    {"price": 5.0, "cmf": 0.10}),   # chute SUR volume (2×)
         ("DIL",     {"price": 5.0, "cmf": 0.10}),   # dilution pendante
         ("MUTE",    {"price": 5.0, "cmf": 0.10}),   # EDGAR muet ⇒ non qualifié
@@ -114,10 +115,10 @@ def test_cohort_sorted_deepest_first(edgar_stub):
 
 
 def test_flash_flag(edgar_stub):
-    # 3 dernières séances à −3 % chacune → ret3 ≈ −8,7 % ≤ seuil −8 %
+    # 3 dernières séances à −3 % chacune → ret3 ≈ −8,7 % ≤ seuil de test
     out = build_cohorts([], {}, _bench(+0.001, tail=[-0.03, -0.03, -0.03]))
     assert out["flash"] is True
-    assert out["flash_ret3"] <= V5_FLASH_THR
+    assert out["flash_ret3"] <= v5.CFG["flash_thr"]
     # baisse ordinaire → pas de drapeau
     out2 = build_cohorts([], {}, _bench(-0.002))
     assert out2["flash"] is False
@@ -163,8 +164,10 @@ def test_snapshot_carries_v5(tmp_path, monkeypatch):
     b7 = snap["v5"]["windows"]["7"]
     assert b7["cohort"][0]["ticker"] == "OK" and b7["mkt"] == -0.02
     assert snap["v5"]["flash"] is True
-    # pré-liste et tracking dérivables → jamais dans le snapshot
+    # pré-liste et tracking dérivables → jamais dans le snapshot ; display non plus
+    # (les paramètres d'affichage — l'edge — ne sont jamais persistés dans l'historique)
     assert "prelist" not in b7 and "tracking" not in snap["v5"]
+    assert "display" not in snap
 
 
 def test_tracking_ignores_snapshots_without_v5(tmp_path):
