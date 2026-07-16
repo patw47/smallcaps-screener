@@ -63,15 +63,16 @@ weights and functions.
 
 ## The forward experiments (washout cohorts)
 
-The one pattern worth watching: cheap (≤ $8), beaten-down stocks with no pending EDGAR
+The one pattern worth watching: cheap, beaten-down stocks with no pending EDGAR
 dilution, falling **together with a falling market** — historically they mean-reverted
 (a small positive quarterly return, but statistically unproven). The historical data is
 exhausted, so the only honest judge left is the future. Two variants run in parallel:
 
 - a **21-day-window** cohort (`backend/v4.py`), and
 - a **multi-window** set — 7/14/21 trading days, switchable from the dashboard header
-  (`backend/v5.py`) — with tighter filters (deeper fall ≥ 15 %, quiet volume, money-flow
-  floor) and a display-only ⚡ flash-crash flag.
+  (`backend/v5.py`) — with tighter filters (deeper fall, quiet volume, money-flow floor)
+  and a display-only ⚡ flash-crash flag. The frozen rule values live in the private
+  config overlay, not in the code.
 
 Every daily scan records the day's qualifying cohort into a dated snapshot. On
 rising-market days the method doesn't apply and the dashboard says so, showing a **pre-list**
@@ -108,8 +109,8 @@ forward record — never on the in-sample numbers.
   `GET /api/scan/status` for `phase`/`progress`.
 - A scan sweeps the **entire eligible universe** (identical from one scan to the next — no
   random sampling), takes ~5–10 minutes, and caches for 30 minutes.
-- The dashboard header carries the **7/14/21 d market switch** (+ ⚡ flash-crash badge when
-  IWM ≤ −8 % over 3 sessions), which drives the washout section; the extreme-zone profiles
+- The dashboard header carries the **7/14/21 d market switch** (+ ⚡ flash-crash badge on
+  extreme IWM drops), which drives the washout section; the extreme-zone profiles
   sit below with their two-sided stats. Every label has a tooltip mirrored in
   [docs/glossaire.md](docs/glossaire.md).
 - This is a screening tool, **not financial advice**.
@@ -156,8 +157,13 @@ DATA_DIR=/tmp/screener_test PYTHONPATH=backend pytest backend/tests/
 
 ## Configuration
 
-Screener thresholds and weights live in the `FILTERS` dict at the top of
-`backend/screener_backend.py` (no magic numbers in the logic).
+Screener thresholds live in the `FILTERS` dict at the top of
+`backend/screener_backend.py` (no magic numbers in the logic). The **edge values**
+(v4/v5 frozen rule constants, scoring weights, display stats) are **not versioned**:
+the code ships neutral defaults, and the real values load at startup from
+`config/local.yml` (gitignored — see `config/local.example.yml`). Set
+`REQUIRE_LOCAL_CONFIG=1` in production so a scan refuses to start without it.
+`make check-edge` gates the repo against value leaks.
 
 | Variable | Used by | Required | Description |
 | --- | --- | --- | --- |
