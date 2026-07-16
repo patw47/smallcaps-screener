@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n docs-build docs-check
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -27,3 +27,10 @@ check-i18n:
 test-invariance:
 	$(TEST_ENV) CONFIG_FILE=$(CURDIR)/config/local.yml HISTORY_DIR=$(CURDIR)/data/history \
 		pytest backend/tests/test_invariance_v5.py -v
+
+# Docs publiques (S4) : build strict MkDocs Material.
+docs-build:
+	mkdocs build --strict
+
+# Gate anti-fuite rejouée sur le rendu site/ (nécessite docs-build avant).
+docs-check: check-edge
