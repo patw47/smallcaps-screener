@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 import v4
-from v4 import build_cohort, market_return_21d, V4_MKT_WINDOW
+from v4 import build_cohort, market_return_21d
 
 
 def _series(returns, start=10.0):
@@ -44,7 +44,7 @@ def edgar_stub(monkeypatch):
 
 def test_market_return_none_if_short():
     assert market_return_21d(None) is None
-    assert market_return_21d(_series([0.001] * (V4_MKT_WINDOW - 5))) is None
+    assert market_return_21d(_series([0.001] * (v4.CFG["mkt_window"] - 5))) is None
 
 
 def test_market_up_gives_empty_cohort(edgar_stub):
@@ -66,8 +66,8 @@ def test_entry_rules(edgar_stub):
     edgar_stub.update({"OK": False, "DIL": True, "MUTE_ABSENT": None})
     tradables = [
         ("OK", {"price": 5.0, "change_1m": -0.10}),        # qualifie
-        ("PRICEY", {"price": 9.0, "change_1m": -0.10}),    # prix > 8
-        ("FLAT", {"price": 5.0, "change_1m": -0.01}),      # chute < 3 %
+        ("PRICEY", {"price": 9.0, "change_1m": -0.10}),    # prix > seuil
+        ("FLAT", {"price": 5.0, "change_1m": -0.01}),      # chute insuffisante
         ("DIL", {"price": 5.0, "change_1m": -0.10}),       # dilution pendante
         ("MUTE_ABSENT", {"price": 5.0, "change_1m": -0.10}),  # EDGAR renvoie flag None
         ("UNKNOWN", {"price": 5.0, "change_1m": -0.10}),   # EDGAR renvoie None (pas dans stub)
@@ -77,8 +77,8 @@ def test_entry_rules(edgar_stub):
     assert [e["ticker"] for e in cohort] == ["OK"]
     assert "1 qualifiés" in note
     e = cohort[0]
-    assert e["margins"]["price"] == pytest.approx(3.0)
-    assert e["margins"]["change_1m"] == pytest.approx(0.07)
+    assert e["margins"]["price"] == pytest.approx(v4.CFG["price_max"] - 5.0)
+    assert e["margins"]["change_1m"] == pytest.approx(v4.CFG["chg1m_max"] - (-0.10))
     assert e["mkt21"] < 0
 
 
@@ -86,7 +86,7 @@ def test_beta_resid_and_sort(edgar_stub):
     n = 200
     rng = np.random.default_rng(7)
     bench_rets = rng.normal(-0.002, 0.01, n)
-    bench_rets[-V4_MKT_WINDOW:] = -0.004   # fin baissière garantie (condition §2.4)
+    bench_rets[-v4.CFG["mkt_window"]:] = -0.004   # fin baissière garantie (condition §2.4)
     bench = _series(list(bench_rets))
     # HIBETA suit le marché ×2 ; IDIO chute indépendamment (bêta ~0)
     hib = _series(list(2.0 * bench_rets))
@@ -139,7 +139,7 @@ def test_prelist_on_market_up(edgar_stub):
 
 
 def test_tracking_checkpoint_and_window(tmp_path):
-    from v4 import build_tracking, V4_CHECKPOINT_DAY
+    from v4 import build_tracking
 
     # snapshot : entrée ENTRY à 10.0 le 2025-06-02 (lundi)
     snap = {"scanned_at": "2025-06-02T20:00:00+00:00",
@@ -151,7 +151,7 @@ def test_tracking_checkpoint_and_window(tmp_path):
              "v4_cohort": [{"ticker": "ENTRY", "price": 11.0}]}
     (tmp_path / "20250604_200000.json").write_text(json.dumps(snap2))
 
-    # série de prix : 8 séances APRÈS l'entrée, r5 = +5 % (> seuil +3 %)
+    # série de prix : 8 séances APRÈS l'entrée, r5 = +5 % (> seuil de test)
     idx = pd.bdate_range("2025-06-03", periods=8)
     closes = [10.2, 10.4, 10.3, 10.4, 10.5, 10.6, 10.4, 10.8]
     prices = {"ENTRY": pd.DataFrame({"Close": pd.Series(closes, index=idx)})}
@@ -162,7 +162,7 @@ def test_tracking_checkpoint_and_window(tmp_path):
     assert e["entry_price"] == 10.0            # première entrée conservée
     assert e["days_held"] == 8
     assert e["ret"] == pytest.approx(0.08)
-    assert e["checkpoint"] == "1 semaine (seuil +3 %)"
+    assert e["checkpoint"] == f"1 semaine (seuil {v4.CFG['checkpoint_thr']:+.0%})"
     assert e["ret_5"] == pytest.approx(0.05)
     assert e["status"] == "au-dessus"
     # ticker sans données de prix → signalé, jamais fatal
@@ -199,7 +199,7 @@ def test_tracking_below_threshold_too_early_and_tz(tmp_path):
                           {"ticker": "YOUNG", "price": 10.0}]}
     (tmp_path / "20250602_200000.json").write_text(json.dumps(snap))
 
-    # SLOW : 6 séances, r5 = +1 % (< seuil +3 %) — index TZ-AWARE comme yfinance
+    # SLOW : 6 séances, r5 = +1 % (< seuil de test) — index TZ-AWARE comme yfinance
     idx6 = pd.bdate_range("2025-06-03", periods=6, tz="UTC")
     slow = pd.Series([10.0, 10.05, 10.0, 10.05, 10.1, 10.0], index=idx6)
     # YOUNG : 2 séances seulement → trop tôt
@@ -216,19 +216,20 @@ def test_tracking_below_threshold_too_early_and_tz(tmp_path):
 
 
 def test_tracking_window_close_labels(tmp_path):
-    from v4 import build_tracking, V4_HORIZON
+    from v4 import build_tracking
+    horizon = v4.CFG["horizon"]
 
     snap = {"scanned_at": "2025-01-06T20:00:00+00:00",
             "v4_cohort": [{"ticker": "BOOM", "price": 10.0}, {"ticker": "BUST", "price": 10.0}]}
     (tmp_path / "20250106_200000.json").write_text(json.dumps(snap))
 
-    idx = pd.bdate_range("2025-01-07", periods=V4_HORIZON + 5)
-    boom = pd.Series([10.0] * (V4_HORIZON - 1) + [21.0] * 6, index=idx)   # ≥ +100 % à J+63
-    bust = pd.Series([10.0] * (V4_HORIZON - 1) + [4.0] * 6, index=idx)    # ≤ −50 % à J+63
+    idx = pd.bdate_range("2025-01-07", periods=horizon + 5)
+    boom = pd.Series([10.0] * (horizon - 1) + [21.0] * 6, index=idx)   # ≥ +100 % au checkpoint
+    bust = pd.Series([10.0] * (horizon - 1) + [4.0] * 6, index=idx)    # ≤ −50 % au checkpoint
 
     rows = build_tracking({"BOOM": pd.DataFrame({"Close": boom}),
                            "BUST": pd.DataFrame({"Close": bust})}, tmp_path)
     by = {r["ticker"]: r for r in rows}
-    assert by["BOOM"]["checkpoint"] == "fenêtre 63j close"
+    assert by["BOOM"]["checkpoint"] == f"fenêtre {horizon}j close"
     assert by["BOOM"]["status"].startswith("explosion")
     assert by["BUST"]["status"].startswith("crash")

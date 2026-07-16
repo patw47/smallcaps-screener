@@ -3,23 +3,80 @@
 # Copier vers config/local.yml (gitignoré) puis renseigner les vraies valeurs :
 #   cp config/local.example.yml config/local.yml
 #
-# Chargé au démarrage du backend s'il existe ; sans fichier, les defaults du
-# code s'appliquent tels quels. Trois sections autorisées : filters, v4, v5.
-# Toute autre section, ou toute clé absente des defaults, fait échouer le
-# démarrage (protection typo — une faute de frappe ne doit jamais laisser
-# silencieusement la valeur par défaut).
+# Chargé au démarrage du backend s'il existe ; sans fichier, les defaults NEUTRES
+# du code s'appliquent (aucun titre ne qualifie en v4/v5, poids de scoring
+# uniformes, bandeaux/glossaire v4-v5 vides). Trois sections autorisées :
+# filters, v4, v5. Toute clé absente des defaults fait échouer le démarrage
+# (protection typo — une faute de frappe ne doit jamais laisser silencieusement
+# la valeur par défaut).
 #
-# Sur le VPS, poser REQUIRE_LOCAL_CONFIG=1 : le backend refuse alors de
-# démarrer sans ce fichier (protège le live tracker des valeurs neutres).
+# Sur le VPS, poser REQUIRE_LOCAL_CONFIG=1 : le backend refuse alors de démarrer
+# sans ce fichier (protège le live tracker de tourner en valeurs neutres).
+#
+# Les valeurs réelles v4/v5 sont GELÉES par les protocoles signés (archivés hors
+# repo) : les recopier à l'identique, bit à bit. Les modifier = révision de
+# protocole + remise à zéro du chrono forward.
 
-# Surcharges de FILTERS (backend/screener_backend.py) — merge profond,
-# clé par clé. Exemples (placeholders neutres, valeurs = defaults du code) :
+# Surcharges de FILTERS (backend/screener_backend.py) — merge profond, clé par clé.
 filters: {}
-#   price_min: 2.0
-#   score_weights:
-#     compression: 2
+#   score_weights:        # poids réels du scoring (defaults du code : uniformes)
+#     accumulation: 1
+#     compression: 1
+#     near_pivot: 1
+#     low_ext: 1
+#     rs_turning: 1
+#     above_ma: 1
+#     insider: 1
+#     cash: 1
+#     revenue: 1
+#     low_float: 1
+#     short: 1
 
-# Constantes v4 / v5 (protocoles gelés) — sections réservées, consommées au
-# Sprint 2 de l'epic 6. Laisser vides d'ici là.
+# Constantes gelées du protocole v4 + affichage (bandeau/glossaire servis à l'UI).
 v4: {}
+#   price_max: 0.0        # §2.1  prix ≤ seuil
+#   chg1m_max: 0.0        # §2.3  chute 1 mois ≤ seuil
+#   mkt_window: 21        # §2.4  fenêtre (séances) de la règle marché IWM
+#   beta_window: 126
+#   beta_min_obs: 60
+#   checkpoint_day: 5     # §A.6
+#   checkpoint_thr: 0.0   # §A.6
+#   horizon: 63
+#   prelist_max: 12
+#   display:
+#     depth_scale: 1.0    # échelle de la jauge résidu
+#     stats:              # chiffres gelés du bandeau (chaînes affichées telles quelles)
+#       esperance: ""
+#       mediane: ""
+#       p_explode: ""
+#       p_crash: ""
+#       t: ""
+#     gloss:              # textes du glossaire UI (infobulles) — voir v4.py pour les clés
+#       regles: ""
+#       research: ""
+#       # ... (mêmes clés que v4.CFG["display"]["gloss"])
+
+# Constantes gelées du protocole v5 + affichage.
 v5: {}
+#   price_max: 0.0        # §8.1
+#   chg_max: 0.0          # §8.3
+#   windows: [7, 14, 21]  # §8
+#   cmf_min: 0.0          # §8.5
+#   volcalm_max: 0.0      # §8.6
+#   volcalm_base: 60      # §8.6
+#   flash_window: 3       # §7
+#   flash_thr: -1.0       # §7
+#   checkpoint_day: 5     # §9
+#   checkpoint_thr: 0.0   # §9
+#   horizon: 63
+#   prelist_max: 12
+#   display:
+#     primary_window: 0   # variante primaire au jugement (0 = non configurée)
+#     stats:              # un bloc par fenêtre déclarée
+#       7:  {esperance: "", mediane: "", p_explode: "", p_crash: "", t: "", n: 0}
+#       14: {esperance: "", mediane: "", p_explode: "", p_crash: "", t: "", n: 0}
+#       21: {esperance: "", mediane: "", p_explode: "", p_crash: "", t: "", n: 0}
+#     gloss:              # textes du glossaire UI — voir v5.py pour les clés
+#       regles: ""
+#       research: ""
+#       # ... (mêmes clés que v5.CFG["display"]["gloss"])

@@ -3,56 +3,27 @@ import { useState, useEffect, useCallback } from "react";
 const INSTRUMENTS = ["All", "Technology", "Healthcare", "Energy", "Industrials", "Consumer Cyclical"];
 
 // ---------------------------------------------------------------------------
-// Constantes GELÉES — source unique : docs/backtest_protocol_v4.md Annexe A (v4)
-// et docs/backtest_protocol_v2.md §9 (profils). L'interface affiche CES chiffres
-// verbatim (§3 du protocole) — rien n'est recalculé en direct. Tout terme affiché
-// a son entrée dans docs/glossaire.md (règle S3).
+// Depuis l'Epic 6 S2, TOUT ce qui touche aux protocoles v4/v5 (seuils des règles,
+// chiffres gelés des bandeaux, textes du glossaire UI) arrive de l'API via le bloc
+// `display` du payload scan — plus aucune valeur en dur ici (gate : make check-edge).
+// Ne restent ci-dessous que les textes des thèses PUBLIQUES (v1-v3, post-mortems
+// versionnés dans docs/). Tout terme affiché a son entrée dans docs/glossaire.md.
 // ---------------------------------------------------------------------------
-const V4_STATS = {
-  esperance: "+5,9 %", mediane: "+1,6 %", pExplode: "2,0 %", pCrash: "1,9 %",
-  t: "t = 0,47",
-};
-const DEPTH_SCALE = 0.15;   // échelle de la jauge résidu (0 → −15 %)
-
-// Chiffres gelés v5 (protocole v5 §6.2, SIGNÉ 2026-07-09) — fwd63 net, in-sample.
-// P(−50 %) « 0 % » à 7/14 j = artefact d'échantillon (vrai taux ~2 %) — voir l'infobulle.
-const V5_WINDOWS = [7, 14, 21];
-const V5_STATS = {
-  7:  { esperance: "+32,3 %", mediane: "+23,1 %", pExplode: "8,6 %", pCrash: "0 %*", t: "t = 0,34", n: 70 },
-  14: { esperance: "+16,5 %", mediane: "+10,9 %", pExplode: "5,3 %", pCrash: "0 %*", t: "t = 0,42", n: 151 },
-  21: { esperance: "+13,3 %", mediane: "+10,5 %", pExplode: "4,0 %", pCrash: "1,3 %", t: "t = 0,02", n: 150 },
-};
-
 const GLOSS = {
-  iwm: "IWM = l'indice des petites capitalisations US (Russell 2000). On mesure sa variation sur les 21 dernières séances (~1 mois de bourse). Négatif = marché en baisse = la méthode v4 s'applique ; positif = elle se met en pause.",
-  esperance: "Gain ou perte MOYEN par titre, 3 mois après l'entrée, frais de 1 % déduits — mesuré sur 2021-2026 (1 193 cas historiques). Moyenne tirée par quelques gros gagnants : le titre médian ne fait que +1,6 %.",
-  pExplode: "Fréquence historique des +100 % en 3 mois parmi les titres de ce filtre. Référence : 0,8 % pour une petite action prise au hasard — le filtre multiplie par ~2,5.",
-  pCrash: "Fréquence historique des chutes de moitié en 3 mois dans ce filtre. Référence : 3,8 % au hasard — le filtre divise par 2. Rare cas où doubler est devenu AUSSI probable que crasher.",
-  tstat: "Test statistique sur les 18 trimestres indépendants de l'historique. Il faut t ≥ 2 pour exclure le hasard ; à 0,47, le +5,9 % peut parfaitement être de la chance. C'est pour ça que la méthode est en VALIDATION : seules les données réelles à venir trancheront (été 2027).",
-  regles: "Les 4 conditions du protocole signé : prix ≤ 8 $ · aucune dilution en attente · chute ≥ 3 % sur 1 mois · marché lui-même en baisse. « Gelées » = aucun réglage possible sans nouvelle version du protocole, qui remettrait le chronomètre du test à zéro.",
-  research: "Cette liste applique une hypothèse issue de l'analyse du passé, dont la promesse n'est PAS démontrée (t = 0,47). Elle est en cours de test grandeur nature : chaque jour, les titres qualifiés sont enregistrés, et leurs résultats réels seront jugés à partir de l'été 2027 selon des critères écrits à l'avance.",
-  profondeur: "De combien le titre a chuté EN PLUS de ce que la baisse du marché explique (via son bêta). Historiquement, plus cette part propre est profonde, meilleur a été le rebond (+11,2 % contre +2,9 %) — c'est l'ordre d'affichage, et il reste à confirmer en réel. (Terme technique : le « résidu bêta ».)",
   beta: "Sensibilité du titre au marché, mesurée sur ses 6 derniers mois : bêta 1,6 = quand l'indice small caps fait −1 %, ce titre fait −1,6 % en moyenne.",
-  rulePrice: "Règle 1 du protocole : prix ≤ 8 $. Les explosions historiques cotaient 6,5 $ en médiane, contre 13 $ pour les autres — la zone des gros mouvements est bon marché.",
-  ruleChg: "Règle 3 : le titre doit avoir perdu au moins 3 % sur le dernier mois — on achète des soldes, pas des sommets.",
-  ruleDil: "Règle 2 : aucun dépôt de préparation d'émission d'actions (S-1/S-3/424B) à la SEC dans les 180 derniers jours. Une émission en attente écrase les cours à son arrivée — seul signal officiel qui penche clairement vers le crash (2,1×).",
-  ruleMkt: "Règle 4 : l'indice small caps doit lui-même baisser sur 1 mois. Un marché en purge brade des titres sans raison propre (récupérables) ; un titre qui s'effondre seul dans un marché haussier a de vraies casseroles (pire cas mesuré : −7,3 %).",
-  checkpoint: "Point de contrôle mesuré une semaine (5 séances) après l'entrée : au-dessus de +3 %, les titres ont historiquement 4× plus doublé et 2× moins crashé. Information — jamais un ordre de vente : 31 % des explosions étaient encore négatives ici, et vendre automatiquement détruit le rendement mesuré du panier (+1,4 % → −0,4 %).",
+  ruleDil: "Règle « dilution » : aucun dépôt de préparation d'émission d'actions (S-1/S-3/424B) à la SEC dans les 180 derniers jours. Une émission en attente écrase les cours à son arrivée — seul signal officiel qui penche clairement vers le crash (2,1×).",
   phenix: "Profil « Phénix » : action massacrée (loin de son plus-haut annuel), volatilité comprimée, premiers signes de stabilisation. C'est la zone où vivent les explosions (jusqu'à 4,6× la moyenne)… et encore plus les crashs (2,3×) : espérance −11 %, réservé à la recherche humaine. Validation A (protocole v2 §6) : ÉCHEC.",
   fusee: "Profil « Fusée » : momentum extrême + explosion de volume — l'action déjà brûlante. Verdict mesuré : aucun avantage (elle double aussi souvent qu'un titre au hasard, 1,03×) et espérance −9,6 %. Affiché pour information, sans aucune prétention.",
   goingConcern: "« Going-concern » : dans son rapport officiel, les commissaires aux comptes écrivent douter que l'entreprise survive 12 mois. Contre-intuitif mais mesuré : multiplie par 4-5 les chances de doubler ET de s'effondrer — signal de « gros mouvement imminent », sans direction.",
   dilution: "L'entreprise a déposé à la SEC un document préparant une émission de nouvelles actions : ta part sera mécaniquement réduite et l'arrivée des titres écrase le cours. Seul drapeau clairement défavorable : 2,1× plus fréquent avant un crash.",
   prelist: "Titres qui passent les règles-titre (prix, chute) mais attendent la condition marché. La dilution n'est PAS encore vérifiée (elle le sera le jour où ils qualifient).",
-  mktSwitch: "Le même thermomètre (IWM, indice small caps) mesuré sur trois rétroviseurs : 7, 14 ou 21 séances de bourse. Aucun n'est « le bon » : les fenêtres courtes voient les purges éclair (celle de juillet 2024, −10 % en 16 séances, n'a jamais allumé le 21 j), les longues voient les glissades de plusieurs mois. Le choix change la liste v5 affichée en dessous — la cohorte v4, elle, reste jugée sur 21 j (protocole distinct).",
-  v5Regles: "Les 6 conditions du protocole v5 signé (2026-07-09) : prix ≤ 8 $ · aucune dilution en attente · chute ≥ 15 % sur la fenêtre · marché lui-même en baisse sur la MÊME fenêtre · flux CMF > −0,10 · volume calme (≤ 1,25× la normale). Gelées : tout réglage = nouvelle version du protocole + chrono remis à zéro.",
-  v5Research: "Profil « explosée type » issu de l'autopsie des doubleurs historiques : écrasé fort, mais SANS volume ni fuite d'argent — la signature de la survente mécanique, pas du naufrage mérité. Chiffres 2021-2026, survivants seuls, seuils choisis après coup, t < 0,5 partout : peut-être du bruit. Jugement par données réelles uniquement (variante primaire : 14 j).",
-  v5Chg: "Règle 3 v5 : le titre doit avoir perdu au moins 15 % sur la fenêtre choisie. Mesuré : plus la chute est profonde (jusqu'à −20 %), plus le rebond moyen historique est fort — au-delà, les crashs doublent.",
-  volCalme: "Volume moyen pendant la chute rapporté au volume habituel (60 séances précédentes). ≤ 1,25× = le titre baisse « dans l'indifférence », personne ne se précipite pour vendre — c'était la signature des futurs doubleurs. Les futurs morts, eux, chutaient SUR volume (1,4-1,6×).",
-  cmfRule: "Chaikin Money Flow sur 20 séances : où se font les clôtures dans le range du jour, pondéré par le volume. Proche de −1 = l'argent fuit. Règle v5 : CMF > −0,10 — les futurs morts avaient un CMF deux fois plus négatif (−0,15) que les futurs doubleurs (−0,07).",
-  flash: "⚡ Krach éclair : IWM a perdu ≥ 8 % en 3 séances — le pire demi-percentile de 26 ans d'historique (~1 fois tous les 2 ans : COVID 2020, purges 2022, yen-carry août 2024, tarifs avril 2025). Signale un épisode de purge violente en cours. Information de contexte — pas une règle d'entrée, et son rendement n'est mesuré que sur UN épisode.",
-  v5Crash: "Fréquence mesurée des chutes de moitié dans le profil. Le « 0 % » des fenêtres 7 et 14 j est un artefact : sur 70-151 cas avec un vrai taux ~2 %, observer zéro crash est du bruit d'échantillon. Dimensionner comme si c'était ~2 %.",
-  v5Tracking: "Journal de la Validation D : chaque titre qualifié v5 est enregistré (fenêtre, date, prix) et suivi. Première lecture ≥ 4 cohortes non chevauchantes ; jugement final ≥ 8 (~24 mois). Information, jamais un ordre de vente.",
 };
+
+// Interpolation {clé} dans les templates servis par l'API (remplacée par t() au S3 i18n).
+const fmt = (tpl, vars = {}) =>
+  tpl ? Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v ?? "—"), tpl) : "";
+// Nombre au format français (ex. −0,42 · 2,5) — les valeurs arrivent numériques de l'API.
+const numFr = (x, d = 2) => x == null ? "—" : x.toFixed(d).replace(".", ",").replace("-", "−");
 
 // ---------------------------------------------------------------------------
 // Infobulle accessible (survol + focus clavier). Pointillé = explication dispo.
@@ -86,8 +57,10 @@ const pctFmt = (x, digits = 1) => x == null ? "—" : `${x > 0 ? "+" : ""}${(x *
 // ---------------------------------------------------------------------------
 // Étage 1 — cohorte v4 (la seule liste à espérance historique positive)
 // ---------------------------------------------------------------------------
-function V4Card({ entry, rank, total }) {
-  const depth = entry.resid != null ? Math.min(100, Math.abs(Math.min(entry.resid, 0)) / DEPTH_SCALE * 100) : 0;
+function V4Card({ entry, rank, total, dp4 }) {
+  const g = dp4.gloss ?? {}, rules = dp4.rules ?? {};
+  const depth = entry.resid != null && dp4.depth_scale > 0
+    ? Math.min(100, Math.abs(Math.min(entry.resid, 0)) / dp4.depth_scale * 100) : 0;
   const first = rank === 0;
   return (
     <div style={{
@@ -108,16 +81,15 @@ function V4Card({ entry, rank, total }) {
         )}
       </div>
 
-      {first && (
+      {first && g.first_pick && (
         <div style={{ marginTop: 10, fontSize: 13, color: "#d7e0e8", borderLeft: "2px solid #00e096", paddingLeft: 10 }}>
-          Pourquoi lui : le plus survendu des {total} qualifiés (résidu {pctFmt(entry.resid)}),
-          toutes les marges larges — le sous-groupe historiquement le plus payant (+11,2 %).
+          {fmt(g.first_pick, { total, resid: pctFmt(entry.resid) })}
         </div>
       )}
 
       <div style={{ margin: "12px 0 4px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#8494a3", marginBottom: 4 }}>
-          <Tip tip={GLOSS.profondeur}>Profondeur de survente</Tip>
+          <Tip tip={g.profondeur}>Profondeur de survente</Tip>
           <span style={{ fontFamily: "monospace" }}>résidu {pctFmt(entry.resid)}</span>
         </div>
         <div style={{ height: 6, background: "#182230", borderRadius: 3, overflow: "hidden" }}>
@@ -130,10 +102,10 @@ function V4Card({ entry, rank, total }) {
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
         {[
-          { tip: GLOSS.rulePrice, text: <>prix <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> / seuil 8 $</> },
-          { tip: GLOSS.ruleChg, text: <>1 mois <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.change_1m)}</b> / seuil −3 %</> },
+          { tip: g.rule_price, text: <>prix <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> / seuil {rules.price_max ?? "—"} $</> },
+          { tip: g.rule_chg, text: <>1 mois <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.change_1m)}</b> / seuil {pctFmt(rules.chg1m_max, 0)}</> },
           { tip: GLOSS.ruleDil, text: <>dilution : <b style={{ color: "#d7e0e8" }}>aucune</b> (EDGAR 180 j)</> },
-          { tip: GLOSS.ruleMkt, text: <>marché IWM 21 j &lt; 0 ✓ <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt21)})</b></> },
+          { tip: g.rule_mkt, text: <>marché IWM {rules.mkt_window ?? "—"} j &lt; 0 ✓ <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt21)})</b></> },
         ].map((m, i) => (
           <Tip key={i} tip={m.tip} style={{
             background: "#16202b", border: "1px solid #1c4033", borderRadius: 4,
@@ -153,7 +125,8 @@ function V4Card({ entry, rank, total }) {
   );
 }
 
-function V4Section({ cohort, note, mkt21, prelist }) {
+function V4Section({ cohort, note, mkt21, prelist, dp4 }) {
+  const g = dp4.gloss ?? {}, stats = dp4.stats ?? {};
   // Repliée par défaut (protocole distinct, jugé sur 21 j) — s'ouvre seule quand une
   // cohorte existe (marché baissier 21 j), le seul cas actionnable.
   const [open, setOpen] = useState(cohort.length > 0);
@@ -168,11 +141,11 @@ function V4Section({ cohort, note, mkt21, prelist }) {
           <span style={{ color: "#5a6a79", marginRight: 6 }}>{open ? "▾" : "▸"}</span>
           Cohorte v4 du jour {cohort.length > 0 && "— commencer ici"}
         </h2>
-        <Tip tip={GLOSS.research} style={{
+        <Tip tip={g.research} style={{
           fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", padding: "2px 8px",
           borderRadius: 3, border: "1px solid #4a3f1a", color: "#f0c040",
         }}>Recherche statistique — validation forward en cours</Tip>
-        <span style={{ color: "#8494a3", fontSize: 13 }}>protocole signé · docs/backtest_protocol_v4.md</span>
+        <span style={{ color: "#8494a3", fontSize: 13 }}>protocole v4 signé — archivé hors repo</span>
       </div>
 
       {!open && (
@@ -191,11 +164,11 @@ function V4Section({ cohort, note, mkt21, prelist }) {
         background: "#0e141b", margin: "12px 0 6px", fontFamily: "monospace",
       }}>
         {[
-          { v: V4_STATS.esperance, vc: "#00e096", l: "espérance hist. 3 mois", tip: GLOSS.esperance },
-          { v: V4_STATS.pExplode, vc: "#d7e0e8", l: "P(doubler en 3 mois)", tip: GLOSS.pExplode },
-          { v: V4_STATS.pCrash, vc: "#d7e0e8", l: "P(perdre −50 %)", tip: GLOSS.pCrash },
-          { v: V4_STATS.t, vc: "#f0c040", l: "non significatif", tip: GLOSS.tstat },
-          { v: "4 / 4", vc: "#d7e0e8", l: "règles gelées actives", tip: GLOSS.regles },
+          { v: stats.esperance || "—", vc: "#00e096", l: "espérance hist. 3 mois", tip: g.esperance },
+          { v: stats.p_explode || "—", vc: "#d7e0e8", l: "P(doubler en 3 mois)", tip: g.p_explode },
+          { v: stats.p_crash || "—", vc: "#d7e0e8", l: "P(perdre −50 %)", tip: g.p_crash },
+          { v: stats.t || "—", vc: "#f0c040", l: "non significatif", tip: g.tstat },
+          { v: "4 / 4", vc: "#d7e0e8", l: "règles gelées actives", tip: g.regles },
         ].map((c, i) => (
           <div key={i} style={{ flex: "1 1 130px", padding: "10px 14px", borderRight: i < 4 ? "1px solid #1e2a36" : "none" }}>
             <b style={{ display: "block", fontSize: 17, fontWeight: 640, color: c.vc }}>{c.v}</b>
@@ -210,7 +183,7 @@ function V4Section({ cohort, note, mkt21, prelist }) {
 
       {cohort.length > 0 ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-          {cohort.map((e, i) => <V4Card key={e.ticker} entry={e} rank={i} total={cohort.length} />)}
+          {cohort.map((e, i) => <V4Card key={e.ticker} entry={e} rank={i} total={cohort.length} dp4={dp4} />)}
         </div>
       ) : (
         <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b" }}>
@@ -240,7 +213,8 @@ function V4Section({ cohort, note, mkt21, prelist }) {
 // Étage 1 bis — cohorte v5 multi-fenêtres (protocole v5, fenêtre pilotée par le
 // sélecteur du header). Purement additive : la v4 reste l'étage de référence.
 // ---------------------------------------------------------------------------
-function V5Card({ entry, win, rank, total }) {
+function V5Card({ entry, win, rank, total, dp4, dp5 }) {
+  const g = dp5.gloss ?? {}, g4 = dp4.gloss ?? {}, rules = dp5.rules ?? {};
   const first = rank === 0;
   return (
     <div style={{
@@ -263,12 +237,12 @@ function V5Card({ entry, win, rank, total }) {
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
         {[
-          { tip: GLOSS.rulePrice, text: <>prix <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> / seuil 8 $</> },
-          { tip: GLOSS.v5Chg, text: <>{win} j <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.chg)}</b> / seuil −15 %</> },
+          { tip: g4.rule_price, text: <>prix <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> / seuil {rules.price_max ?? "—"} $</> },
+          { tip: g.chg, text: <>{win} j <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.chg)}</b> / seuil {pctFmt(rules.chg_max, 0)}</> },
           { tip: GLOSS.ruleDil, text: <>dilution : <b style={{ color: "#d7e0e8" }}>aucune</b> (EDGAR 180 j)</> },
-          { tip: GLOSS.ruleMkt, text: <>marché IWM {win} j &lt; 0 ✓ <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt)})</b></> },
-          { tip: GLOSS.cmfRule, text: <>CMF <b style={{ color: "#d7e0e8" }}>{entry.cmf}</b> / seuil −0,10</> },
-          { tip: GLOSS.volCalme, text: <>volume <b style={{ color: "#d7e0e8" }}>{entry.vol_calm}×</b> / max 1,25×</> },
+          { tip: g4.rule_mkt, text: <>marché IWM {win} j &lt; 0 ✓ <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt)})</b></> },
+          { tip: g.cmf, text: <>CMF <b style={{ color: "#d7e0e8" }}>{entry.cmf}</b> / seuil {numFr(rules.cmf_min)}</> },
+          { tip: g.vol_calme, text: <>volume <b style={{ color: "#d7e0e8" }}>{entry.vol_calm}×</b> / max {numFr(rules.volcalm_max)}×</> },
         ].map((m, i) => (
           <Tip key={i} tip={m.tip} style={{
             background: "#16202b", border: "1px solid #1c4033", borderRadius: 4,
@@ -288,9 +262,10 @@ function V5Card({ entry, win, rank, total }) {
   );
 }
 
-function V5Section({ v5, win }) {
+function V5Section({ v5, win, dp4, dp5 }) {
+  const g = dp5.gloss ?? {};
   const block = v5.windows?.[String(win)] ?? { mkt: null, cohort: [], prelist: [], note: "" };
-  const stats = V5_STATS[win];
+  const stats = dp5.stats?.[String(win)] ?? {};
   const cohort = block.cohort ?? [];
   const prelist = block.prelist ?? [];
   const tracking = v5.tracking ?? [];
@@ -300,11 +275,11 @@ function V5Section({ v5, win }) {
         <h2 style={{ fontSize: 15, margin: 0, fontWeight: 650, textTransform: "uppercase", letterSpacing: 1.2, color: "#e8e8ff" }}>
           Cohorte v5 — fenêtre {win} j
         </h2>
-        <Tip tip={GLOSS.v5Research} style={{
+        <Tip tip={g.research} style={{
           fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", padding: "2px 8px",
           borderRadius: 3, border: "1px solid #4a3f1a", color: "#f0c040",
         }}>Recherche statistique — validation forward en cours</Tip>
-        <span style={{ color: "#8494a3", fontSize: 13 }}>protocole signé · docs/backtest_protocol_v5.md{win === 14 ? " · variante primaire" : ""}</span>
+        <span style={{ color: "#8494a3", fontSize: 13 }}>protocole v5 signé — archivé hors repo{win === dp5.primary_window ? " · variante primaire" : ""}</span>
       </div>
 
       <div style={{
@@ -312,12 +287,12 @@ function V5Section({ v5, win }) {
         background: "#0e141b", margin: "12px 0 6px", fontFamily: "monospace",
       }}>
         {[
-          { v: stats.esperance, vc: "#00e096", l: "espérance hist. 3 mois", tip: GLOSS.esperance },
-          { v: stats.mediane, vc: "#d7e0e8", l: "titre médian", tip: "La moitié des titres du profil ont fait mieux, la moitié moins bien. Contrairement à la v4 (médiane +1,6 %), le titre typique du profil v5 gagnait — sur l'historique, survivants seuls." },
-          { v: stats.pExplode, vc: "#d7e0e8", l: "P(doubler en 3 mois)", tip: GLOSS.pExplode },
-          { v: stats.pCrash, vc: "#d7e0e8", l: "P(perdre −50 %)", tip: GLOSS.v5Crash },
-          { v: stats.t, vc: "#f0c040", l: "non significatif", tip: GLOSS.tstat },
-          { v: "6 / 6", vc: "#d7e0e8", l: "règles gelées actives", tip: GLOSS.v5Regles },
+          { v: stats.esperance || "—", vc: "#00e096", l: "espérance hist. 3 mois", tip: (dp4.gloss ?? {}).esperance },
+          { v: stats.mediane || "—", vc: "#d7e0e8", l: "titre médian", tip: g.mediane },
+          { v: stats.p_explode || "—", vc: "#d7e0e8", l: "P(doubler en 3 mois)", tip: (dp4.gloss ?? {}).p_explode },
+          { v: stats.p_crash || "—", vc: "#d7e0e8", l: "P(perdre −50 %)", tip: g.crash },
+          { v: stats.t || "—", vc: "#f0c040", l: "non significatif", tip: (dp4.gloss ?? {}).tstat },
+          { v: "6 / 6", vc: "#d7e0e8", l: "règles gelées actives", tip: g.regles },
         ].map((c, i) => (
           <div key={i} style={{ flex: "1 1 120px", padding: "10px 14px", borderRight: i < 5 ? "1px solid #1e2a36" : "none" }}>
             <b style={{ display: "block", fontSize: 17, fontWeight: 640, color: c.vc }}>{c.v}</b>
@@ -326,14 +301,14 @@ function V5Section({ v5, win }) {
         ))}
       </div>
       <div style={{ fontSize: 12.5, color: "#5a6a79", borderLeft: "2px solid #f0c040", padding: "4px 12px", margin: "10px 0 16px" }}>
-        Chiffres 2021-2026 ({stats.n} cas), survivants seuls, seuils choisis a posteriori, et
-        l'essentiel du signal vient de 2-3 purges — encore moins solide que la v4 (t &lt; 0,5).
+        Chiffres 2021-2026 ({stats.n ?? "—"} cas), survivants seuls, seuils choisis a posteriori, et
+        l'essentiel du signal vient de 2-3 purges — encore moins solide que la v4.
         Jugement : données réelles uniquement. Pas un conseil d'investissement.
       </div>
 
       {cohort.length > 0 ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-          {cohort.map((e, i) => <V5Card key={e.ticker} entry={e} win={win} rank={i} total={cohort.length} />)}
+          {cohort.map((e, i) => <V5Card key={e.ticker} entry={e} win={win} rank={i} total={cohort.length} dp4={dp4} dp5={dp5} />)}
         </div>
       ) : (
         <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b" }}>
@@ -358,7 +333,7 @@ function V5Section({ v5, win }) {
 
       {tracking.length > 0 && (
         <div style={{ marginTop: 14, fontSize: 12.5, color: "#8494a3" }}>
-          <Tip tip={GLOSS.v5Tracking} style={{ textTransform: "uppercase", letterSpacing: 0.6, fontSize: 11.5 }}>
+          <Tip tip={g.tracking} style={{ textTransform: "uppercase", letterSpacing: 0.6, fontSize: 11.5 }}>
             Suivi Validation D ({tracking.length} lignes, toutes fenêtres)
           </Tip>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
@@ -393,14 +368,15 @@ function statusChip(row) {
   return <span style={{ ...base, color: "#8494a3" }}>{row.status}</span>;
 }
 
-function probText(row) {
-  if (row.status === "au-dessus") return <>P(doubler) <b style={{ color: "#00e096" }}>×4</b> · P(−50 %) <b style={{ color: "#00e096" }}>÷2</b></>;
-  if (row.status === "sous le seuil") return <>P(doubler) <b style={{ color: "#ff6b6b" }}>÷4</b> · P(−50 %) <b style={{ color: "#ff6b6b" }}>×2</b> — 31 % des explosions étaient encore négatives ici</>;
-  if (row.checkpoint === "fenêtre 63j close") return <>résultat à 63 j : <b>{pctFmt(row.ret_63)}</b></>;
+function probText(row, g) {
+  if (row.status === "au-dessus") return <span style={{ color: "#00e096" }}>{g.checkpoint_above || "—"}</span>;
+  if (row.status === "sous le seuil") return <span style={{ color: "#ff6b6b" }}>{g.checkpoint_below || "—"}</span>;
+  if (row.checkpoint?.startsWith("fenêtre")) return <>résultat en fin de fenêtre : <b>{pctFmt(row.ret_63)}</b></>;
   return "—";
 }
 
-function TrackingSection({ tracking }) {
+function TrackingSection({ tracking, dp4 }) {
+  const g = dp4.gloss ?? {};
   return (
     <section style={{ marginTop: 34 }}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
@@ -424,7 +400,7 @@ function TrackingSection({ tracking }) {
                     color: "#8494a3", fontWeight: 600, textTransform: "uppercase", fontSize: 11,
                     letterSpacing: 0.7, textAlign: i === 2 || i === 3 ? "right" : "left",
                     padding: "10px 14px", borderBottom: "1px solid #1e2a36",
-                  }} title={h === "Checkpoint" ? GLOSS.checkpoint : undefined}>{h}{h === "Checkpoint" ? " ⓘ" : ""}</th>
+                  }} title={h === "Checkpoint" ? g.checkpoint : undefined}>{h}{h === "Checkpoint" ? " ⓘ" : ""}</th>
                 ))}
               </tr>
             </thead>
@@ -439,17 +415,16 @@ function TrackingSection({ tracking }) {
                   </td>
                   <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", color: "#8494a3" }}>{r.checkpoint ?? "—"}</td>
                   <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36" }}>{statusChip(r)}</td>
-                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", color: "#d7e0e8", fontFamily: "'Segoe UI', sans-serif", fontSize: 12.5 }}>{probText(r)}</td>
+                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", color: "#d7e0e8", fontFamily: "'Segoe UI', sans-serif", fontSize: 12.5 }}>{probText(r, g)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      {tracking.length > 0 && (
+      {tracking.length > 0 && g.stops_footer && (
         <div style={{ fontSize: 12.5, color: "#5a6a79", borderLeft: "2px solid #f0c040", padding: "4px 12px", marginTop: 10 }}>
-          Vendre automatiquement sous le seuil détruit le rendement mesuré du panier (+1,4 % → −0,4 %) :
-          les stops coupent la réversion. Ces lignes informent la décision humaine, rien d'autre.
+          {g.stops_footer}
         </div>
       )}
     </section>
@@ -607,6 +582,7 @@ export default function App() {
   const [stocks, setStocks] = useState([]);
   const [v4, setV4] = useState({ cohort: [], note: "", mkt21: null, prelist: [], tracking: [] });
   const [v5, setV5] = useState({ windows: {}, flash: false, flash_ret3: null, tracking: [] });
+  const [display, setDisplay] = useState({});  // seuils/textes v4-v5 servis par l'API (Epic 6 S2)
   const [mktWin, setMktWin] = useState(21);   // fenêtre du sélecteur marché (7/14/21)
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
@@ -630,6 +606,7 @@ export default function App() {
           windows: json.v5?.windows ?? {}, flash: !!json.v5?.flash,
           flash_ret3: json.v5?.flash_ret3 ?? null, tracking: json.v5?.tracking ?? [],
         });
+        setDisplay(json.display ?? {});
         if (json.scanned_at) setLastScan(new Date(json.scanned_at).toLocaleTimeString("fr-FR"));
       })
       .catch(console.error);
@@ -687,6 +664,10 @@ Réponds en français. Structure:
     setLoadingTickers(prev => ({ ...prev, [stock.ticker]: false }));
   }, []);
 
+  const dp4 = display.v4 ?? {};
+  const dp5 = display.v5 ?? {};
+  const winButtons = dp5.windows?.length ? dp5.windows : [7, 14, 21];
+
   const fuseeCount = stocks.filter(s => s.isFusee).length;
   const phenixCount = stocks.filter(s => s.isPhenix).length;
 
@@ -715,7 +696,7 @@ Réponds en français. Structure:
 
   const glanceLine = v4.cohort.length > 0
     ? <>Aujourd'hui : <b style={{ color: "#00e096" }}>{v4.cohort.length} titre{v4.cohort.length > 1 ? "s" : ""} qualifié{v4.cohort.length > 1 ? "s" : ""} v4</b> — commencer par <b style={{ color: "#00e096" }}>{v4.cohort[0].ticker}</b> (le plus survendu du jour)</>
-    : <>Aujourd'hui : <b>pas de cohorte v4</b> — {v4.mkt21 != null ? `marché haussier (IWM 21 j ${pctFmt(v4.mkt21)})` : "état du marché indisponible"}, la méthode est en pause</>;
+    : <>Aujourd'hui : <b>pas de cohorte v4</b> — {v4.mkt21 != null ? `marché haussier (IWM ${dp4.rules?.mkt_window ?? "—"} j ${pctFmt(v4.mkt21)})` : "état du marché indisponible"}, la méthode est en pause</>;
 
   return (
     <div style={{ minHeight: "100vh", background: "#070714", fontFamily: "'Segoe UI', sans-serif", color: "#e8e8ff", padding: "0 0 60px" }}>
@@ -753,8 +734,8 @@ Réponds en français. Structure:
                   fontSize: 13, fontFamily: "monospace",
                 }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: mkt == null ? "#5a6a79" : mkt < 0 ? "#ff6b6b" : "#00e096" }} />
-                  <Tip down tip={GLOSS.mktSwitch}>Marché : IWM</Tip>
-                  {V5_WINDOWS.map(w => (
+                  <Tip down tip={dp5.gloss?.mkt_switch}>Marché : IWM</Tip>
+                  {winButtons.map(w => (
                     <button key={w} onClick={() => setMktWin(w)} style={{
                       background: mktWin === w ? "#1c2f42" : "transparent",
                       border: `1px solid ${mktWin === w ? "#2b4b66" : "#1e2a36"}`,
@@ -764,7 +745,7 @@ Réponds en français. Structure:
                   ))}
                   <b style={{ color: mkt == null ? "#5a6a79" : mkt < 0 ? "#ff6b6b" : "#00e096" }}>{pctFmt(mkt)}</b>
                   {v5.flash && (
-                    <Tip down tip={GLOSS.flash} style={{
+                    <Tip down tip={dp5.gloss?.flash} style={{
                       border: "1px solid #6e2a1c", borderRadius: 3, color: "#ff9b6b",
                       padding: "2px 7px", fontSize: 12, background: "#2c1410",
                     }}>⚡ krach éclair ({pctFmt(v5.flash_ret3)} / 3 j)</Tip>
@@ -803,9 +784,9 @@ Réponds en français. Structure:
           </span>
         </div>
 
-        <V4Section cohort={v4.cohort} note={v4.note} mkt21={v4.mkt21} prelist={v4.prelist} />
-        <V5Section v5={v5} win={mktWin} />
-        <TrackingSection tracking={v4.tracking} />
+        <V4Section cohort={v4.cohort} note={v4.note} mkt21={v4.mkt21} prelist={v4.prelist} dp4={dp4} />
+        <V5Section v5={v5} win={mktWin} dp4={dp4} dp5={dp5} />
+        <TrackingSection tracking={v4.tracking} dp4={dp4} />
 
         {/* Zones extrêmes */}
         <section style={{ marginTop: 34 }}>
@@ -872,9 +853,9 @@ Réponds en français. Structure:
             entrée en cohorte v4 ».
           </p>
           <p style={{ margin: "6px 0" }}>
-            <b>Traçabilité</b> : chaque chiffre affiché provient d'une table gelée de l'Annexe A du
-            protocole v4 (ou du protocole v2 §9 pour les profils) — rien d'inventé, rien de recalculé
-            en direct. Tous les termes : <code>docs/glossaire.md</code>.
+            <b>Traçabilité</b> : chaque chiffre affiché est servi par l'API depuis les tables gelées
+            des protocoles signés (v4/v5, archivés hors repo ; v2 pour les profils) — rien d'inventé,
+            rien de recalculé en direct. Tous les termes : <code>docs/glossaire.md</code>.
           </p>
         </div>
       </div>
