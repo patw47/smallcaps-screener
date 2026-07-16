@@ -208,6 +208,8 @@ docs/                     # architecture, backend, api, frontend, glossary, meth
 
 ## Documentation
 
+Published as a browsable site: https://patw47.github.io/smallcaps-screener/
+
 - [Architecture](docs/architecture.md)
 - [Backend screener & scoring](docs/backend.md)
 - [API reference](docs/api.md)

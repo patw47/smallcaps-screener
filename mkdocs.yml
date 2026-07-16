@@ -1,0 +1,41 @@
+site_name: SmallCaps Screener
+site_description: Research dashboard for US small/micro-cap stocks — descriptive stats, no trading edge claimed.
+repo_url: https://github.com/patw47/smallcaps-screener
+docs_dir: docs
+site_dir: site
+strict: true
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - content.code.copy
+
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+# Allowlist explicite (Epic 6 S4) — les protocoles v4/v5 n'existent plus dans le
+# repo (Epic 6 S2), mais cette liste protège contre tout futur document sensible
+# ajouté par erreur : seuls les fichiers ci-dessous sont publiés.
+nav:
+  - Accueil: index.md
+  - Architecture: architecture.md
+  - Backend screener & scoring: backend.md
+  - API: api.md
+  - Frontend: frontend.md
+  - Déploiement: deployment.md
+  - Glossaire: glossaire.md
+  - Guide d'interface: guide_interface.md
+  - Post-mortems:
+      - Protocole v2: backtest_protocol_v2.md
+      - Protocole v3: backtest_protocol_v3.md
