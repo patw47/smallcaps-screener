@@ -157,9 +157,12 @@ def test_analyze_prices_v1_switch():
         FILTERS["sensors_version"] = old
 
 
-def test_score_weights_unchanged():
-    # garde-fou : Sprint 4 ne recalibre AUCUN poids (réservé au Sprint 8)
+def test_score_weights_structure_unchanged():
+    # garde-fou : aucun poids ajouté/retiré sans décision. Les VALEURS réelles ne
+    # vivent plus dans le repo (Epic 6 S2 : defaults neutres, réel en config locale) —
+    # leur gel est protégé par l'extraction + make check-edge, plus par ce test.
     w = FILTERS["score_weights"]
-    assert w["accumulation"] == 4 and w["compression"] == 2
-    assert w["near_pivot"] == 2 and w["low_ext"] == 2 and w["rs_turning"] == 2
-    assert w["above_ma"] == 1 and w["insider"] == 2
+    assert set(w) == {"accumulation", "compression", "near_pivot", "low_ext",
+                      "rs_turning", "above_ma", "insider", "cash", "revenue",
+                      "low_float", "short"}
+    assert all(isinstance(v, int) and v > 0 for v in w.values())
