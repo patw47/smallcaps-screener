@@ -13,17 +13,20 @@
 #
 # Limite connue : les poids entiers de score_weights sont trop génériques pour
 # un grep — leur protection est la passe 0 (defaults uniformes).
+#
+# site/ (rendu MkDocs, Epic 6 S4) inclus s'il existe — absent = silencieusement
+# sauté par grep (2>/dev/null), aucune condition nécessaire ici.
 set -u
 cd "$(dirname "$0")/.."
 
-ALL_TARGETS=(backend frontend docs README.md Makefile docker-compose.yml)
-PROSE_TARGETS=(frontend docs README.md Makefile docker-compose.yml)
+ALL_TARGETS=(backend frontend docs README.md Makefile docker-compose.yml site)
+PROSE_TARGETS=(frontend docs README.md Makefile docker-compose.yml site)
 fail=0
 
 python3 scripts/check_neutral_defaults.py || fail=1
 
 for name in backtest_protocol_v4 backtest_protocol_v5 exploration_v5; do
-  hits=$(grep -rn "$name" "${ALL_TARGETS[@]}" --exclude-dir=node_modules 2>/dev/null || true)
+  hits=$(grep -rn "$name" "${ALL_TARGETS[@]}" --exclude-dir=node_modules --exclude-dir=assets --exclude-dir=search 2>/dev/null || true)
   if [ -n "$hits" ]; then
     printf 'INTERDIT — référence à un document privé (%s) :\n%s\n' "$name" "$hits"
     fail=1
@@ -33,7 +36,7 @@ done
 if [ -f config/local.yml ]; then
   while IFS= read -r pat; do
     [ -z "$pat" ] && continue
-    hits=$(grep -rnE "$pat" "${PROSE_TARGETS[@]}" --exclude-dir=node_modules 2>/dev/null || true)
+    hits=$(grep -rnE "$pat" "${PROSE_TARGETS[@]}" --exclude-dir=node_modules --exclude-dir=assets --exclude-dir=search 2>/dev/null || true)
     if [ -n "$hits" ]; then
       printf 'INTERDIT — valeur gelée en clair (pattern %s) :\n%s\n' "$pat" "$hits"
       fail=1

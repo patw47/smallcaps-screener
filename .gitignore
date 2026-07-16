@@ -13,6 +13,9 @@ node_modules/
 .pytest_cache/
 .ruff_cache/
 
+# Rendu MkDocs (S4) — publié via GitHub Pages, jamais versionné
+site/
+
 # Local Claude Code guidance (canonical docs are in README.md / docs/)
 CLAUDE.md
 
