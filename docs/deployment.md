@@ -69,6 +69,17 @@ The frontend image:
 npm run dev -- --host
 ```
 
+## Private config overlay (required in production)
+
+The edge values (v4/v5 frozen constants, scoring weights, display stats) are **not in
+the repo**: the backend loads them at startup from `config/local.yml` (gitignored,
+mounted via the `./config` volume — template in `config/local.example.yml`).
+
+Deployment order matters: **copy a complete `config/local.yml` onto the host BEFORE
+deploying code**, and set `REQUIRE_LOCAL_CONFIG=1` in the backend environment so a scan
+refuses to start without it — otherwise the daily scan would run on neutral values and
+pollute the live tracker's cohorts. Verify on the host: `test -f config/local.yml`.
+
 ## Cache and history
 
 The scanner writes the latest results to `/app/data/screener_data.json`, and a dated
