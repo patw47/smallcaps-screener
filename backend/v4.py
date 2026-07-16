@@ -1,51 +1,64 @@
 """
-Cohorte v4 — « washout reversion basket » (docs/backtest_protocol_v4.md, SIGNÉ 2026-07-06).
+Cohorte v4 — « washout reversion basket » (protocole v4, SIGNÉ 2026-07-06).
 
 INSTRUMENTATION SEULE (Validation C, protocole §4) : à chaque scan on identifie les titres
 qui passent les 4 règles gelées (§2) et on les CONSIGNE dans le snapshot daté. Aucun trade,
 aucune prétention, aucun effet sur la sélection/le tri/les alertes existants — c'est la
 comptabilité qui permettra le jugement forward (première lecture ≥ 12 mois).
 
-Les constantes sont GELÉES par le protocole signé — hors FILTERS volontairement : un seuil
-jugé n'est pas un réglage. Toute modification = révision v4.1 + remise à zéro du chrono.
+Les constantes GELÉES ne vivent plus dans le code public (Epic 6 S2) : les defaults de
+CFG sont des placeholders NEUTRES (price_max 0.0 ⇒ aucun titre ne qualifie, l'instrumen-
+tation tourne à vide plutôt qu'avec des seuils faux). Les vraies valeurs — identiques bit
+à bit au protocole signé, archivé hors repo — arrivent de config/local.yml (section v4:)
+via l'overlay chargé au démarrage. Toute modification des valeurs réelles reste une
+révision v4.1 + remise à zéro du chrono.
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
-# §2 — règles d'entrée (gelées)
-V4_PRICE_MAX = 8.0      # §2.1  prix ≤ 8 $
-V4_CHG1M_MAX = -0.03    # §2.3  chute ≥ 3 % sur ~1 mois (change_1m ≤ −3 %)
-V4_MKT_WINDOW = 21      # §2.4  tendance IWM sur 21 séances (< 0 requis)
-
-# §4 — champs observationnels (jamais jugés, jamais des règles d'entrée)
-V4_BETA_WINDOW = 126    # bêta/corrélation sur ~6 mois de séances
-V4_BETA_MIN_OBS = 60    # minimum de rendements alignés pour un bêta honnête
-
-# §A.6 — checkpoint de trajectoire affiché (gelé : seuil +3 % à 1 semaine = 5 séances).
-# Information uniquement — jamais une règle de vente (les stops détruisent le rendement, A.6).
-V4_CHECKPOINT_DAY = 5
-V4_CHECKPOINT_THR = 0.03
-V4_HORIZON = 63         # fenêtre de jugement fwd63 (protocole §4)
-PRELIST_MAX = 12        # taille max de la pré-liste affichée (jours haussiers)
+# Defaults NEUTRES — les valeurs gelées réelles arrivent de config/local.yml (v4:).
+# La structure des règles reste lisible ici (décision d'epic) ; seules les valeurs
+# sont secrètes. display = textes/chiffres gelés servis au frontend via le payload.
+CFG: dict = {
+    "price_max": 0.0,       # §2.1  prix ≤ seuil — 0.0 ⇒ rien ne qualifie sans config
+    "chg1m_max": 0.0,       # §2.3  chute 1 mois ≤ seuil
+    "mkt_window": 21,       # §2.4  fenêtre (séances) de la règle marché IWM
+    "beta_window": 126,     # §4    bêta/corrélation (~6 mois, observationnel)
+    "beta_min_obs": 60,     # §4    minimum de rendements alignés pour un bêta honnête
+    "checkpoint_day": 5,    # §A.6  checkpoint de trajectoire (affichage, jamais une vente)
+    "checkpoint_thr": 0.0,  # §A.6  seuil du checkpoint
+    "horizon": 63,          # §4    fenêtre de jugement fwd63
+    "prelist_max": 12,      # taille max de la pré-liste affichée (jours haussiers)
+    "display": {
+        "depth_scale": 1.0,  # échelle de la jauge résidu du frontend
+        "stats": {"esperance": "", "mediane": "", "p_explode": "", "p_crash": "", "t": ""},
+        "gloss": {
+            "regles": "", "research": "", "esperance": "", "p_explode": "", "p_crash": "",
+            "tstat": "", "profondeur": "", "rule_price": "", "rule_chg": "", "rule_mkt": "",
+            "checkpoint": "", "checkpoint_above": "", "checkpoint_below": "",
+            "stops_footer": "", "first_pick": "",
+        },
+    },
+}
 
 
 def market_return_21d(bench_close: pd.Series | None) -> float | None:
-    """Rendement du benchmark sur les V4_MKT_WINDOW dernières séances ; None si insuffisant."""
-    if bench_close is None or len(bench_close) < V4_MKT_WINDOW + 1:
+    """Rendement du benchmark sur les CFG['mkt_window'] dernières séances ; None si insuffisant."""
+    w = CFG["mkt_window"]
+    if bench_close is None or len(bench_close) < w + 1:
         return None
-    return float(bench_close.iloc[-1]) / float(bench_close.iloc[-(V4_MKT_WINDOW + 1)]) - 1
+    return float(bench_close.iloc[-1]) / float(bench_close.iloc[-(w + 1)]) - 1
 
 
 def _beta_corr(close: pd.Series, bench_close: pd.Series) -> tuple[float | None, float | None]:
-    """Bêta et corrélation des rendements quotidiens vs benchmark (fenêtre V4_BETA_WINDOW)."""
+    """Bêta et corrélation des rendements quotidiens vs benchmark (fenêtre beta_window)."""
     joined = pd.concat([close.pct_change(), bench_close.pct_change()],
-                       axis=1, join="inner").dropna().tail(V4_BETA_WINDOW)
-    if len(joined) < V4_BETA_MIN_OBS:
+                       axis=1, join="inner").dropna().tail(CFG["beta_window"])
+    if len(joined) < CFG["beta_min_obs"]:
         return None, None
     sv = joined.iloc[:, 0] - joined.iloc[:, 0].mean()
     bv = joined.iloc[:, 1] - joined.iloc[:, 1].mean()
@@ -58,24 +71,25 @@ def _beta_corr(close: pd.Series, bench_close: pd.Series) -> tuple[float | None, 
 
 
 def _passes_price_rules(sig: dict) -> bool:
-    """Règles-titre §2.1 + §2.3 (prix ≤ 8 $, chute 1 mois ≤ −3 %) — sans EDGAR."""
+    """Règles-titre §2.1 + §2.3 (prix, chute 1 mois) — sans EDGAR."""
     price, chg = sig.get("price"), sig.get("change_1m")
     return (price is not None and chg is not None
-            and price <= V4_PRICE_MAX and chg <= V4_CHG1M_MAX)
+            and price <= CFG["price_max"] and chg <= CFG["chg1m_max"])
 
 
 def build_cohort(tradables: list[tuple[str, dict]], prices: dict,
                  bench_close: pd.Series | None) -> tuple[list[dict], str, float | None, list[dict]]:
     """
     Cohorte v4 du jour sur le pool tradable complet (avant toute sélection de profil).
-    Renvoie (cohorte, note lisible, mkt21, pré-liste). Cohorte vide + note explicite si le
+    Renvoie (cohorte, note lisible, mkt, pré-liste). Cohorte vide + note explicite si le
     marché monte ou si le benchmark manque (§2.4 : pas de bénéfice du doute). Les jours
     haussiers, la pré-liste donne les titres passant les règles-titre SEULES (dilution non
-    vérifiée — zéro appel EDGAR ces jours-là), triés par chute, plafonnés à PRELIST_MAX.
+    vérifiée — zéro appel EDGAR ces jours-là), triés par chute, plafonnés à prelist_max.
 
     Coût réseau : EDGAR n'est interrogé que pour les titres passant déjà les règles prix,
     et uniquement les jours de marché baissier (cache disque + mémos edgar existants).
     """
+    w = CFG["mkt_window"]
     mkt = market_return_21d(bench_close)
     if mkt is None:
         return [], "benchmark indisponible → cohorte vide (§2.4)", None, []
@@ -83,8 +97,8 @@ def build_cohort(tradables: list[tuple[str, dict]], prices: dict,
         prelist = sorted((
             {"ticker": tk, "price": sig["price"], "change_1m": sig["change_1m"]}
             for tk, sig in tradables if _passes_price_rules(sig)
-        ), key=lambda e: e["change_1m"])[:PRELIST_MAX]
-        return ([], f"marché haussier (IWM 21j {mkt:+.1%}) → la méthode ne s'applique pas (§2.4)",
+        ), key=lambda e: e["change_1m"])[:CFG["prelist_max"]]
+        return ([], f"marché haussier (IWM {w}j {mkt:+.1%}) → la méthode ne s'applique pas (§2.4)",
                 mkt, prelist)
 
     import edgar
@@ -118,14 +132,14 @@ def build_cohort(tradables: list[tuple[str, dict]], prices: dict,
             "corr": round(corr, 3) if corr is not None else None,
             "resid": round(resid, 4) if resid is not None else None,
             "margins": {  # distance aux seuils — affichage §3, jamais un re-classement
-                "price": round(V4_PRICE_MAX - price, 2),
-                "change_1m": round(V4_CHG1M_MAX - chg, 4),
+                "price": round(CFG["price_max"] - price, 2),
+                "change_1m": round(CFG["chg1m_max"] - chg, 4),
             },
         })
 
     # Ordre indicatif §A.5 : plus survendu d'abord (résidu le plus négatif) ; sans bêta → fin.
     cohort.sort(key=lambda e: (e["resid"] is None, e["resid"] if e["resid"] is not None else 0.0))
-    return cohort, f"marché baissier (IWM 21j {mkt:+.1%}) → {len(cohort)} qualifiés", mkt, []
+    return cohort, f"marché baissier (IWM {w}j {mkt:+.1%}) → {len(cohort)} qualifiés", mkt, []
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +176,7 @@ def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
     Jours de bourse comptés sur l'index du titre lui-même (robuste aux jours fériés).
     Un titre sans données de prix aujourd'hui est signalé (délisting possible = information).
     """
+    cp_day, cp_thr, horizon = CFG["checkpoint_day"], CFG["checkpoint_thr"], CFG["horizon"]
     out: list[dict] = []
     for tk, ent in _load_cohort_entries(history_dir).items():
         row = {"ticker": tk, **ent, "days_held": None, "ret": None,
@@ -184,21 +199,21 @@ def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
                 cur = float(after.iloc[-1])
                 row["days_held"] = days
                 row["ret"] = round(cur / ent["entry_price"] - 1, 4)
-                if days >= V4_HORIZON:
-                    d63 = float(after.iloc[V4_HORIZON - 1])
+                if days >= horizon:
+                    d63 = float(after.iloc[horizon - 1])
                     r63 = d63 / ent["entry_price"] - 1
-                    row["checkpoint"] = "fenêtre 63j close"
+                    row["checkpoint"] = f"fenêtre {horizon}j close"
                     row["status"] = ("explosion (≥ +100 %)" if r63 >= 1.0
                                      else "crash (≤ −50 %)" if r63 <= -0.5 else "close")
                     row["ret_63"] = round(r63, 4)
-                elif days >= V4_CHECKPOINT_DAY:
-                    r5 = float(after.iloc[V4_CHECKPOINT_DAY - 1]) / ent["entry_price"] - 1
-                    row["checkpoint"] = "1 semaine (seuil +3 %)"
+                elif days >= cp_day:
+                    r5 = float(after.iloc[cp_day - 1]) / ent["entry_price"] - 1
+                    row["checkpoint"] = f"1 semaine (seuil {cp_thr:+.0%})"
                     row["ret_5"] = round(r5, 4)
-                    row["status"] = "au-dessus" if r5 >= V4_CHECKPOINT_THR else "sous le seuil"
+                    row["status"] = "au-dessus" if r5 >= cp_thr else "sous le seuil"
                 else:
                     row["checkpoint"] = "trop tôt"
-                    row["status"] = f"J+{days} — premier checkpoint à J+{V4_CHECKPOINT_DAY}"
+                    row["status"] = f"J+{days} — premier checkpoint à J+{cp_day}"
         out.append(row)
     out.sort(key=lambda r: r["entry_date"], reverse=True)
     return out

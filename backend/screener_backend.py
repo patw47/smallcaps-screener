@@ -90,14 +90,16 @@ FILTERS = {
     # "continuous" : facteurs continus → percentile → décile 0-10 (échelle pleine, non validé)
     "scoring_mode": "binary",
     # --- Poids de scoring (utilisés par les deux modes ; configurables pour le backtest) ---
+    # Defaults NEUTRES (uniformes) depuis l'Epic 6 S2 : les poids réels vivent dans
+    # config/local.yml (filters: score_weights:) — hors du versionné.
     "score_weights": {
-        "accumulation": 4,  # OBV↑ : l'argent rentre (LE meilleur signal pré-explosion)
-        "compression": 2,   # base serrée — baissé 3→2 : signal quasi mort (0,8%), impact cosmétique (backtest)
-        "near_pivot": 2,    # proche du point de cassure de la base récente
-        "low_ext": 2,       # peu étiré : encore tôt
-        "rs_turning": 2,    # la force relative repart à la hausse
+        "accumulation": 1,  # OBV↑ : l'argent rentre
+        "compression": 1,   # base serrée
+        "near_pivot": 1,    # proche du point de cassure de la base récente
+        "low_ext": 1,       # peu étiré : encore tôt
+        "rs_turning": 1,    # la force relative repart à la hausse
         "above_ma": 1,      # au-dessus de la MA50
-        "insider": 2, "cash": 1, "revenue": 1, "low_float": 1, "short": 1,
+        "insider": 1, "cash": 1, "revenue": 1, "low_float": 1, "short": 1,
     },
     # --- Filet de sécurité : échantillon NON biaisé des survivants si trop nombreux ---
     "enrich_max": 150,             # borne dure du nb d'appels .info (coût + throttle Yahoo)
@@ -163,9 +165,6 @@ FILTERS = {
 # ---------------------------------------------------------------------------
 CONFIG_FILE = Path(os.environ.get("CONFIG_FILE", "/app/config/local.yml"))
 
-V4_CONFIG: dict = {}  # sections v4:/v5: du YAML — réservées, consommées au Sprint 2
-V5_CONFIG: dict = {}
-
 
 class LocalConfigError(RuntimeError):
     """Config locale invalide, ou absente alors que REQUIRE_LOCAL_CONFIG=1."""
@@ -204,10 +203,12 @@ def load_local_config(path: Path | None = None, filters: dict | None = None) -> 
             raise LocalConfigError(f"config locale : la section '{key}' doit être un mapping")
         if key == "filters":
             _deep_merge(filters, value, "filters.")
-        elif key == "v4":
-            V4_CONFIG.update(value)
-        elif key == "v5":
-            V5_CONFIG.update(value)
+        elif key in ("v4", "v5"):
+            # Constantes gelées des protocoles (Epic 6 S2) : merge dans le CFG du module,
+            # avec la même protection anti-typo que filters.
+            import importlib
+            module = importlib.import_module(key)
+            _deep_merge(module.CFG, value, f"{key}.")
         else:
             raise LocalConfigError(
                 f"config locale : section inconnue '{key}' (attendu : filters, v4, v5)"
@@ -1218,6 +1219,7 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         "v4_prelist": v4_prelist,        # jours haussiers : règles-titre seules, sans EDGAR
         "v4_tracking": v4_tracking,      # suivi des cohortes passées (§A.6, affichage)
         "v5": v5_data,                   # Epic 5 : cohortes 7/14/21 + ⚡ + suivi (Validation D)
+        "display": _display_params(),    # Epic 6 S2 : seuils/textes gelés servis au frontend
         "enriched": n_surv,
         "candidates": len(candidates),
         "stocks": candidates,
@@ -1249,6 +1251,31 @@ def run_scan(tickers: list[str] | None = None) -> dict:
 
     scan_state.update({"scanning": False, "phase": "idle"})
     return output
+
+
+def _display_params() -> dict:
+    """
+    Paramètres d'affichage v4/v5 pour le frontend (Epic 6 S2) : seuils des règles,
+    chiffres gelés des bandeaux et textes du glossaire UI. Tout vient de la config
+    locale (defaults neutres sans elle) — le JSX public ne porte plus aucune valeur.
+    Jamais consigné dans les snapshots (dérivable, et le suivi n'en a pas besoin).
+    """
+    import v4
+    import v5
+    return {
+        "v4": {
+            "rules": {"price_max": v4.CFG["price_max"], "chg1m_max": v4.CFG["chg1m_max"],
+                      "mkt_window": v4.CFG["mkt_window"]},
+            "checkpoint": {"day": v4.CFG["checkpoint_day"], "thr": v4.CFG["checkpoint_thr"]},
+            **v4.CFG["display"],
+        },
+        "v5": {
+            "rules": {"price_max": v5.CFG["price_max"], "chg_max": v5.CFG["chg_max"],
+                      "cmf_min": v5.CFG["cmf_min"], "volcalm_max": v5.CFG["volcalm_max"]},
+            "windows": list(v5.CFG["windows"]),
+            **v5.CFG["display"],
+        },
+    }
 
 
 def _write_snapshot(output: dict) -> None:

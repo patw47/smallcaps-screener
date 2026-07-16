@@ -86,13 +86,30 @@ def test_require_local_config_ok_with_file(tmp_path, monkeypatch):
     assert filters == sb.FILTERS
 
 
-def test_v4_v5_sections_stored(tmp_path, monkeypatch):
-    monkeypatch.setattr(sb, "V4_CONFIG", {})
-    monkeypatch.setattr(sb, "V5_CONFIG", {})
+def test_v4_v5_sections_merge_into_module_cfg(tmp_path, monkeypatch):
+    import v4
+    import v5
+    monkeypatch.setattr(v4, "CFG", copy.deepcopy(v4.CFG))
+    monkeypatch.setattr(v5, "CFG", copy.deepcopy(v5.CFG))
     f = tmp_path / "local.yml"
-    f.write_text("v4:\n  future_key: 1\nv5: {}\n")
+    f.write_text(
+        "v4:\n  price_max: 9.9\n  display:\n    stats:\n      esperance: 'x'\n"
+        "v5:\n  flash_thr: -0.5\n"
+    )
     filters = _fresh_filters()
     sb.load_local_config(path=f, filters=filters)
-    assert sb.V4_CONFIG == {"future_key": 1}
-    assert sb.V5_CONFIG == {}
+    assert v4.CFG["price_max"] == 9.9
+    assert v4.CFG["display"]["stats"]["esperance"] == "x"
+    # merge PROFOND : les clés sœurs non surchargées survivent
+    assert v4.CFG["display"]["stats"]["mediane"] == ""
+    assert v5.CFG["flash_thr"] == -0.5
     assert filters == sb.FILTERS
+
+
+def test_unknown_v4_key_raises(tmp_path, monkeypatch):
+    import v4
+    monkeypatch.setattr(v4, "CFG", copy.deepcopy(v4.CFG))
+    f = tmp_path / "local.yml"
+    f.write_text("v4:\n  price_max_typo: 1.0\n")
+    with pytest.raises(sb.LocalConfigError, match="v4.price_max_typo"):
+        sb.load_local_config(path=f, filters=_fresh_filters())
