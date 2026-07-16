@@ -17,6 +17,17 @@ cohorte v4) ; tout le reste est de la matière à recherche.
 
 ## L'en-tête
 
+![En-tête, interface en français](screenshots/epic6-i18n-header-fr.png)
+
+- **Toggle FR/EN** (Epic 6 S3) : toute l'interface est bilingue. Le bouton bascule la
+  langue instantanément (sans rechargement) ; le choix est mémorisé dans le navigateur
+  (localStorage) et survit aux rechargements. Défaut : français. Les chaînes vivent dans
+  `frontend/i18n/fr.json` / `en.json` (parité des clés vérifiée par `make i18n-parity`,
+  absence de chaîne en dur par `make check-i18n`). Les textes servis par l'API (notes de
+  scan, statuts de suivi) restent dans la langue du backend.
+
+  ![En-tête, interface en anglais](screenshots/epic6-i18n-header-en.png)
+
 - **Pastille « Marché : IWM »** avec son **sélecteur de fenêtre** : la variation de
   l'indice small caps (IWM) sur la fenêtre choisie (trois fenêtres pré-déclarées par le
   protocole v5 ; la v4 garde sa propre fenêtre). **Rouge (négatif) = marché baissier →
