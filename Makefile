@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -14,6 +14,13 @@ test-config:
 # dans les cibles publiques. Réutilisée en CI au Sprint 4.
 check-edge:
 	bash scripts/check_edge.sh
+
+# i18n (S3) : parité stricte des clés fr/en + zéro chaîne UI en dur dans le JSX.
+i18n-parity:
+	node frontend/i18n/check-parity.mjs
+
+check-i18n:
+	node scripts/check_i18n.mjs
 
 # Invariance de l'extraction (S2) : nécessite la vraie config config/local.yml
 # et l'historique data/history/ — skip propre sans eux (donc skippé en CI).
