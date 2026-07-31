@@ -1,10 +1,8 @@
 """
-Alertes Telegram sur les cassures Fusée (Sprint 3 ; sémantique révisée Epic 2 Sprint 2).
+Alertes Telegram sur les nouvelles entrées en cohortes v4 et v5 (Epic 4 S3 / Epic 5).
 
-Le score dit « le ressort est armé » (watchlist) ; le variant ÉVÉNEMENT de Fusée dit
-« un extrême de momentum casse MAINTENANT ». Ce module notifie, à chaque scan, les tickers
-NOUVELLEMENT en `fusee_event` (membre Fusée + cassure le jour même) dont le `setup_score`
-dépasse `FILTERS["alert_min_score"]`. Un simple `triggered` non-Fusée n'alerte plus.
+L'alerte cassure Fusée d'origine (Sprint 3) a été supprimée en Epic 7 S2 : son déclencheur
+est mesuré non prédictif (protocole v4 §A.1, lift 1,0×) et l'alerte cohorte v4 l'a remplacée.
 
 Anti-doublon : un même ticker n'est pas re-notifié avant `FILTERS["alert_dedup_days"]`
 jours (état persistant dans `data/alerts_state.json`).
@@ -73,66 +71,6 @@ def send_telegram(text: str) -> bool:
         # Ne JAMAIS logger `e` : les exceptions requests contiennent l'URL avec le bot token.
         print(f"[alert] envoi Telegram échoué (ignoré) : {type(e).__name__}")
         return False
-
-
-def _format_line(s: dict) -> str:
-    price = s.get("price")
-    score = s.get("setup_score", s.get("score"))
-    pivot = s.get("pivot_level")
-    piv = f" · pivot {pivot}$" if pivot is not None else ""
-    return f"• <b>{s.get('ticker')}</b> — score {score}/10 · {price}${piv}"
-
-
-# ---------------------------------------------------------------------------
-# Notification des nouveaux déclenchés
-# ---------------------------------------------------------------------------
-
-def notify_new_triggers(candidates: list[dict], *, state_path: Path = ALERT_STATE_FILE,
-                        min_score: int | None = None, dedup_days: int | None = None,
-                        now: datetime | None = None, send_fn=send_telegram) -> list[str]:
-    """
-    Notifie les tickers `triggered` avec `setup_score >= min_score` non déjà alertés
-    depuis moins de `dedup_days` jours. Retourne la liste des tickers réellement notifiés
-    (vide si rien à envoyer OU si l'envoi a échoué / est désactivé).
-
-    L'état anti-doublon n'est mis à jour QUE si l'envoi réussit → un échec réseau (ou
-    l'absence de token) laisse le ticker éligible au prochain scan.
-    """
-    min_score = FILTERS["alert_min_score"] if min_score is None else min_score
-    dedup_days = FILTERS["alert_dedup_days"] if dedup_days is None else dedup_days
-    now = now or datetime.now(tz=timezone.utc)
-
-    state = _load_state(state_path)
-    fresh: list[dict] = []
-    for s in candidates:
-        if not s.get("fusee_event"):   # Epic 2 : alerte sur le variant ÉVÉNEMENT de Fusée
-            continue                    # (membre Fusée + cassure du jour), plus le simple trigger
-        if (s.get("setup_score", s.get("score")) or 0) < min_score:
-            continue
-        tk = s.get("ticker")
-        if not tk:
-            continue
-        last = state.get(tk)
-        if last:
-            try:
-                if now - datetime.fromisoformat(last) < timedelta(days=dedup_days):
-                    continue  # déjà notifié récemment
-            except (TypeError, ValueError):
-                pass  # date d'état corrompue → on ré-alerte
-        fresh.append(s)
-
-    if not fresh:
-        return []
-
-    text = ("🚀 <b>Fusée — cassure déclenchée</b> ({} nouveau(x))\n".format(len(fresh))
-            + "\n".join(_format_line(s) for s in fresh))
-    if not send_fn(text):
-        return []  # désactivé ou échec → on n'enregistre rien (retry au prochain scan)
-
-    for s in fresh:
-        state[s["ticker"]] = now.isoformat()
-    _save_state(state_path, state)
-    return [s["ticker"] for s in fresh]
 
 
 # ---------------------------------------------------------------------------

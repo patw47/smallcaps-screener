@@ -83,7 +83,6 @@ FILTERS = {
     "trigger_vol_window": 50,      # moyenne de volume (jours) servant de baseline à la cassure
     "trigger_vol_mult": 1.5,       # volume du jour > 1.5× la moyenne 50j → confirme la cassure
     # --- Alerte Telegram (Sprint 3) — secrets via .env, jamais en dur ---
-    "alert_min_score": 7,          # setup_score minimal d'un NOUVEAU déclenché pour alerter
     "alert_dedup_days": 5,         # pas de re-notification d'un même ticker avant N jours
     # --- Mode de scoring : NON tranché tant que le backtest robuste n'a pas décidé ---
     # "binary"     : ancien score « cases à cocher » (connu/conservateur ; plafonne ~8)
@@ -1187,17 +1186,12 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     for s in candidates:
         s["setup_score"] = s["score"]
 
-    # Epic 3 (S4) : score de survie v3 — pose p_explode (None tant qu'aucun modèle entraîné n'est
-    # présent) + survival_risk sur CHAQUE candidat. Additif : ne touche ni aux profils ni au score.
-    from scoring import score_candidates, load_model
-    model = load_model(str(Path(DATA_DIR) / "model_v3.json"))
-    score_candidates(candidates, model)
+    # Epic 3 (S4) : drapeaux de survie — pose survival_risk + p_explode (toujours None,
+    # thèse v3 échouée) sur CHAQUE candidat. Additif : ne touche ni aux profils ni au score.
+    from scoring import score_candidates
+    score_candidates(candidates)
 
-    if model is not None:
-        # v3 : le modèle pilote l'ordre (dormant tant que S5 n'a pas produit model_v3.json).
-        candidates.sort(key=lambda x: (x.get("p_explode") or 0.0,
-                                       x.get("profile_strength") or 0.0), reverse=True)
-    elif FILTERS["pool_mode"] == "legacy":
+    if FILTERS["pool_mode"] == "legacy":
         candidates.sort(key=lambda x: (x["score"], x.get("rs_strength") or 0), reverse=True)
     else:
         # Epic 2 : affichage classé par FORCE DE PROFIL. setup_score reste calculé pour
@@ -1212,7 +1206,7 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         "survivors_price_filter": n_tradable,   # ont passé les filtres durs (univers tradable)
         "profile_members": n_all,               # membres Fusée/Phénix retenus (== tradables en legacy)
         "pool_mode": FILTERS["pool_mode"],
-        "v3_model": model is not None,   # True → p_explode pilote l'ordre (Epic 3)
+        "v3_model": False,               # thèse v3 échouée, aucun modèle : clé gardée au contrat
         "v4_cohort": v4_cohort,          # Epic 4 : cohorte du jour (instrumentation forward)
         "v4_note": v4_note,              # raison lisible (marché haussier → cohorte vide)
         "v4_mkt21": v4_mkt21,            # état du marché (IWM 21 j) affiché en tête
