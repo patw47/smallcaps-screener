@@ -313,7 +313,7 @@ def _facts(cik10: str) -> dict:
 
     Ne garde en mémo QUE les tags utilisés (_CASH_TAGS + _OCF_TAGS) : le dict us-gaap
     complet pèse des Mo par ticker — le mémoïser pour tout l'univers (~2 500 tickers)
-    fait exploser la RAM (crash WSL/OOM constaté sur le run --study-v3).
+    fait exploser la RAM (crash WSL/OOM constaté sur un run couvrant tout l'univers).
     """
     with _pit_lock:
         if cik10 in _facts_memo:

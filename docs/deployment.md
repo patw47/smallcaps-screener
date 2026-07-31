@@ -107,9 +107,6 @@ curl -X POST http://localhost:8000/api/scan/force
 # Forward-return backtest (single window; continuous vs binary score)
 docker-compose exec backend python backtest.py --n 200 --forward 63 --seed 42
 
-# Rolling weight sweep (pools several windows to escape small-sample noise)
-docker-compose exec backend python backtest.py --sweep --n 250 --forward 63
-
 # Performance of past selections since first flagged
 curl http://localhost:8000/api/performance
 ```
