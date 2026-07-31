@@ -50,7 +50,7 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `pivot_window` / `near_pivot_pct` | `50` / `0.85` | Near the high of the **recent** base → about to break out. |
 | `low_ext_pct` | `0.12` | Price ≤ MA50 × 1.12 → not extended (still early). |
 | `trigger_vol_window` / `trigger_vol_mult` | `50` / `1.5` | Breakout: today's volume > `1.5 ×` the 50-day average. |
-| `alert_min_score` / `alert_dedup_days` | `7` / `5` | Telegram: min `setup_score` to alert; no re-alert of a ticker within N days. |
+| `alert_dedup_days` | `5` | Telegram: no re-alert of a ticker within N days. |
 | `high_window` / `near_high_pct` | `252` / `0.75` | 52-week high position (informational). |
 | `float_max` | `50_000_000` | Float < 50M shares → `low_float` (score bonus). |
 | `insider_pct_min` / `revenue_growth_min` / `short_interest_high` | `5.0` / `0.10` / `15.0` | Fundamental thresholds. `insider_pct_min` is **display only** now (score uses net buying). |
@@ -167,11 +167,12 @@ set, so every candidate in the JSON/snapshots carries them.
 
 ## Telegram alerts (`alerts.py`)
 
-On each scan, `notify_new_triggers` pings **newly `fusee_event`** names — a **Fusée member
-whose breakout `triggered` that day** (Epic 2 semantics; a plain non-Fusée trigger no longer
-alerts) — with `setup_score ≥ alert_min_score`. **Dedup**: a ticker is not re-notified within
-`alert_dedup_days` (state persisted in `data/alerts_state.json`; recorded **only on
-successful send**, so a failure/absent token retries next scan). Secrets come from env only
+On each scan, `notify_new_v4_entries` and `notify_new_v5_entries` ping the names **newly
+entering the v4 / v5 cohorts**. The original Fusée-breakout alert was removed in Epic 7 S2
+(its trigger measured non-predictive; the v4 cohort alert replaced it). **Dedup**: a ticker
+is not re-notified within `alert_dedup_days` (state persisted in `data/alerts_state.json`;
+recorded **only on successful send**, so a failure/absent token retries next scan; the `v4:`
+/ `v5:` state prefixes keep the two cohorts independent). Secrets come from env only
 (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) — **without them, alerting is silently disabled
 and the scan runs normally**. Never fatal (wrapped in `run_scan`).
 
@@ -241,7 +242,7 @@ the Sprint 6 backtest). Award/option/tax codes (`A`/`M`/`F`/`G`…) are ignored.
 
 ## Orchestration — `run_scan(tickers=None)`
 
-Discover (full universe, no sampling) → `_download_prices` → **Pass A** (tradability hard path + signals + trigger) → **`detect_profiles` over the whole tradable pool → keep profile members only, ranked by `profile_strength`** (in `legacy`: rank the whole pool by technical composite instead) → keep top `enrich_max` → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10)** → set `setup_score` alias (kept for continuity, no longer drives selection) → sort by profile strength → write `/app/data/screener_data.json` → **`notify_new_triggers`** (Fusée-event, Telegram, best-effort). `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
+Discover (full universe, no sampling) → `_download_prices` → **Pass A** (tradability hard path + signals + trigger) → **`detect_profiles` over the whole tradable pool → keep profile members only, ranked by `profile_strength`** (in `legacy`: rank the whole pool by technical composite instead) → keep top `enrich_max` → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10)** → set `setup_score` alias (kept for continuity, no longer drives selection) → sort by profile strength → write `/app/data/screener_data.json` → **`notify_new_v4_entries` / `notify_new_v5_entries`** (Telegram, best-effort). `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
 
 ## Output JSON
 

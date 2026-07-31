@@ -9,9 +9,14 @@ Lancer : DATA_DIR=/tmp/screener_test pytest backend/tests/ -v
 import os
 os.environ.setdefault("DATA_DIR", "/tmp/screener_test")  # évite makedirs("/app/data")
 
+import ast
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
+import screener_backend
+from scoring import score_candidates
 from screener_backend import (
     FILTERS,
     _sma, _ma_rising, _median_dollar_volume, _rs_metrics,
@@ -281,6 +286,32 @@ def test_pass_a_no_benchmark_ok():
     df = _make_df(closes, [200_000] * 200)
     signals, reason = analyze_prices("NOBENCH", df, None)
     assert reason == "ok"
+
+
+def test_scoring_contract_p_explode_null_and_survival_risk_bool():
+    # Epic 7 S2 : le modèle v3 est supprimé, le CONTRAT ne bouge pas — p_explode reste
+    # présent à None (aucune probabilité inventée), survival_risk reste un vrai booléen.
+    risky = {"ticker": "AAA", "going_concern_flag": True}
+    healthy = {"ticker": "BBB", "going_concern_flag": False}
+    before = set(risky)
+    score_candidates([risky, healthy])
+    assert risky["p_explode"] is None and healthy["p_explode"] is None
+    assert risky["survival_risk"] is True and healthy["survival_risk"] is False
+    assert set(risky) - before == {"p_explode", "survival_risk"}   # aucun autre champ touché
+
+
+def test_scan_payload_keys_frozen():
+    # Clés top-level du JSON de scan, gelées : lues dans le littéral `output` de run_scan
+    # (pas de réseau). Une clé perdue au fil d'un refactor casserait le frontend en silence.
+    src = Path(screener_backend.__file__).read_text(encoding="utf-8")
+    output = next(n.value for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "output")
+    assert {k.value for k in output.keys} == {
+        "scanned_at", "universe_size", "total_scanned", "survivors_price_filter",
+        "profile_members", "pool_mode", "v3_model", "v4_cohort", "v4_note", "v4_mkt21",
+        "v4_prelist", "v4_tracking", "v5", "display", "enriched", "candidates",
+        "stocks", "rejection_stats",
+    }
 
 
 def test_pass_a_near_pivot_and_low_ext_signals():
