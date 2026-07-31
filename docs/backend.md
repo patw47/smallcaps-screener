@@ -255,18 +255,16 @@ binary score side by side (does a higher score predict a higher forward return, 
 one scoring beat the other?).
 
 ```bash
-# single window
 DATA_DIR=/tmp/bt PYTHONPATH=backend python backtest.py --n 200 --forward 63 --seed 42
-
-# rolling weight sweep: pool survivors over several as-of windows (evaluate_ticker gains an
-# as_of_offset) to escape small-sample noise, and sweep a scoring weight
-DATA_DIR=/tmp/bt PYTHONPATH=backend python backtest.py --sweep --n 250 --forward 63
 ```
 
 **Honest limitations:** survivorship bias, no point-in-time fundamentals (validates
-price/volume signals only). A single window at ~14 survivors is pure noise; `--sweep` pools
-windows (hundreds of survivors) for a cleaner read, but a full verdict still needs multiple
-seeds/horizons. So far the backtest cannot confirm an edge or that continuous beats binary.
+price/volume signals only), a single as-of window. At ~14 survivors this is a control
+run, not a verdict: the backtest cannot confirm an edge or that continuous beats binary.
+
+The v1/v2/v3 study harnesses and the weight sweep were removed (Epic 7 S1) — the three
+theses failed their pre-registered studies and re-fitting is forbidden. Their verdicts
+live in `backtest_protocol_v2.md` / `_v3.md`, their code in git history.
 
 ## Tests
 

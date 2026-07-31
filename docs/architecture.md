@@ -32,7 +32,7 @@ External market data sources
 ├── backend/
 │   ├── api.py
 │   ├── screener_backend.py
-│   ├── backtest.py            # forward-return validation harness (+ --sweep rolling)
+│   ├── backtest.py            # forward-return validation harness (control run)
 │   ├── track.py               # live performance tracking of past selections
 │   ├── tests/                 # offline unit tests
 │   ├── Dockerfile
