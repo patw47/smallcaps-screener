@@ -50,11 +50,6 @@ CFG: dict = {
     },
 }
 
-# Epic 8 S6 — seconde version des textes citant un seuil : même justification,
-# nombre retiré. Servie À LA PLACE de `gloss` en mode présentation ; une clé
-# laissée vide veut dire « ce texte ne cite aucun seuil, il passe tel quel ».
-# Mêmes clés que gloss, dérivées (jamais recopiées) pour ne pas diverger.
-CFG["display"]["gloss_demo"] = dict.fromkeys(CFG["display"]["gloss"], "")
 
 
 def market_return_21d(bench_close: pd.Series | None) -> float | None:
@@ -143,10 +138,8 @@ def build_cohort(tradables: list[tuple[str, dict]], prices: dict,
             "beta": round(beta, 3) if beta is not None else None,
             "corr": round(corr, 3) if corr is not None else None,
             "resid": round(resid, 4) if resid is not None else None,
-            "margins": {  # distance aux seuils — affichage §3, jamais un re-classement
-                "price": round(CFG["price_max"] - price, 2),
-                "change_1m": round(CFG["chg1m_max"] - chg, 4),
-            },
+            # `margins` (distance au seuil) retirée : ajoutée à la valeur du titre, qui
+            # reste affichée, elle redonnait le seuil exact. Elle n'était lue nulle part.
         })
 
     # Ordre indicatif : plus survendu d'abord (résidu le plus négatif) ; sans bêta → fin.
