@@ -1254,6 +1254,11 @@ def _display_params() -> dict:
     chiffres gelés des bandeaux et textes du glossaire UI. Tout vient de la config
     locale (defaults neutres sans elle) — le JSX public ne porte plus aucune valeur.
     Jamais consigné dans les snapshots (dérivable, et le suivi n'en a pas besoin).
+
+    `checkpoint` porte le calendrier d'observation des deux familles (jour du point
+    de contrôle, horizon de clôture) : protocole de MESURE, donc affiché même en
+    mode présentation — le connaître ne permet de reconstituer aucune liste. Seul
+    `thr`, qui est un seuil, relève de ce qui se masque (Epic 8 S6).
     """
     import v4
     import v5
@@ -1261,12 +1266,15 @@ def _display_params() -> dict:
         "v4": {
             "rules": {"price_max": v4.CFG["price_max"], "chg1m_max": v4.CFG["chg1m_max"],
                       "mkt_window": v4.CFG["mkt_window"]},
-            "checkpoint": {"day": v4.CFG["checkpoint_day"], "thr": v4.CFG["checkpoint_thr"]},
+            "checkpoint": {"day": v4.CFG["checkpoint_day"], "thr": v4.CFG["checkpoint_thr"],
+                           "horizon": v4.CFG["horizon"]},
             **v4.CFG["display"],
         },
         "v5": {
             "rules": {"price_max": v5.CFG["price_max"], "chg_max": v5.CFG["chg_max"],
                       "cmf_min": v5.CFG["cmf_min"], "volcalm_max": v5.CFG["volcalm_max"]},
+            "checkpoint": {"day": v5.CFG["checkpoint_day"], "thr": v5.CFG["checkpoint_thr"],
+                           "horizon": v5.CFG["horizon"]},
             "windows": list(v5.CFG["windows"]),
             **v5.CFG["display"],
         },
@@ -1311,7 +1319,7 @@ def _write_snapshot(output: dict) -> None:
             # ni tracking (dérivables), seule la matière première du jugement forward.
             "v5": {
                 "windows": {
-                    w: {"mkt": b.get("mkt"), "note": b.get("note", ""),
+                    w: {"mkt": b.get("mkt"), "note": b.get("note") or {},
                         "cohort": b.get("cohort", [])}
                     for w, b in (output.get("v5") or {}).get("windows", {}).items()
                 },

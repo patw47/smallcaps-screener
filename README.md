@@ -194,6 +194,7 @@ backend/
 ├── api.py                # FastAPI app (non-blocking scan, daily scheduler, endpoints)
 ├── v4.py                 # 21-day washout cohort, pre-list, tracking
 ├── v5.py                 # multi-window (7/14/21 d) washout cohorts
+├── lifecycle.py          # observation schedule shared by both families (phase, checkpoint)
 ├── alerts.py             # Telegram alerts (cohort entries, persistent dedup)
 ├── edgar.py              # SEC/EDGAR point-in-time survival signals (dilution, runway…)
 ├── profiles.py           # Fusée/Phénix detectors
