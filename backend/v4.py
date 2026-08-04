@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import lifecycle
+
 # Defaults NEUTRES — les valeurs gelées réelles arrivent de config/local.yml (v4:).
 # La structure des règles reste lisible ici (décision d'epic) ; seules les valeurs
 # sont secrètes. display = textes/chiffres gelés servis au frontend via le payload.
@@ -177,52 +179,11 @@ def _load_cohort_entries(history_dir: Path) -> dict[str, dict]:
 def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
     """
     Position de chaque titre de cohorte vs les trajectoires historiques.
-    Jours de bourse comptés sur l'index du titre lui-même (robuste aux jours fériés).
-    Un titre sans données de prix aujourd'hui est signalé (délisting possible = information).
-
-    `status` et `checkpoint` sont des CODES + variables (Epic 8 S1), traduits par le
-    frontend : above / below / explosion / crash / closed / too_early / no_data et
-    week_one / window_closed / too_early. Les seuils du checkpoint ne voyagent pas ici,
-    le frontend les tient déjà du bloc `display`.
+    Le cycle de vie d'une ligne (phase, statut, point de contrôle) est calculé par
+    `lifecycle.track_row`, partagé avec la Purge silencieuse — le calendrier
+    d'observation est un protocole de mesure, chaque famille y passe SON cfg.
     """
-    cp_day, cp_thr, horizon = CFG["checkpoint_day"], CFG["checkpoint_thr"], CFG["horizon"]
-    out: list[dict] = []
-    for tk, ent in _load_cohort_entries(history_dir).items():
-        row = {"ticker": tk, **ent, "days_held": None, "ret": None,
-               "checkpoint": None, "status": {"code": "no_data"}}
-        df = prices.get(tk)
-        if df is not None and "Close" in df:
-            close = df["Close"].dropna()
-            # Comparaison robuste : Timestamp explicite, aligné sur le fuseau de l'index
-            # (yfinance renvoie parfois un index tz-aware — comparer à un naïf lèverait).
-            try:
-                entry_ts = pd.Timestamp(ent["entry_date"])
-                tz = getattr(close.index, "tz", None)
-                if tz is not None and entry_ts.tzinfo is None:
-                    entry_ts = entry_ts.tz_localize(tz)
-                after = close[close.index > entry_ts]
-            except Exception:
-                after = close.iloc[0:0]
-            if len(after):
-                days = len(after)
-                cur = float(after.iloc[-1])
-                row["days_held"] = days
-                row["ret"] = round(cur / ent["entry_price"] - 1, 4)
-                if days >= horizon:
-                    d63 = float(after.iloc[horizon - 1])
-                    r63 = d63 / ent["entry_price"] - 1
-                    row["checkpoint"] = {"code": "window_closed", "h": horizon}
-                    row["status"] = {"code": "explosion" if r63 >= 1.0
-                                     else "crash" if r63 <= -0.5 else "closed"}
-                    row["ret_63"] = round(r63, 4)
-                elif days >= cp_day:
-                    r5 = float(after.iloc[cp_day - 1]) / ent["entry_price"] - 1
-                    row["checkpoint"] = {"code": "week_one"}
-                    row["ret_5"] = round(r5, 4)
-                    row["status"] = {"code": "above" if r5 >= cp_thr else "below"}
-                else:
-                    row["checkpoint"] = {"code": "too_early"}
-                    row["status"] = {"code": "too_early", "d": days, "cp": cp_day}
-        out.append(row)
+    out = [lifecycle.track_row({"ticker": tk}, ent, prices.get(tk), CFG)
+           for tk, ent in _load_cohort_entries(history_dir).items()]
     out.sort(key=lambda r: r["entry_date"], reverse=True)
     return out

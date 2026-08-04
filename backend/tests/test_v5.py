@@ -201,3 +201,55 @@ def test_v5_alert_merge_and_dedup(tmp_path):
                                         send_fn=lambda t: False) == []
     assert alerts.notify_new_v5_entries(windows2, state_path=state, dedup_days=5,
                                         send_fn=lambda t: True) == ["CCC"]
+
+
+def test_tracking_phase_partition_per_window(tmp_path):
+    """Cycle de vie (Epic 8 S4) — même classement que la Purge de marché, par fenêtre :
+    au-delà de l'horizon = clôturée, plus jeune = en observation, sans données de prix
+    = ni l'une ni l'autre. Frontière exacte : pile à l'horizon la fenêtre est close."""
+    horizon = v5.CFG["horizon"]
+    snap = {"scanned_at": "2025-01-06T20:00:00+00:00",
+            "v5": {"windows": {"7": {"cohort": [
+                {"ticker": tk, "price": 10.0, "chg": -0.2}
+                for tk in ("EXACT", "ONE_LESS", "GONE")]}}}}
+    (tmp_path / "20250106_200000.json").write_text(json.dumps(snap))
+
+    def flat(n):
+        return pd.DataFrame({"Close": pd.Series(
+            [10.0] * n, index=pd.bdate_range("2025-01-07", periods=n))})
+
+    rows = build_tracking({"EXACT": flat(horizon), "ONE_LESS": flat(horizon - 1)}, tmp_path)
+    by = {r["ticker"]: r for r in rows}
+    assert {r["window"] for r in rows} == {7}
+    assert by["EXACT"]["phase"] == "closed" and by["EXACT"]["days_held"] == horizon
+    assert by["ONE_LESS"]["phase"] == "open" and by["ONE_LESS"]["days_left"] == 1
+    assert by["GONE"]["phase"] == "no_data" and by["GONE"]["status"] == {"code": "no_data"}
+    assert len(rows) == 3
+
+
+def test_snapshot_window_without_note(tmp_path, monkeypatch):
+    """Une fenêtre sans note consignée retombe sur un OBJET vide, jamais une chaîne :
+    les notes sont des codes {code, variables} depuis l'Epic 8 S1 (review S1, finding 1)."""
+    import screener_backend as sb
+    monkeypatch.setattr(sb, "HISTORY_DIR", tmp_path)
+    sb._write_snapshot({
+        "scanned_at": "2026-08-04T12:00:00+00:00", "stocks": [],
+        "v5": {"windows": {"7": {"mkt": -0.02, "cohort": []}}},
+    })
+    snap = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert snap["v5"]["windows"]["7"]["note"] == {}
+
+
+def test_tracking_reads_pre_s1_snapshots(tmp_path):
+    """Relecture des snapshots écrits AVANT l'Epic 8 S1, dont la note est une chaîne
+    française : le suivi ne lit que `cohort`, la note n'est jamais désérialisée."""
+    (tmp_path / "20250602_200000.json").write_text(json.dumps(
+        {"scanned_at": "2025-06-02T20:00:00+00:00",
+         "v5": {"windows": {"7": {"mkt": -0.03,
+                                  "note": "Marché baissier (IWM 7 j −3 %) → 1 qualifié",
+                                  "cohort": [{"ticker": "OLD", "price": 10.0}]}}}}))
+    idx = pd.bdate_range("2025-06-03", periods=3)
+    rows = build_tracking(
+        {"OLD": pd.DataFrame({"Close": pd.Series([10.0, 10.5, 11.0], index=idx)})}, tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "OLD" and rows[0]["phase"] == "open"

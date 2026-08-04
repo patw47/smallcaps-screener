@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import lifecycle
+
 # Defaults NEUTRES — les valeurs gelées réelles arrivent de config/local.yml (v5:).
 # Les fenêtres restent lisibles ici (structure affichée par le sélecteur de l'UI) ;
 # seules les valeurs de règles sont secrètes. display = textes/chiffres gelés servis
@@ -195,43 +197,9 @@ def _load_entries(history_dir: Path) -> dict[tuple[int, str], dict]:
 
 
 def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
-    """Position de chaque titre de cohorte v5, par fenêtre — mêmes conventions que v4,
-    codes de statut/checkpoint compris (Epic 8 S1)."""
-    cp_day, cp_thr, horizon = CFG["checkpoint_day"], CFG["checkpoint_thr"], CFG["horizon"]
-    out: list[dict] = []
-    for (w, tk), ent in _load_entries(history_dir).items():
-        row = {"ticker": tk, "window": w, **ent, "days_held": None, "ret": None,
-               "checkpoint": None, "status": {"code": "no_data"}}
-        df = prices.get(tk)
-        if df is not None and "Close" in df:
-            close = df["Close"].dropna()
-            try:
-                entry_ts = pd.Timestamp(ent["entry_date"])
-                tz = getattr(close.index, "tz", None)
-                if tz is not None and entry_ts.tzinfo is None:
-                    entry_ts = entry_ts.tz_localize(tz)
-                after = close[close.index > entry_ts]
-            except Exception:
-                after = close.iloc[0:0]
-            if len(after):
-                days = len(after)
-                cur = float(after.iloc[-1])
-                row["days_held"] = days
-                row["ret"] = round(cur / ent["entry_price"] - 1, 4)
-                if days >= horizon:
-                    r63 = float(after.iloc[horizon - 1]) / ent["entry_price"] - 1
-                    row["checkpoint"] = {"code": "window_closed", "h": horizon}
-                    row["status"] = {"code": "explosion" if r63 >= 1.0
-                                     else "crash" if r63 <= -0.5 else "closed"}
-                    row["ret_63"] = round(r63, 4)
-                elif days >= cp_day:
-                    r5 = float(after.iloc[cp_day - 1]) / ent["entry_price"] - 1
-                    row["checkpoint"] = {"code": "week_one"}
-                    row["ret_5"] = round(r5, 4)
-                    row["status"] = {"code": "above" if r5 >= cp_thr else "below"}
-                else:
-                    row["checkpoint"] = {"code": "too_early"}
-                    row["status"] = {"code": "too_early", "d": days, "cp": cp_day}
-        out.append(row)
+    """Position de chaque titre de cohorte v5, par fenêtre — mêmes conventions que v4
+    (cycle de vie calculé par `lifecycle.track_row`, avec le cfg v5)."""
+    out = [lifecycle.track_row({"ticker": tk, "window": w}, ent, prices.get(tk), CFG)
+           for (w, tk), ent in _load_entries(history_dir).items()]
     out.sort(key=lambda r: (r["entry_date"], r["window"]), reverse=True)
     return out

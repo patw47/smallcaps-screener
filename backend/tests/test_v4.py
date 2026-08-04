@@ -267,3 +267,70 @@ def test_tracking_window_close_labels(tmp_path):
     assert by["BOOM"]["checkpoint"] == {"code": "window_closed", "h": horizon}
     assert by["BOOM"]["status"] == {"code": "explosion"}
     assert by["BUST"]["status"] == {"code": "crash"}
+
+
+# ---------------------------------------------------------------------------
+# Cycle de vie (Epic 8 S4) — trois phases exclusives : en observation, clôturée,
+# sans données. Le classement de l'écran se lit dans `phase`, jamais dans le texte.
+# ---------------------------------------------------------------------------
+
+def _entry_snapshot(tmp_path, tickers):
+    snap = {"scanned_at": "2025-01-06T20:00:00+00:00",
+            "v4_cohort": [{"ticker": tk, "price": 10.0} for tk in tickers]}
+    (tmp_path / "20250106_200000.json").write_text(json.dumps(snap))
+
+
+def _flat(n_sessions, price=10.0):
+    """Série plate de n séances de bourse APRÈS le 2025-01-06 (date d'entrée)."""
+    return pd.DataFrame({"Close": pd.Series(
+        [price] * n_sessions, index=pd.bdate_range("2025-01-07", periods=n_sessions))})
+
+
+def test_tracking_phase_partition(tmp_path):
+    """Classement : au-delà de l'horizon = clôturée, plus jeune = en observation,
+    sans données de prix = ni l'une ni l'autre. Aucune ligne perdue ni dupliquée."""
+    from v4 import build_tracking
+    horizon = v4.CFG["horizon"]
+    _entry_snapshot(tmp_path, ["OLD", "YOUNG", "GONE"])
+
+    rows = build_tracking({"OLD": _flat(horizon + 8), "YOUNG": _flat(horizon - 20)}, tmp_path)
+    by_phase = {p: sorted(r["ticker"] for r in rows if r["phase"] == p)
+                for p in ("open", "closed", "no_data")}
+    assert by_phase == {"open": ["YOUNG"], "closed": ["OLD"], "no_data": ["GONE"]}
+    assert sum(len(v) for v in by_phase.values()) == len(rows) == 3
+
+    by = {r["ticker"]: r for r in rows}
+    assert by["OLD"]["days_left"] == 0                 # clôturée : plus rien à attendre
+    assert by["YOUNG"]["days_left"] == 20              # séances restantes avant clôture
+    assert by["GONE"]["days_held"] is None and by["GONE"]["days_left"] is None
+    assert by["GONE"]["status"] == {"code": "no_data"}  # code dédié, toujours affiché
+
+
+def test_tracking_phase_boundary_exact(tmp_path):
+    """Frontière : pile à l'horizon la fenêtre est close, une séance avant elle court."""
+    from v4 import build_tracking
+    horizon = v4.CFG["horizon"]
+    _entry_snapshot(tmp_path, ["EXACT", "ONE_LESS"])
+
+    rows = build_tracking({"EXACT": _flat(horizon), "ONE_LESS": _flat(horizon - 1)}, tmp_path)
+    by = {r["ticker"]: r for r in rows}
+    assert by["EXACT"]["days_held"] == horizon
+    assert by["EXACT"]["phase"] == "closed"
+    assert by["EXACT"]["checkpoint"] == {"code": "window_closed", "h": horizon}
+    assert by["ONE_LESS"]["days_held"] == horizon - 1
+    assert by["ONE_LESS"]["phase"] == "open"
+    assert by["ONE_LESS"]["days_left"] == 1
+
+
+def test_checkpoint_is_not_an_exit(tmp_path):
+    """Un titre sous le seuil au point de contrôle reste en observation : couper
+    les retardataires détruirait le rendement mesuré du panier."""
+    from v4 import build_tracking
+    _entry_snapshot(tmp_path, ["LATE"])
+    n = v4.CFG["checkpoint_day"] + 3
+    falling = pd.DataFrame({"Close": pd.Series(
+        [9.0] * n, index=pd.bdate_range("2025-01-07", periods=n))})
+
+    row = build_tracking({"LATE": falling}, tmp_path)[0]
+    assert row["status"] == {"code": "below"}
+    assert row["phase"] == "open"

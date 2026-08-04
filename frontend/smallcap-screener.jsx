@@ -384,7 +384,6 @@ function QuietSection({ v5, win, dp4, dp5 }) {
   const stats = dp5.stats?.[String(win)] ?? {};
   const cohort = block.cohort ?? [];
   const prelist = block.prelist ?? [];
-  const tracking = v5.tracking ?? [];
   const { mktState, stockState, blocking } = ruleStates(block.mkt, cohort.length);
   const ruleItems = [
     { key: "price", label: t("quiet.rule.price"), val: t("chip.priceMax", { x: rules.price_max ?? "—" }), state: stockState, why: g4.rule_price },
@@ -467,29 +466,16 @@ function QuietSection({ v5, win, dp4, dp5 }) {
         </div>
       )}
 
-      {tracking.length > 0 && (
-        <div style={{ marginTop: 14, fontSize: 12.5, color: "#8494a3" }}>
-          <span style={{ textTransform: "uppercase", letterSpacing: 0.6, fontSize: 11.5 }}>
-            {t("quiet.tracking", { n: tracking.length })}
-          </span>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-            {tracking.slice(0, 24).map((r, i) => (
-              <span key={i} style={{
-                background: "#16202b", border: "1px solid #1e2a36", borderRadius: 4,
-                padding: "3px 8px", fontFamily: "monospace",
-              }}>{r.ticker} · {t("chip.win", { w: r.window })} · {r.entry_date} · {pctFmt(r.ret)} · {statusText(r.status)}</span>
-            ))}
-          </div>
-        </div>
-      )}
     </section>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Étage 2 — suivi des titres qualifiés (information, jamais un ordre de vente)
-// L'API sert des CODES de statut/checkpoint (Epic 8 S1) : les branches ci-dessous
-// comparent des codes, jamais des chaînes traduites.
+// Étage 2 — cycle de vie des titres suivis (information, jamais un ordre de vente)
+// L'API sert des CODES de statut/checkpoint (Epic 8 S1) et une PHASE de cycle de
+// vie (Epic 8 S4) : les branches ci-dessous comparent des codes, jamais des
+// chaînes traduites. Le classement en trois blocs vient de `phase`, calculée et
+// testée côté backend — l'écran ne la redevine pas.
 // ---------------------------------------------------------------------------
 const STATUS_COLORS = {
   above: ["#00e096", "#1c4033"], explosion: ["#00e096", "#1c4033"],
@@ -513,57 +499,144 @@ function probText(row, g) {
   return "—";
 }
 
-function TrackingSection({ tracking, dp4 }) {
-  const g = dp4.gloss ?? {};
-  const headers = ["ticker", "entryDate", "entryPrice", "today", "checkpoint", "position", "probs"];
+// Phase d'une ligne. Servie par l'API ; le repli dérive des codes déjà présents,
+// pour un résultat de scan mis en cache avant l'arrivée du champ.
+const phaseOf = (r) => r.phase
+  ?? (r.days_held == null ? "no_data"
+    : r.checkpoint?.code === "window_closed" ? "closed" : "open");
+
+// Frise : entrée → point de contrôle (trait jaune) → clôture ; le remplissage est
+// la position courante, le texte dit ce qui reste à observer.
+function Lifecycle({ row, cal }) {
+  const h = cal.horizon ?? 0, cp = cal.day ?? 0;
+  const done = phaseOf(row) === "closed";
+  const pct = h > 0 && row.days_held != null ? Math.min(100, row.days_held / h * 100) : 0;
+  const cpPct = h > 0 ? Math.min(100, cp / h * 100) : 0;
+  const left = done ? t("tracking.done")
+    : row.days_left == null ? "—"
+      : t(`tracking.left.${row.days_left === 1 ? "one" : "many"}`, { n: row.days_left });
+  return (
+    <div style={{ minWidth: 150 }}>
+      <div role="img" aria-label={t("tracking.calendar", { cp, h })}
+        style={{ position: "relative", height: 6, background: "#182230", borderRadius: 3, margin: "2px 0 5px" }}>
+        <div style={{
+          width: `${pct}%`, height: "100%", borderRadius: 3,
+          background: done ? "#3a4a5a" : "linear-gradient(90deg,#0e6e52,#00e096)",
+        }} />
+        <span style={{ position: "absolute", left: `${cpPct}%`, top: -2, width: 1, height: 10, background: "#f0c040" }} />
+      </div>
+      <span style={{ fontSize: 11.5, color: "#8494a3", fontFamily: "'Segoe UI', sans-serif" }}>
+        {checkpointText(row.checkpoint, cal.thr)} · {left}
+      </span>
+    </div>
+  );
+}
+
+const CELL = { padding: "10px 14px", borderBottom: "1px solid #1e2a36" };
+const RIGHT = new Set(["entryPrice", "today"]);
+
+function TrackingTable({ rows, dp, windowCol }) {
+  const g = dp.gloss ?? {}, cal = dp.checkpoint ?? {};
+  const headers = ["ticker", ...(windowCol ? ["window"] : []),
+    "entryDate", "entryPrice", "today", "lifecycle", "position", "probs"];
+  return (
+    <div style={{ overflowX: "auto", border: "1px solid #1e2a36", borderRadius: 8, background: "#111820" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, fontFamily: "monospace" }}>
+        <thead>
+          <tr>
+            {headers.map(h => (
+              <th key={h} style={{
+                color: "#8494a3", fontWeight: 600, textTransform: "uppercase", fontSize: 11,
+                letterSpacing: 0.7, textAlign: RIGHT.has(h) ? "right" : "left", ...CELL,
+              }}>
+                {h === "lifecycle" && g.tip_checkpoint
+                  ? <Tip down tip={g.tip_checkpoint}>{t("tracking.h.lifecycle")}</Tip>
+                  : t(`tracking.h.${h}`)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={`${r.ticker}-${r.window ?? ""}-${r.entry_date}`}>
+              <td style={{ ...CELL, fontWeight: 700, color: "#e8e8ff" }}>{r.ticker}</td>
+              {windowCol && <td style={{ ...CELL, color: "#8494a3" }}>{t("chip.win", { w: r.window })}</td>}
+              <td style={{ ...CELL, color: "#8494a3" }}>{r.entry_date}</td>
+              <td style={{ ...CELL, textAlign: "right", color: "#d7e0e8" }}>{r.entry_price} $</td>
+              <td style={{ ...CELL, textAlign: "right", color: r.ret == null ? "#8494a3" : r.ret >= 0 ? "#00e096" : "#ff6b6b" }}>
+                {r.ret == null ? "—" : `${pctFmt(r.ret)} · ${t("tracking.day", { d: r.days_held })}`}
+              </td>
+              <td style={CELL}><Lifecycle row={r} cal={cal} /></td>
+              <td style={CELL}>{statusChip(r)}</td>
+              <td style={{ ...CELL, color: "#d7e0e8", fontFamily: "'Segoe UI', sans-serif", fontSize: 12.5 }}>{probText(r, g)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Un bloc par phase. « En observation » est toujours déployé — c'est le panier
+// vivant ; les deux autres sont repliés (élément natif, aucun script).
+function TrackingGroup({ phase, rows, dp, windowCol }) {
+  if (rows.length === 0) return null;
+  const head = t(`tracking.group.${phase}`, { n: rows.length });
+  const table = <TrackingTable rows={rows} dp={dp} windowCol={windowCol} />;
+  if (phase === "open") {
+    return (
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.8, color: "#5a6a79", marginBottom: 6 }}>
+          {head}
+        </div>
+        {table}
+      </div>
+    );
+  }
+  return (
+    <details style={detailsStyle}>
+      <summary style={summaryStyle}>{head}</summary>
+      <div style={{ marginTop: 10 }}>{table}</div>
+    </details>
+  );
+}
+
+const PHASES = ["open", "closed", "no_data"];
+
+function TrackingSection({ tracking, dp, family, windowCol }) {
+  const g = dp.gloss ?? {}, cal = dp.checkpoint ?? {};
+  const groups = { open: [], closed: [], no_data: [] };
+  tracking.forEach(r => groups[phaseOf(r)].push(r));
   return (
     <section style={{ marginTop: 34 }}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
         <h2 style={{ fontSize: 15, margin: 0, fontWeight: 650, textTransform: "uppercase", letterSpacing: 1.2, color: "#e8e8ff" }}>
           {t("tracking.title")}
         </h2>
+        <span style={{ color: "#d7e0e8", fontSize: 13 }}>{family}</span>
         <span style={{ color: "#8494a3", fontSize: 13 }}>{t("tracking.subtitle")}</span>
       </div>
+
+      <p style={{ ...proseStyle, margin: 0 }}>{t("tracking.calendar", { cp: cal.day ?? "—", h: cal.horizon ?? "—" })}</p>
+      <p style={proseStyle}>{t("tracking.notAnExit")}</p>
+
       {tracking.length === 0 ? (
-        <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b" }}>
+        <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b", marginTop: 12 }}>
           {t("tracking.empty")}
         </div>
       ) : (
-        <div style={{ overflowX: "auto", border: "1px solid #1e2a36", borderRadius: 8, background: "#111820" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, fontFamily: "monospace" }}>
-            <thead>
-              <tr>
-                {headers.map((h, i) => (
-                  <th key={h} style={{
-                    color: "#8494a3", fontWeight: 600, textTransform: "uppercase", fontSize: 11,
-                    letterSpacing: 0.7, textAlign: i === 2 || i === 3 ? "right" : "left",
-                    padding: "10px 14px", borderBottom: "1px solid #1e2a36",
-                  }}>
-                    {h === "checkpoint" && g.tip_checkpoint
-                      ? <Tip down tip={g.tip_checkpoint}>{t("tracking.h.checkpoint")}</Tip>
-                      : t(`tracking.h.${h}`)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {tracking.map(r => (
-                <tr key={r.ticker + r.entry_date}>
-                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", fontWeight: 700, color: "#e8e8ff" }}>{r.ticker}</td>
-                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", color: "#8494a3" }}>{r.entry_date}</td>
-                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", textAlign: "right", color: "#d7e0e8" }}>{r.entry_price} $</td>
-                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", textAlign: "right", color: r.ret == null ? "#8494a3" : r.ret >= 0 ? "#00e096" : "#ff6b6b" }}>
-                    {r.ret != null ? `${pctFmt(r.ret)} · J+${r.days_held}` : "—"}
-                  </td>
-                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", color: "#8494a3" }}>{checkpointText(r.checkpoint, dp4.checkpoint?.thr)}</td>
-                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36" }}>{statusChip(r)}</td>
-                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", color: "#d7e0e8", fontFamily: "'Segoe UI', sans-serif", fontSize: 12.5 }}>{probText(r, g)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {groups.open.length === 0 && (
+            <div style={{ fontSize: 12.5, color: "#8494a3", borderLeft: "2px solid #1e2a36", padding: "4px 12px", marginTop: 12 }}>
+              {t("tracking.noOpen")}
+            </div>
+          )}
+          {PHASES.map(p => (
+            <TrackingGroup key={p} phase={p} rows={groups[p]} dp={dp} windowCol={windowCol} />
+          ))}
+        </>
       )}
+
       {tracking.length > 0 && g.stops_footer && (
         <div style={{ fontSize: 12.5, color: "#5a6a79", borderLeft: "2px solid #f0c040", padding: "4px 12px", marginTop: 10 }}>
           {g.stops_footer}
@@ -940,7 +1013,8 @@ export default function App() {
 
         <MarketSection cohort={v4.cohort} note={v4.note} mkt21={v4.mkt21} prelist={v4.prelist} dp4={dp4} />
         <QuietSection v5={v5} win={mktWin} dp4={dp4} dp5={dp5} />
-        <TrackingSection tracking={v4.tracking} dp4={dp4} />
+        <TrackingSection tracking={v4.tracking} dp={dp4} family={t("market.section.title")} />
+        <TrackingSection tracking={v5.tracking} dp={dp5} family={t("quiet.name")} windowCol />
 
         {/* Zones extrêmes */}
         <section style={{ marginTop: 34 }}>

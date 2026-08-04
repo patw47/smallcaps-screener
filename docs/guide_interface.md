@@ -150,21 +150,36 @@ pastilles avec les seuils servis par l'API. Le journal de suivi enregistre chaqu
 
 ## Étage 2 — Suivi des titres qualifiés
 
-Le journal de tous les titres enregistrés depuis le 6 juillet 2026, ligne par ligne :
+Le journal de tous les titres enregistrés depuis le 6 juillet 2026, une section par
+famille (Purge de marché, puis Purge silencieuse avec sa colonne de fenêtre). Chaque
+section annonce d'abord son **calendrier d'observation** — jour du point de contrôle,
+horizon de clôture, servis par l'API — puis range ses lignes en **trois blocs** :
+
+- **En observation** : le panier vivant, toujours déployé.
+- **Clôturées** : les lignes dont la fenêtre est échue, repliées par défaut (un
+  `<details>` natif, aucun script).
+- **Sans données de prix** : retrait de la cote possible ; ces lignes restent affichées
+  avec leur code dédié et n'entrent dans aucun des deux autres blocs.
+
+Colonnes :
 
 - **Entré le / prix d'entrée / aujourd'hui** : la performance réelle depuis la
   qualification (J+n).
-- **Point de contrôle** : lecture intermédiaire mesurée quelques séances après l'entrée
-  (jour et seuil servis par l'API). Au-dessus du seuil, les fréquences historiques
-  penchaient nettement mieux ; en dessous, l'inverse — mais une part substantielle des
-  plus fortes hausses était encore négative à ce stade.
+- **Cycle de vie** : la frise entrée → point de contrôle (trait jaune) → clôture, remplie
+  jusqu'à la position du jour, avec le nombre de séances restantes. Le point de contrôle
+  est une lecture intermédiaire mesurée quelques séances après l'entrée (jour et seuil
+  servis par l'API) : au-dessus du seuil, les fréquences historiques penchaient nettement
+  mieux ; en dessous, l'inverse — mais une part substantielle des plus fortes hausses était
+  encore négative à ce stade.
 - **Position** : où en est le titre (au-dessus / sous le seuil / doublement / chute de
   moitié / fenêtre close).
 - **Ce que disaient les cas passés** : la traduction chiffrée de la position (servie par
   l'API).
 
-**Information, jamais un ordre de vente** : vendre automatiquement sous le seuil détruit
-le rendement mesuré de l'ensemble, parce que les stops coupent la réversion.
+**Le point de contrôle n'est pas une sortie**, et c'est écrit en toutes lettres au-dessus
+du tableau : un titre passé sous le seuil reste en observation jusqu'à la clôture. Couper
+les retardataires en cours de route détruit le rendement mesuré de l'ensemble, parce que
+les stops coupent la réversion.
 
 Cet étage est le cœur de l'**observation en direct** : c'est lui qui jugera la méthode,
 selon des critères écrits à l'avance.
