@@ -47,6 +47,21 @@ function Tip({ tip, down, children, style }) {
 const pctFmt = (x, digits = 1) => x == null ? "—" : `${x > 0 ? "+" : ""}${(x * 100).toFixed(digits)} %`;
 
 // ---------------------------------------------------------------------------
+// Traduction des codes servis par l'API (Epic 8 S1). Le backend renvoie
+// {code, variables} ; tout le texte affiché vient des dictionnaires i18n, dans
+// la langue choisie par le client. `ns` = v4 ou v5 (mêmes codes, textes propres).
+// ---------------------------------------------------------------------------
+const noteText = (note, ns) => note?.code
+  ? t(`${ns}.note.${note.code}`, { w: note.w, pct: pctFmt(note.mkt), n: note.n, name: note.name })
+  : "";
+
+const statusText = (s) => s?.code ? t(`status.${s.code}`, { d: s.d, cp: s.cp }) : "";
+
+const checkpointText = (c, thr) => c?.code
+  ? t(`checkpoint.${c.code}`, { h: c.h, thr: pctFmt(thr, 0) })
+  : "—";
+
+// ---------------------------------------------------------------------------
 // Étage 1 — cohorte v4 (la seule liste à espérance historique positive)
 // ---------------------------------------------------------------------------
 function V4Card({ entry, rank, total, dp4 }) {
@@ -117,8 +132,9 @@ function V4Card({ entry, rank, total, dp4 }) {
 
 function V4Section({ cohort, note, mkt21, prelist, dp4 }) {
   const g = dp4.gloss ?? {}, stats = dp4.stats ?? {};
-  // Repliée par défaut (protocole distinct, jugé sur 21 j) — s'ouvre seule quand une
-  // cohorte existe (marché baissier 21 j), le seul cas actionnable.
+  const noteLabel = noteText(note, "v4");
+  // Repliée par défaut (jugée sur 21 j) — s'ouvre seule quand une cohorte existe
+  // (marché baissier 21 j), le seul cas actionnable.
   const [open, setOpen] = useState(cohort.length > 0);
   useEffect(() => { if (cohort.length > 0) setOpen(true); }, [cohort.length]);
   return (
@@ -135,7 +151,7 @@ function V4Section({ cohort, note, mkt21, prelist, dp4 }) {
           fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", padding: "2px 8px",
           borderRadius: 3, border: "1px solid #4a3f1a", color: "#f0c040",
         }}>{t("research.badge")}</Tip>
-        <span style={{ color: "#8494a3", fontSize: 13 }}>{t("proto.signed", { v: "v4" })}</span>
+        <span style={{ color: "#8494a3", fontSize: 13 }}>{t("rules.frozen")}</span>
       </div>
 
       {!open && (
@@ -145,7 +161,7 @@ function V4Section({ cohort, note, mkt21, prelist, dp4 }) {
         }}>
           {cohort.length > 0
             ? t("v4.collapsed.cohort", { n: cohort.length })
-            : <>{note || t("v4.emptyNote")} {t("v4.collapsed.empty")}</>}
+            : <>{noteLabel || t("v4.emptyNote")} {t("v4.collapsed.empty")}</>}
         </div>
       )}
 
@@ -176,7 +192,7 @@ function V4Section({ cohort, note, mkt21, prelist, dp4 }) {
         </div>
       ) : (
         <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b" }}>
-          <b style={{ color: "#d7e0e8" }}>{note || t("v4.emptyNote")}</b>{" "}
+          <b style={{ color: "#d7e0e8" }}>{noteLabel || t("v4.emptyNote")}</b>{" "}
           {t("v4.emptyInfo")}
           {prelist.length > 0 && (
             <div style={{ marginTop: 10 }}>
@@ -198,8 +214,8 @@ function V4Section({ cohort, note, mkt21, prelist, dp4 }) {
 }
 
 // ---------------------------------------------------------------------------
-// Étage 1 bis — cohorte v5 multi-fenêtres (protocole v5, fenêtre pilotée par le
-// sélecteur du header). Purement additive : la v4 reste l'étage de référence.
+// Étage 1 bis — cohorte v5 multi-fenêtres (fenêtre pilotée par le sélecteur du
+// header). Purement additive : la v4 reste l'étage de référence.
 // ---------------------------------------------------------------------------
 function V5Card({ entry, win, rank, total, dp4, dp5 }) {
   const g = dp5.gloss ?? {}, g4 = dp4.gloss ?? {}, rules = dp5.rules ?? {};
@@ -250,7 +266,7 @@ function V5Card({ entry, win, rank, total, dp4, dp5 }) {
 
 function V5Section({ v5, win, dp4, dp5 }) {
   const g = dp5.gloss ?? {};
-  const block = v5.windows?.[String(win)] ?? { mkt: null, cohort: [], prelist: [], note: "" };
+  const block = v5.windows?.[String(win)] ?? { mkt: null, cohort: [], prelist: [], note: null };
   const stats = dp5.stats?.[String(win)] ?? {};
   const cohort = block.cohort ?? [];
   const prelist = block.prelist ?? [];
@@ -265,7 +281,7 @@ function V5Section({ v5, win, dp4, dp5 }) {
           fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", padding: "2px 8px",
           borderRadius: 3, border: "1px solid #4a3f1a", color: "#f0c040",
         }}>{t("research.badge")}</Tip>
-        <span style={{ color: "#8494a3", fontSize: 13 }}>{t("proto.signed", { v: "v5" })}{win === dp5.primary_window ? t("v5.primary") : ""}</span>
+        <span style={{ color: "#8494a3", fontSize: 13 }}>{t("rules.frozen")}{win === dp5.primary_window ? t("v5.primary") : ""}</span>
       </div>
 
       <div style={{
@@ -296,7 +312,7 @@ function V5Section({ v5, win, dp4, dp5 }) {
         </div>
       ) : (
         <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b" }}>
-          <b style={{ color: "#d7e0e8" }}>{block.note || t("v5.emptyNote")}</b>{" "}
+          <b style={{ color: "#d7e0e8" }}>{noteText(block.note, "v5") || t("v5.emptyNote")}</b>{" "}
           {t("v5.emptyInfo")}
           {prelist.length > 0 && (
             <div style={{ marginTop: 10 }}>
@@ -324,7 +340,7 @@ function V5Section({ v5, win, dp4, dp5 }) {
               <span key={i} style={{
                 background: "#16202b", border: "1px solid #1e2a36", borderRadius: 4,
                 padding: "3px 8px", fontFamily: "monospace",
-              }}>{r.ticker} · {t("chip.win", { w: r.window })} · {r.entry_date} · {pctFmt(r.ret)} · {r.status}</span>
+              }}>{r.ticker} · {t("chip.win", { w: r.window })} · {r.entry_date} · {pctFmt(r.ret)} · {statusText(r.status)}</span>
             ))}
           </div>
         </div>
@@ -335,28 +351,28 @@ function V5Section({ v5, win, dp4, dp5 }) {
 
 // ---------------------------------------------------------------------------
 // Étage 2 — suivi des cohortes passées (information, jamais un ordre de vente)
-// Les valeurs de statut/checkpoint arrivent de l'API (en français) ; les
-// comparaisons ci-dessous évitent les littéraux accentués (gate check-i18n).
+// L'API sert des CODES de statut/checkpoint (Epic 8 S1) : les branches ci-dessous
+// comparent des codes, jamais des chaînes traduites.
 // ---------------------------------------------------------------------------
+const STATUS_COLORS = {
+  above: ["#00e096", "#1c4033"], explosion: ["#00e096", "#1c4033"],
+  below: ["#f0c040", "#4a3f1a"],
+  crash: ["#ff6b6b", "#4a2626"], no_data: ["#ff6b6b", "#4a2626"],
+};
+const STATUS_PREFIX = { explosion: "💥 ", no_data: "⚠ " };
+
 function statusChip(row) {
   const base = { display: "inline-block", padding: "2px 8px", borderRadius: 3, fontSize: 11.5, border: "1px solid #1e2a36", background: "#16202b", whiteSpace: "nowrap" };
-  if (row.status === "au-dessus")
-    return <span style={{ ...base, color: "#00e096", borderColor: "#1c4033" }}>{t("status.above")}</span>;
-  if (row.status === "sous le seuil")
-    return <span style={{ ...base, color: "#f0c040", borderColor: "#4a3f1a" }}>{t("status.below")}</span>;
-  if (row.status?.startsWith("explosion"))
-    return <span style={{ ...base, color: "#00e096", borderColor: "#1c4033" }}>💥 {row.status}</span>;
-  if (row.status?.startsWith("crash"))
-    return <span style={{ ...base, color: "#ff6b6b", borderColor: "#4a2626" }}>{row.status}</span>;
-  if (row.status?.includes("listing"))
-    return <span style={{ ...base, color: "#ff6b6b", borderColor: "#4a2626" }}>⚠ {row.status}</span>;
-  return <span style={{ ...base, color: "#8494a3" }}>{row.status}</span>;
+  const [color, borderColor] = STATUS_COLORS[row.status?.code] ?? ["#8494a3", "#1e2a36"];
+  return <span style={{ ...base, color, borderColor }}>
+    {STATUS_PREFIX[row.status?.code] ?? ""}{statusText(row.status)}
+  </span>;
 }
 
 function probText(row, g) {
-  if (row.status === "au-dessus") return <span style={{ color: "#00e096" }}>{g.checkpoint_above || "—"}</span>;
-  if (row.status === "sous le seuil") return <span style={{ color: "#ff6b6b" }}>{g.checkpoint_below || "—"}</span>;
-  if (row.checkpoint?.startsWith("fen")) return <>{t("tracking.endOfWindow")} <b>{pctFmt(row.ret_63)}</b></>;
+  if (row.status?.code === "above") return <span style={{ color: "#00e096" }}>{g.checkpoint_above || "—"}</span>;
+  if (row.status?.code === "below") return <span style={{ color: "#ff6b6b" }}>{g.checkpoint_below || "—"}</span>;
+  if (row.checkpoint?.code === "window_closed") return <>{t("tracking.endOfWindow")} <b>{pctFmt(row.ret_63)}</b></>;
   return "—";
 }
 
@@ -398,7 +414,7 @@ function TrackingSection({ tracking, dp4 }) {
                   <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", textAlign: "right", color: r.ret == null ? "#8494a3" : r.ret >= 0 ? "#00e096" : "#ff6b6b" }}>
                     {r.ret != null ? `${pctFmt(r.ret)} · J+${r.days_held}` : "—"}
                   </td>
-                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", color: "#8494a3" }}>{r.checkpoint ?? "—"}</td>
+                  <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", color: "#8494a3" }}>{checkpointText(r.checkpoint, dp4.checkpoint?.thr)}</td>
                   <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36" }}>{statusChip(r)}</td>
                   <td style={{ padding: "10px 14px", borderBottom: "1px solid #1e2a36", color: "#d7e0e8", fontFamily: "'Segoe UI', sans-serif", fontSize: 12.5 }}>{probText(r, g)}</td>
                 </tr>
@@ -566,7 +582,7 @@ function normalizeStocks(raw) {
 
 export default function App() {
   const [stocks, setStocks] = useState([]);
-  const [v4, setV4] = useState({ cohort: [], note: "", mkt21: null, prelist: [], tracking: [] });
+  const [v4, setV4] = useState({ cohort: [], note: null, mkt21: null, prelist: [], tracking: [] });
   const [v5, setV5] = useState({ windows: {}, flash: false, flash_ret3: null, tracking: [] });
   const [display, setDisplay] = useState({});  // seuils/textes v4-v5 servis par l'API (Epic 6 S2)
   const [mktWin, setMktWin] = useState(21);   // 7/14/21
@@ -588,7 +604,7 @@ export default function App() {
       .then(json => {
         setStocks(normalizeStocks(json.stocks ?? []));
         setV4({
-          cohort: json.v4_cohort ?? [], note: json.v4_note ?? "",
+          cohort: json.v4_cohort ?? [], note: json.v4_note ?? null,
           mkt21: json.v4_mkt21 ?? null, prelist: json.v4_prelist ?? [],
           tracking: json.v4_tracking ?? [],
         });

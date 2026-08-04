@@ -63,7 +63,7 @@ def test_three_windows_present_and_market_up_pause(edgar_stub):
     for w in v5.CFG["windows"]:
         block = out["windows"][str(w)]
         assert block["cohort"] == []
-        assert "haussier" in block["note"]
+        assert block["note"]["code"] == "market_bullish" and block["note"]["w"] == w
     # règles-titre passées sur 7 j → pré-liste, SANS appel EDGAR (stub vide non consulté)
     assert [e["ticker"] for e in out["windows"]["7"]["prelist"]] == ["AAA"]
     assert out["flash"] is False
@@ -72,7 +72,7 @@ def test_three_windows_present_and_market_up_pause(edgar_stub):
 def test_no_benchmark(edgar_stub):
     out = build_cohorts([("AAA", {"price": 5.0, "cmf": 0.1})], {}, None)
     for w in v5.CFG["windows"]:
-        assert "indisponible" in out["windows"][str(w)]["note"]
+        assert out["windows"][str(w)]["note"] == {"code": "benchmark_missing"}
     assert out["flash"] is False and out["flash_ret3"] is None
 
 
@@ -146,7 +146,7 @@ def test_tracking_per_window(tmp_path):
     for r in rows:
         assert r["entry_price"] == 10.0
         assert r["ret"] == pytest.approx(0.08)
-        assert r["status"] == "au-dessus"
+        assert r["status"] == {"code": "above"}
 
 
 def test_snapshot_carries_v5(tmp_path, monkeypatch):
@@ -154,7 +154,7 @@ def test_snapshot_carries_v5(tmp_path, monkeypatch):
     monkeypatch.setattr(sb, "HISTORY_DIR", tmp_path)
     out = {
         "scanned_at": "2026-07-09T12:00:00+00:00", "stocks": [],
-        "v5": {"windows": {"7": {"mkt": -0.02, "note": "baissier → 1 qualifiés",
+        "v5": {"windows": {"7": {"mkt": -0.02, "note": {"code": "market_bearish", "w": 7, "mkt": -0.02, "n": 1},
                                  "cohort": [{"ticker": "OK", "price": 5.0}],
                                  "prelist": [{"ticker": "DROP_ME"}]}},
                "flash": True, "flash_ret3": -0.09, "tracking": [{"ticker": "DROP_ME"}]},

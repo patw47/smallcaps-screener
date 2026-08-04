@@ -10,6 +10,7 @@ import os
 os.environ.setdefault("DATA_DIR", "/tmp/screener_test")  # évite makedirs("/app/data")
 
 import ast
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -312,6 +313,23 @@ def test_scan_payload_keys_frozen():
         "v4_prelist", "v4_tracking", "v5", "display", "enriched", "candidates",
         "stocks", "rejection_stats",
     }
+
+
+def test_snapshot_top_level_keys_frozen(tmp_path, monkeypatch):
+    # Non-régression du snapshot quotidien (Epic 8 S1) : l'invariant porte sur le JEU
+    # DE CLÉS de premier niveau, JAMAIS sur les valeurs — le scan quotidien les
+    # renouvelle par construction. Tolérance zéro clé ajoutée ou retirée : l'historique
+    # est la matière première du jugement forward, il se relit sur des années.
+    monkeypatch.setattr(screener_backend, "HISTORY_DIR", tmp_path)
+    screener_backend._write_snapshot({
+        "scanned_at": "2026-08-04T12:00:00+00:00",
+        "stocks": [],
+        "v4_cohort": [],
+        "v4_note": {"code": "market_bullish", "w": 21, "mkt": 0.01},
+        "v5": {"windows": {}, "flash": False, "flash_ret3": None},
+    })
+    snap = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert set(snap) == {"scanned_at", "candidates", "picks", "v4_cohort", "v4_note", "v5"}
 
 
 def test_pass_a_near_pivot_and_low_ext_signals():

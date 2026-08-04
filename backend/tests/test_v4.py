@@ -52,13 +52,14 @@ def test_market_up_gives_empty_cohort(edgar_stub):
     tradables = [("AAA", {"price": 5.0, "change_1m": -0.10})]
     cohort, note, mkt, prelist = build_cohort(tradables, {}, _bench(+0.002))
     assert cohort == []
-    assert "haussier" in note
+    assert note == {"code": "market_bullish", "w": v4.CFG["mkt_window"],
+                    "mkt": pytest.approx(mkt, abs=1e-4)}
 
 
 def test_no_benchmark_gives_empty_cohort(edgar_stub):
     cohort, note, mkt, prelist = build_cohort([("AAA", {"price": 5.0, "change_1m": -0.10})], {}, None)
     assert cohort == []
-    assert "indisponible" in note
+    assert note == {"code": "benchmark_missing"}
 
 
 def test_entry_rules(edgar_stub):
@@ -75,7 +76,7 @@ def test_entry_rules(edgar_stub):
     ]
     cohort, note, mkt, prelist = build_cohort(tradables, {}, bench)
     assert [e["ticker"] for e in cohort] == ["OK"]
-    assert "1 qualifiés" in note
+    assert note["code"] == "market_bearish" and note["n"] == 1
     e = cohort[0]
     assert e["margins"]["price"] == pytest.approx(v4.CFG["price_max"] - 5.0)
     assert e["margins"]["change_1m"] == pytest.approx(v4.CFG["chg1m_max"] - (-0.10))
@@ -109,6 +110,39 @@ def test_beta_resid_and_sort(edgar_stub):
     assert cohort[0]["ticker"] == "IDIO"
 
 
+def test_cohort_selection_frozen(edgar_stub):
+    """
+    Non-régression de la sélection (Epic 8 S1) : sur une fixture de marché baissier,
+    le JEU de tickers ET leur ORDRE sont figés. Rouge si un ticker entre, sort ou
+    change de rang — le refactor des notes en codes ne doit rien déplacer.
+    Bêta identique pour tous (même série de prix) ⇒ le résidu ordonne par chute.
+    """
+    n = 200
+    rng = np.random.default_rng(11)
+    bench_rets = rng.normal(-0.002, 0.01, n)
+    bench_rets[-v4.CFG["mkt_window"]:] = -0.004      # fin baissière garantie
+    bench = _series(list(bench_rets))
+    market = _series(list(bench_rets))               # titres de bêta ~1
+
+    edgar_stub.update({"SHALLOW": False, "DEEP": False, "MID": False,
+                       "DIL": True, "PRICEY": False, "FLAT": False})
+    tradables = [
+        ("SHALLOW", {"price": 5.0, "change_1m": -0.12}),
+        ("DEEP", {"price": 4.0, "change_1m": -0.40}),
+        ("MID", {"price": 6.0, "change_1m": -0.25}),
+        ("DIL", {"price": 5.0, "change_1m": -0.30}),     # dilution pendante → hors liste
+        ("PRICEY", {"price": 99.0, "change_1m": -0.30}),  # prix > seuil → hors liste
+        ("FLAT", {"price": 5.0, "change_1m": -0.01}),    # chute insuffisante → hors liste
+        ("MUTE", {"price": 5.0, "change_1m": -0.35}),    # EDGAR muet → hors liste
+    ]
+    prices = {tk: pd.DataFrame({"Close": market}) for tk, _ in tradables}
+
+    cohort, note, _, prelist = build_cohort(tradables, prices, bench)
+    assert [e["ticker"] for e in cohort] == ["DEEP", "MID", "SHALLOW"]
+    assert note["code"] == "market_bearish" and note["n"] == 3
+    assert prelist == []   # jour baissier : la pré-liste reste vide
+
+
 def test_snapshot_carries_cohort(tmp_path, monkeypatch, edgar_stub):
     import screener_backend as sb
     monkeypatch.setattr(sb, "HISTORY_DIR", tmp_path)
@@ -116,14 +150,14 @@ def test_snapshot_carries_cohort(tmp_path, monkeypatch, edgar_stub):
         "scanned_at": "2026-07-06T12:00:00+00:00",
         "stocks": [],
         "v4_cohort": [{"ticker": "OK", "price": 5.0}],
-        "v4_note": "marché baissier → 1 qualifiés",
+        "v4_note": {"code": "market_bearish", "w": 21, "mkt": -0.03, "n": 1},
     }
     sb._write_snapshot(out)
     files = list(tmp_path.glob("*.json"))
     assert len(files) == 1
     snap = json.loads(files[0].read_text())
     assert snap["v4_cohort"][0]["ticker"] == "OK"
-    assert "baissier" in snap["v4_note"]
+    assert snap["v4_note"]["code"] == "market_bearish"
 
 
 def test_prelist_on_market_up(edgar_stub):
@@ -162,11 +196,11 @@ def test_tracking_checkpoint_and_window(tmp_path):
     assert e["entry_price"] == 10.0            # première entrée conservée
     assert e["days_held"] == 8
     assert e["ret"] == pytest.approx(0.08)
-    assert e["checkpoint"] == f"1 semaine (seuil {v4.CFG['checkpoint_thr']:+.0%})"
+    assert e["checkpoint"] == {"code": "week_one"}
     assert e["ret_5"] == pytest.approx(0.05)
-    assert e["status"] == "au-dessus"
+    assert e["status"] == {"code": "above"}
     # ticker sans données de prix → signalé, jamais fatal
-    assert "délisting" in by["GONE"]["status"]
+    assert by["GONE"]["status"] == {"code": "no_data"}
 
 
 def test_v4_alert_dedup(tmp_path, monkeypatch):
@@ -209,10 +243,10 @@ def test_tracking_below_threshold_too_early_and_tz(tmp_path):
     rows = build_tracking({"SLOW": pd.DataFrame({"Close": slow}),
                            "YOUNG": pd.DataFrame({"Close": young})}, tmp_path)
     by = {r["ticker"]: r for r in rows}
-    assert by["SLOW"]["status"] == "sous le seuil"
+    assert by["SLOW"]["status"] == {"code": "below"}
     assert by["SLOW"]["ret_5"] == pytest.approx(0.01)
-    assert by["YOUNG"]["checkpoint"] == "trop tôt"
-    assert "J+2" in by["YOUNG"]["status"]
+    assert by["YOUNG"]["checkpoint"] == {"code": "too_early"}
+    assert by["YOUNG"]["status"] == {"code": "too_early", "d": 2, "cp": v4.CFG["checkpoint_day"]}
 
 
 def test_tracking_window_close_labels(tmp_path):
@@ -230,6 +264,6 @@ def test_tracking_window_close_labels(tmp_path):
     rows = build_tracking({"BOOM": pd.DataFrame({"Close": boom}),
                            "BUST": pd.DataFrame({"Close": bust})}, tmp_path)
     by = {r["ticker"]: r for r in rows}
-    assert by["BOOM"]["checkpoint"] == f"fenêtre {horizon}j close"
-    assert by["BOOM"]["status"].startswith("explosion")
-    assert by["BUST"]["status"].startswith("crash")
+    assert by["BOOM"]["checkpoint"] == {"code": "window_closed", "h": horizon}
+    assert by["BOOM"]["status"] == {"code": "explosion"}
+    assert by["BUST"]["status"] == {"code": "crash"}
