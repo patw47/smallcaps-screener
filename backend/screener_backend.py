@@ -566,7 +566,9 @@ def _days_to_earnings(info: dict, now: datetime | None = None) -> int | None:
             quand = datetime.fromtimestamp(epoch, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
             continue
-        jours = (quand - (now or datetime.now(tz=timezone.utc))).days
+        # Différence de DATES, pas de timestamps : sinon « dans 3 jours moins deux
+        # heures » s'affiche « dans 2 j ». Le drapeau parle en jours de calendrier.
+        jours = (quand.date() - (now or datetime.now(tz=timezone.utc)).date()).days
         if jours >= 0:
             return jours
     return None

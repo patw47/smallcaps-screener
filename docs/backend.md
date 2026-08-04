@@ -246,7 +246,7 @@ Discover (full universe, no sampling) → `_download_prices` → **Pass A** (tra
 
 ## Output JSON
 
-Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter` (tradable pool), **`profile_members`**, **`pool_mode`**, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, the **profile fields `profile` / `is_fusee` / `is_phenix` / `fusee_event` / `fusee_strength` / `phenix_strength` / `profile_strength`**, the v2 sensor diagnostics **`compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`** (plus `sma20`), the insider fields **`insider_net_buying` / `insider_net_buying_pos`** (net Form 4 $, scored) and `insider_pct` / `insider_buying` (display only), `positives`, `flags`, and `catalyst_type`/`catalyst_date` (`null`). In `tradability` mode every stock is a **profile member**; non-members are absent. Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger` and the profile fields (for the Sprint 4 two-sleeve tracker).
+Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter` (tradable pool), **`profile_members`**, **`pool_mode`**, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, the **profile fields `profile` / `is_fusee` / `is_phenix` / `fusee_event` / `fusee_strength` / `phenix_strength` / `profile_strength`**, the v2 sensor diagnostics **`compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`** (plus `sma20`), the insider fields **`insider_net_buying` / `insider_net_buying_pos`** (net Form 4 $, scored) and `insider_pct` / `insider_buying` (display only), `positives`, `flags`, the **context fields `binary_event` / `days_to_earnings`** (Epic 1 S7 — information only), and `catalyst_type`/`catalyst_date` (`null`). In `tradability` mode every stock is a **profile member**; non-members are absent. Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger` and the profile fields (for the Sprint 4 two-sleeve tracker).
 
 ## Backtest harness — `backend/backtest.py`
 
@@ -274,3 +274,23 @@ DATA_DIR=/tmp/screener_test PYTHONPATH=backend python -m pytest backend/tests/
 ```
 
 Deterministic, offline. The module honors `DATA_DIR` so it imports outside the container.
+
+## Context flags (Epic 1 S7)
+
+Two flags tell the reader that a technical signal reads differently on this name. They are
+**information only** — never an exclusion, never a scoring input, never a change to the
+ordering. Both are read from the `.info` payload already fetched, so they cost **no extra
+network call** (Yahoo bans the IP on bursts — see `enrich_workers`).
+
+| Flag | Source | Meaning |
+| --- | --- | --- |
+| `binary_event` | `industry` then `sector` matched against `FILTERS["binary_event_industries"]` | Biotech / pharma: a regulatory decision or trial result moves the price tens of percent in one session, whatever the chart says. A stock-specific fall means something else here. |
+| `days_to_earnings` | `earningsTimestampStart`, then `earningsTimestamp` | Days until the next earnings date, `None` when absent or past. Flagged under `FILTERS["earnings_soon_days"]`. |
+
+`days_to_earnings` is **best effort**: yfinance only carries the date for part of the
+micro-cap universe. A missing date is silent — never an error, just one flag fewer. The
+count is a difference of **calendar dates**, so "three days minus two hours" reads as 3.
+
+Both flags are emitted as **codes plus variables** (`{"code": "earnings_soon", "d": 3}`) and
+translated by the frontend, like notes and statuses since Epic 8 S1. Legacy flags are still
+French sentences built here; the JSX accepts both shapes during the transition.
