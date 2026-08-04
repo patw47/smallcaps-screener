@@ -22,8 +22,10 @@ i18n-parity:
 check-i18n:
 	node scripts/check_i18n.mjs
 
-# Jargon (Epic 8 S1) : ni référence de section de protocole ni le mot « protocole »
-# dans les dictionnaires i18n ou les chaînes du JSX. Liste étendue au S3.
+# Jargon (Epic 8 S1, liste complétée au S3) : ni numéro de version de famille, ni
+# « cohorte », « protocole », référence de section, numéro de validation, « repo »,
+# « in-sample », « résidu » ou acronyme de flux d'argent — dans les dictionnaires
+# i18n comme dans les chaînes littérales du JSX.
 check-jargon:
 	node scripts/check_jargon.mjs
 

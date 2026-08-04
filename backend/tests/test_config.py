@@ -106,6 +106,21 @@ def test_v4_v5_sections_merge_into_module_cfg(tmp_path, monkeypatch):
     assert filters == sb.FILTERS
 
 
+def test_display_texts_default_to_empty():
+    """
+    Sans config privée, TOUT texte d'affichage (glossaire, infobulles `tip_*`
+    ajoutées à l'Epic 8 S3) vaut chaîne vide : le dépôt public ne porte aucun
+    texte citant un seuil. Le frontend masque les blocs vides.
+    """
+    import v4
+    import v5
+    for cfg in (v4.CFG, v5.CFG):
+        for key, value in cfg["display"]["gloss"].items():
+            assert value == "", f"{key} devrait etre vide dans les defaults publics"
+    assert "tip_checkpoint" in v4.CFG["display"]["gloss"]
+    assert "tip_flash" in v5.CFG["display"]["gloss"]
+
+
 def test_unknown_v4_key_raises(tmp_path, monkeypatch):
     import v4
     monkeypatch.setattr(v4, "CFG", copy.deepcopy(v4.CFG))

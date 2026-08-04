@@ -2,9 +2,10 @@
 
 > **Epic 2 — the freeze is lifted.** `frontend/smallcap-screener.jsx` was frozen through
 > Epic 1; since 2026-07-04 it is **editable**. It must display the **Fusée / Phénix profile
-> badges prominently on every stock**, and the **Phénix badge must carry a visible "non
-> validé" marker** (survivorship bias not yet corrected — protocol v2 §5). Keep edits focused
-> (badges, filtering) — no redesign.
+> badges prominently on every stock**, each carrying a visible verdict marker. Since Epic 8
+> S3 that marker reads **"hypothèse testée et réfutée en juillet 2026"** (i18n key
+> `badge.refuted`) — it replaced "non validé", which suggested a test still pending when the
+> verdict is in. Keep edits focused (badges, filtering) — no redesign.
 >
 > **Epic 3 — survival-conditioned score.** Each card now leads with an **`ExplodeScore`**
 > element: the model's **`P(+100 % / 63d)`** (`p_explode`) — the headline v3 signal — plus a
@@ -145,8 +146,8 @@ Security note: this exposes the key to browser code. Use a backend proxy before 
 
 `ProfileBadge` renders one coloured chip per profile: **🚀 Fusée** (green) and **🔥 Phénix**
 (orange), each with the member's strength (0–100). A Fusée chip shows a **⚡** when
-`fuseeEvent` is set (breakout that day). **Both chips carry a "non validé" tag** (driven by a
-per-profile `caveat` tooltip in `PROFILE_STYLE`) since **Validation A failed for each**
+`fuseeEvent` is set (breakout that day). **Both chips carry the "hypothèse testée et réfutée
+en juillet 2026" tag** (`badge.refuted`, Epic 8 S3) since **Validation A failed for each**
 (Epic 2 Sprint 6, protocol v2 §6/§9): the tooltip carries that profile's Sprint 5 numbers —
 Fusée's dropped-momentum verdict, Phénix's barbell + money-gate. The profile-filter footnote
 mirrors it for whichever profile is selected. `ProfileBadges` renders every profile a stock
@@ -157,7 +158,7 @@ badges sit prominently at the top of each `StockCard`. The stats header shows th
 Rendered UI (Epic 2 Sprint 3, mock data): [`docs/screenshots/epic2-profile-badges-all.png`](screenshots/epic2-profile-badges-all.png)
 (All view — dual-profile VXRT shows both chips, FCEL carries the ⚡ event marker) and
 [`docs/screenshots/epic2-profile-badges-phenix.png`](screenshots/epic2-profile-badges-phenix.png)
-(Phénix filter — only Phénix members, "non validé" markers, sorted by Phénix strength).
+(Phénix filter — only Phénix members, verdict markers, sorted by Phénix strength).
 
 ### `ScoreBar`
 

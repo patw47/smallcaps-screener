@@ -47,6 +47,8 @@ CFG: dict = {
         "gloss": {
             "regles": "", "research": "", "mediane": "", "chg": "", "vol_calme": "",
             "cmf": "", "flash": "", "crash": "", "tracking": "", "mkt_switch": "",
+            # Epic 8 S3 — infobulle : UNE phrase citant le seuil du drapeau ⚡.
+            "tip_flash": "",
         },
     },
 }

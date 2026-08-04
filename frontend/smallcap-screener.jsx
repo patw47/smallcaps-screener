@@ -4,11 +4,15 @@ import { t, fmt, lang as savedLang, setLang } from "./i18n/index.js";
 const INSTRUMENTS = ["All", "Technology", "Healthcare", "Energy", "Industrials", "Consumer Cyclical"];
 
 // ---------------------------------------------------------------------------
-// Depuis l'Epic 6 S2, TOUT ce qui touche aux protocoles v4/v5 (seuils des règles,
-// chiffres gelés des bandeaux, textes du glossaire UI) arrive de l'API via le bloc
-// `display` du payload scan — plus aucune valeur en dur ici (gate : make check-edge).
-// Depuis le S3, toutes les chaînes UI vivent dans frontend/i18n/{fr,en}.json via t()
-// (gate : make check-i18n). Tout terme affiché a son entrée dans docs/glossaire.md.
+// Depuis l'Epic 6 S2, TOUT ce qui touche aux règles des deux familles (seuils,
+// chiffres gelés des bandeaux, textes longs du glossaire UI) arrive de l'API via le
+// bloc `display` du payload scan — plus aucune valeur en dur ici (gate : make
+// check-edge). Depuis l'Epic 6 S3, toutes les chaînes UI vivent dans
+// frontend/i18n/{fr,en}.json via t() (gate : make check-i18n).
+// Epic 8 S3 : plus aucun numéro de version ni terme interne à l'écran (gate :
+// make check-jargon). Les espaces de clés i18n suivent les noms publics —
+// `market.*` = Purge de marché, `quiet.*` = Purge silencieuse ; les champs du
+// payload (v4_cohort, v5.windows…) gardent leurs noms techniques.
 // ---------------------------------------------------------------------------
 
 // Nombre localisé (fr : virgule décimale + signe moins typographique).
@@ -19,6 +23,8 @@ const num = (x, d = 2) =>
 
 // ---------------------------------------------------------------------------
 // Infobulle accessible (survol + focus clavier). Pointillé = explication dispo.
+// Ne porte qu'UNE phrase de définition : le survol n'existe pas au tactile, les
+// paragraphes vivent dans les blocs dépliables (Epic 8 S3).
 // ---------------------------------------------------------------------------
 function Tip({ tip, down, children, style }) {
   const [show, setShow] = useState(false);
@@ -49,10 +55,11 @@ const pctFmt = (x, digits = 1) => x == null ? "—" : `${x > 0 ? "+" : ""}${(x *
 // ---------------------------------------------------------------------------
 // Traduction des codes servis par l'API (Epic 8 S1). Le backend renvoie
 // {code, variables} ; tout le texte affiché vient des dictionnaires i18n, dans
-// la langue choisie par le client. `ns` = v4 ou v5 (mêmes codes, textes propres).
+// la langue choisie par le client. `ns` = market ou quiet (mêmes codes, textes
+// propres à chaque famille).
 // ---------------------------------------------------------------------------
 const noteText = (note, ns) => note?.code
-  ? t(`${ns}.note.${note.code}`, { w: note.w, pct: pctFmt(note.mkt), n: note.n, name: note.name })
+  ? t(`${ns}.note.${note.code}`, { w: note.w, pct: pctFmt(note.mkt), n: note.n })
   : "";
 
 const statusText = (s) => s?.code ? t(`status.${s.code}`, { d: s.d, cp: s.cp }) : "";
@@ -62,9 +69,111 @@ const checkpointText = (c, thr) => c?.code
   : "—";
 
 // ---------------------------------------------------------------------------
-// Étage 1 — cohorte v4 (la seule liste à espérance historique positive)
+// Blocs pédagogiques communs aux deux familles (Epic 8 S3)
 // ---------------------------------------------------------------------------
-function V4Card({ entry, rank, total, dp4 }) {
+const RULE_STATE_COLOR = {
+  ok: ["#00e096", "#1c4033"],
+  blocked: ["#f0c040", "#4a3f1a"],
+  pending: ["#8494a3", "#1e2a36"],
+  unknown: ["#8494a3", "#1e2a36"],
+};
+
+const detailsStyle = {
+  border: "1px solid #1e2a36", borderRadius: 8, background: "#0e141b",
+  padding: "10px 14px", marginTop: 10,
+};
+const summaryStyle = {
+  cursor: "pointer", color: "#d7e0e8", fontSize: 13, letterSpacing: 0.3,
+};
+const proseStyle = {
+  color: "#8494a3", fontSize: 13, lineHeight: 1.6, margin: "8px 0 0",
+};
+
+// Règles d'entrée : toujours affichées, même sans liste — chaque règle porte son
+// seuil, son état du jour et son explication (dépliable, clavier natif).
+function RulesBlock({ items, blocking }) {
+  return (
+    <div style={{ border: "1px solid #1e2a36", borderRadius: 8, background: "#0e141b", padding: "12px 16px", margin: "12px 0" }}>
+      <div style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.8, color: "#5a6a79", marginBottom: 8 }}>
+        {t("rules.title")}
+      </div>
+      {items.map(({ key, label, val, state, why }) => {
+        const [color, borderColor] = RULE_STATE_COLOR[state];
+        return (
+          <details key={key} style={{ borderTop: "1px solid #16202b", padding: "7px 0" }}>
+            <summary style={summaryStyle}>
+              <span style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "baseline", gap: 8 }}>
+                <span>{label}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 12, color: "#8494a3" }}>{val}</span>
+                <span style={{
+                  fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.6, padding: "1px 7px",
+                  borderRadius: 3, color, border: `1px solid ${borderColor}`, background: "#16202b",
+                }}>{t(`rules.state.${state}`)}</span>
+              </span>
+            </summary>
+            <p style={proseStyle}>{why}</p>
+          </details>
+        );
+      })}
+      {blocking && (
+        <div style={{ fontSize: 12.5, color: "#8494a3", borderLeft: "2px solid #f0c040", padding: "4px 12px", marginTop: 10 }}>
+          {blocking}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Paragraphes longs servis par l'API (chiffres gelés) — hors infobulle.
+function MoreBlock({ items }) {
+  const rows = items.filter(i => i.text);
+  if (rows.length === 0) return null;
+  return (
+    <details style={detailsStyle}>
+      <summary style={summaryStyle}>{t("rules.more")}</summary>
+      {rows.map(({ label, text }) => (
+        <p key={label} style={proseStyle}>
+          <b style={{ color: "#d7e0e8" }}>{label}</b> — {text}
+        </p>
+      ))}
+    </details>
+  );
+}
+
+// Panneau d'explication : ouvert à la première visite, replié ensuite.
+const PANEL_SEEN = "howToReadSeen";
+function HowToRead() {
+  const [open] = useState(() => {
+    try { return !localStorage.getItem(PANEL_SEEN); } catch { return true; }
+  });
+  useEffect(() => { try { localStorage.setItem(PANEL_SEEN, "1"); } catch { /* mode privé */ } }, []);
+  return (
+    <details open={open} style={{ ...detailsStyle, marginTop: 16 }}>
+      <summary style={{ ...summaryStyle, fontSize: 14, fontWeight: 650, color: "#e8e8ff" }}>
+        {t("panel.title")}
+      </summary>
+      {["role", "frozen", "families", "survivors", "forward", "checkpoint"].map(k => (
+        <p key={k} style={proseStyle}>{t(`panel.p.${k}`)}</p>
+      ))}
+    </details>
+  );
+}
+
+// État d'une famille : la règle marché est connue au niveau de la section, les
+// règles propres au titre ne sont évaluées que les jours où le marché baisse.
+function ruleStates(mkt, count) {
+  const mktState = mkt == null ? "unknown" : mkt < 0 ? "ok" : "blocked";
+  const stockState = mktState === "ok" ? (count > 0 ? "ok" : "blocked") : "pending";
+  const blocking = mktState === "unknown" ? t("rules.blocking.unknown")
+    : mktState === "blocked" ? t("rules.blocking.mkt")
+      : count === 0 ? t("rules.blocking.stock") : null;
+  return { mktState, stockState, blocking };
+}
+
+// ---------------------------------------------------------------------------
+// Étage 1 — Purge de marché (la seule liste à gain moyen mesuré positif)
+// ---------------------------------------------------------------------------
+function MarketCard({ entry, rank, total, dp4 }) {
   const g = dp4.gloss ?? {}, rules = dp4.rules ?? {};
   const depth = entry.resid != null && dp4.depth_scale > 0
     ? Math.min(100, Math.abs(Math.min(entry.resid, 0)) / dp4.depth_scale * 100) : 0;
@@ -82,7 +191,7 @@ function V4Card({ entry, rank, total, dp4 }) {
           <span style={{
             marginLeft: "auto", background: "#0e2c22", color: "#00e096", border: "1px solid #1c4033",
             borderRadius: 3, fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", padding: "2px 7px",
-          }}>{t("v4.first")}</span>
+          }}>{t("market.first")}</span>
         ) : (
           <span style={{ marginLeft: "auto", color: "#5a6a79", fontSize: 12 }}>#{rank + 1} / {total}</span>
         )}
@@ -96,107 +205,112 @@ function V4Card({ entry, rank, total, dp4 }) {
 
       <div style={{ margin: "12px 0 4px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#8494a3", marginBottom: 4 }}>
-          <Tip tip={g.profondeur}>{t("v4.depth")}</Tip>
-          <span style={{ fontFamily: "monospace" }}>{t("v4.resid", { pct: pctFmt(entry.resid) })}</span>
+          <span>{t("market.depth")}</span>
+          <span style={{ fontFamily: "monospace" }}>{t("market.own", { pct: pctFmt(entry.resid) })}</span>
         </div>
         <div style={{ height: 6, background: "#182230", borderRadius: 3, overflow: "hidden" }}>
           <div style={{ width: `${depth}%`, height: "100%", background: "linear-gradient(90deg,#0e6e52,#00e096)", borderRadius: 3 }} />
         </div>
         <div style={{ fontSize: 11.5, color: "#5a6a79", marginTop: 3 }}>
-          <Tip tip={t("gloss.beta")}>{t("v4.beta")}</Tip> {entry.beta ?? "—"} · {t("v4.corr")} {entry.corr ?? "—"}
+          <Tip tip={t("gloss.beta")}>{t("market.beta")}</Tip> {entry.beta ?? "—"} · {t("market.corr")} {entry.corr ?? "—"}
         </div>
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
         {[
-          { tip: g.rule_price, text: <>{t("chip.price")} <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> {t("chip.priceMax", { x: rules.price_max ?? "—" })}</> },
-          { tip: g.rule_chg, text: <>{t("chip.1m")} <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.change_1m)}</b> {t("chip.chgMax", { x: pctFmt(rules.chg1m_max, 0) })}</> },
-          { tip: t("gloss.ruleDil"), text: <>{t("chip.dil.pre")} <b style={{ color: "#d7e0e8" }}>{t("chip.dil.none")}</b> {t("chip.dil.post")}</> },
-          { tip: g.rule_mkt, text: <>{t("chip.mkt", { w: rules.mkt_window ?? "—" })} <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt21)})</b></> },
-        ].map((m, i) => (
-          <Tip key={i} tip={m.tip} style={{
+          <>{t("chip.price")} <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> {t("chip.priceMax", { x: rules.price_max ?? "—" })}</>,
+          <>{t("chip.1m")} <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.change_1m)}</b> {t("chip.chgMax", { x: pctFmt(rules.chg1m_max, 0) })}</>,
+          <>{t("chip.dil.pre")} <b style={{ color: "#d7e0e8" }}>{t("chip.dil.none")}</b> {t("chip.dil.post")}</>,
+          <>{t("chip.mkt", { w: rules.mkt_window ?? "—" })} <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt21)})</b></>,
+        ].map((text, i) => (
+          <span key={i} style={{
             background: "#16202b", border: "1px solid #1c4033", borderRadius: 4,
             padding: "3px 8px", fontSize: 12, color: "#8494a3",
-          }}>{m.text}</Tip>
+          }}>{text}</span>
         ))}
       </div>
 
       {first && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #1e2a36", fontSize: 12, color: "#8494a3" }}>
-          <b style={{ color: "#d7e0e8" }}>{t("v4.buy.title")}</b>{t("v4.buy.body")}
+          <b style={{ color: "#d7e0e8" }}>{t("market.buy.title")}</b>{t("market.buy.body")}
         </div>
       )}
     </div>
   );
 }
 
-function V4Section({ cohort, note, mkt21, prelist, dp4 }) {
-  const g = dp4.gloss ?? {}, stats = dp4.stats ?? {};
-  const noteLabel = noteText(note, "v4");
-  // Repliée par défaut (jugée sur 21 j) — s'ouvre seule quand une cohorte existe
-  // (marché baissier 21 j), le seul cas actionnable.
-  const [open, setOpen] = useState(cohort.length > 0);
-  useEffect(() => { if (cohort.length > 0) setOpen(true); }, [cohort.length]);
+function MarketSection({ cohort, note, mkt21, prelist, dp4 }) {
+  const g = dp4.gloss ?? {}, stats = dp4.stats ?? {}, rules = dp4.rules ?? {};
+  const noteLabel = noteText(note, "market");
+  const { mktState, stockState, blocking } = ruleStates(mkt21, cohort.length);
+  const ruleItems = [
+    { key: "price", label: t("market.rule.price"), val: t("chip.priceMax", { x: rules.price_max ?? "—" }), state: stockState, why: g.rule_price },
+    { key: "dil", label: t("market.rule.dil"), val: t("chip.dil.post"), state: stockState, why: t("gloss.ruleDil") },
+    { key: "chg", label: t("market.rule.chg"), val: t("chip.chgMax", { x: pctFmt(rules.chg1m_max, 0) }), state: stockState, why: g.rule_chg },
+    { key: "mkt", label: t("market.rule.mkt"), val: `${t("chip.win", { w: rules.mkt_window ?? "—" })} ${pctFmt(mkt21)}`, state: mktState, why: g.rule_mkt },
+  ];
   return (
     <section style={{ marginTop: 30 }}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
-        <h2 onClick={() => setOpen(o => !o)} style={{
+        <h2 style={{
           fontSize: 15, margin: 0, fontWeight: 650, textTransform: "uppercase",
-          letterSpacing: 1.2, color: "#e8e8ff", cursor: "pointer", userSelect: "none",
+          letterSpacing: 1.2, color: "#e8e8ff",
         }}>
-          <span style={{ color: "#5a6a79", marginRight: 6 }}>{open ? "▾" : "▸"}</span>
-          {t("v4.section.title")} {cohort.length > 0 && t("v4.section.startHere")}
+          {t("market.section.title")} {cohort.length > 0 && t("market.section.startHere")}
         </h2>
-        <Tip tip={g.research} style={{
+        <Tip tip={t("research.tip")} style={{
           fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", padding: "2px 8px",
           borderRadius: 3, border: "1px solid #4a3f1a", color: "#f0c040",
         }}>{t("research.badge")}</Tip>
-        <span style={{ color: "#8494a3", fontSize: 13 }}>{t("rules.frozen")}</span>
       </div>
 
-      {!open && (
-        <div onClick={() => setOpen(true)} style={{
-          border: "1px dashed #1e2a36", borderRadius: 8, padding: "10px 16px", cursor: "pointer",
-          color: "#8494a3", fontSize: 13, background: "#0e141b",
-        }}>
-          {cohort.length > 0
-            ? t("v4.collapsed.cohort", { n: cohort.length })
-            : <>{noteLabel || t("v4.emptyNote")} {t("v4.collapsed.empty")}</>}
-        </div>
-      )}
+      <p style={{ ...proseStyle, marginTop: 8 }}>{t("market.intro")}</p>
 
-      {open && <><div style={{
+      <RulesBlock items={ruleItems} blocking={blocking} />
+
+      <div style={{
         display: "flex", flexWrap: "wrap", border: "1px solid #1e2a36", borderRadius: 6,
         background: "#0e141b", margin: "12px 0 6px", fontFamily: "monospace",
       }}>
         {[
-          { v: stats.esperance || "—", vc: "#00e096", l: t("stats.esperance"), tip: g.esperance },
-          { v: stats.p_explode || "—", vc: "#d7e0e8", l: t("stats.pExplode"), tip: g.p_explode },
-          { v: stats.p_crash || "—", vc: "#d7e0e8", l: t("stats.pCrash"), tip: g.p_crash },
-          { v: stats.t || "—", vc: "#f0c040", l: t("stats.t"), tip: g.tstat },
-          { v: "4 / 4", vc: "#d7e0e8", l: t("stats.rules"), tip: g.regles },
+          { v: stats.esperance || "—", vc: "#00e096", l: t("stats.esperance") },
+          { v: stats.p_explode || "—", vc: "#d7e0e8", l: t("stats.pExplode") },
+          { v: stats.p_crash || "—", vc: "#d7e0e8", l: t("stats.pCrash") },
+          { v: stats.t || "—", vc: "#f0c040", l: t("stats.t") },
+          { v: "4 / 4", vc: "#d7e0e8", l: t("stats.rules") },
         ].map((c, i) => (
           <div key={i} style={{ flex: "1 1 130px", padding: "10px 14px", borderRight: i < 4 ? "1px solid #1e2a36" : "none" }}>
             <b style={{ display: "block", fontSize: 17, fontWeight: 640, color: c.vc }}>{c.v}</b>
-            <Tip down tip={c.tip} style={{ fontSize: 11.5, color: "#8494a3", textTransform: "uppercase", letterSpacing: 0.6 }}>{c.l}</Tip>
+            <span style={{ fontSize: 11.5, color: "#8494a3", textTransform: "uppercase", letterSpacing: 0.6 }}>{c.l}</span>
           </div>
         ))}
       </div>
       <div style={{ fontSize: 12.5, color: "#5a6a79", borderLeft: "2px solid #f0c040", padding: "4px 12px", margin: "10px 0 16px" }}>
-        {t("v4.disclaimer")}
+        {t("market.disclaimer")}
       </div>
 
+      <MoreBlock items={[
+        { label: t("market.more.research"), text: g.research },
+        { label: t("stats.rules"), text: g.regles },
+        { label: t("stats.esperance"), text: g.esperance },
+        { label: t("stats.pExplode"), text: g.p_explode },
+        { label: t("stats.pCrash"), text: g.p_crash },
+        { label: t("stats.t"), text: g.tstat },
+        { label: t("market.more.depth"), text: g.profondeur },
+        { label: t("tracking.h.checkpoint"), text: g.checkpoint },
+      ]} />
+
       {cohort.length > 0 ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-          {cohort.map((e, i) => <V4Card key={e.ticker} entry={e} rank={i} total={cohort.length} dp4={dp4} />)}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginTop: 14 }}>
+          {cohort.map((e, i) => <MarketCard key={e.ticker} entry={e} rank={i} total={cohort.length} dp4={dp4} />)}
         </div>
       ) : (
-        <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b" }}>
-          <b style={{ color: "#d7e0e8" }}>{noteLabel || t("v4.emptyNote")}</b>{" "}
-          {t("v4.emptyInfo")}
+        <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b", marginTop: 14 }}>
+          <b style={{ color: "#d7e0e8" }}>{noteLabel || t("market.emptyNote")}</b>{" "}
+          {t("market.emptyInfo")}
           {prelist.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              <Tip tip={t("gloss.prelist")} style={{ fontSize: 12, color: "#8494a3" }}>{t("v4.prelist")}</Tip>
+              <Tip tip={t("gloss.prelist")} style={{ fontSize: 12, color: "#8494a3" }}>{t("market.prelist")}</Tip>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
                 {prelist.map(p => (
                   <span key={p.ticker} style={{
@@ -208,17 +322,17 @@ function V4Section({ cohort, note, mkt21, prelist, dp4 }) {
             </div>
           )}
         </div>
-      )}</>}
+      )}
     </section>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Étage 1 bis — cohorte v5 multi-fenêtres (fenêtre pilotée par le sélecteur du
-// header). Purement additive : la v4 reste l'étage de référence.
+// Étage 1 bis — Purge silencieuse (fenêtre pilotée par le sélecteur du header).
+// Purement additive : la Purge de marché reste l'étage de référence.
 // ---------------------------------------------------------------------------
-function V5Card({ entry, win, rank, total, dp4, dp5 }) {
-  const g = dp5.gloss ?? {}, g4 = dp4.gloss ?? {}, rules = dp5.rules ?? {};
+function QuietCard({ entry, win, rank, total, dp5 }) {
+  const rules = dp5.rules ?? {};
   const first = rank === 0;
   return (
     <div style={{
@@ -233,7 +347,7 @@ function V5Card({ entry, win, rank, total, dp4, dp5 }) {
           <span style={{
             marginLeft: "auto", background: "#0e2c22", color: "#00e096", border: "1px solid #1c4033",
             borderRadius: 3, fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", padding: "2px 7px",
-          }}>{t("v5.first")}</span>
+          }}>{t("quiet.first")}</span>
         ) : (
           <span style={{ marginLeft: "auto", color: "#5a6a79", fontSize: 12 }}>#{rank + 1} / {total}</span>
         )}
@@ -241,82 +355,105 @@ function V5Card({ entry, win, rank, total, dp4, dp5 }) {
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
         {[
-          { tip: g4.rule_price, text: <>{t("chip.price")} <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> {t("chip.priceMax", { x: rules.price_max ?? "—" })}</> },
-          { tip: g.chg, text: <>{t("chip.win", { w: win })} <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.chg)}</b> {t("chip.chgMax", { x: pctFmt(rules.chg_max, 0) })}</> },
-          { tip: t("gloss.ruleDil"), text: <>{t("chip.dil.pre")} <b style={{ color: "#d7e0e8" }}>{t("chip.dil.none")}</b> {t("chip.dil.post")}</> },
-          { tip: g4.rule_mkt, text: <>{t("chip.mkt", { w: win })} <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt)})</b></> },
-          { tip: g.cmf, text: <>{t("chip.cmf")} <b style={{ color: "#d7e0e8" }}>{entry.cmf}</b> {t("chip.cmfMin", { x: num(rules.cmf_min) })}</> },
-          { tip: g.vol_calme, text: <>{t("chip.vol")} <b style={{ color: "#d7e0e8" }}>{entry.vol_calm}×</b> {t("chip.volMax", { x: num(rules.volcalm_max) })}</> },
-        ].map((m, i) => (
-          <Tip key={i} tip={m.tip} style={{
+          <>{t("chip.price")} <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> {t("chip.priceMax", { x: rules.price_max ?? "—" })}</>,
+          <>{t("chip.win", { w: win })} <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.chg)}</b> {t("chip.chgMax", { x: pctFmt(rules.chg_max, 0) })}</>,
+          <>{t("chip.dil.pre")} <b style={{ color: "#d7e0e8" }}>{t("chip.dil.none")}</b> {t("chip.dil.post")}</>,
+          <>{t("chip.mkt", { w: win })} <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt)})</b></>,
+          <>{t("chip.flow")} <b style={{ color: "#d7e0e8" }}>{entry.cmf}</b> {t("chip.flowMin", { x: num(rules.cmf_min) })}</>,
+          <>{t("chip.vol")} <b style={{ color: "#d7e0e8" }}>{entry.vol_calm}×</b> {t("chip.volMax", { x: num(rules.volcalm_max) })}</>,
+        ].map((text, i) => (
+          <span key={i} style={{
             background: "#16202b", border: "1px solid #1c4033", borderRadius: 4,
             padding: "3px 8px", fontSize: 12, color: "#8494a3",
-          }}>{m.text}</Tip>
+          }}>{text}</span>
         ))}
       </div>
 
       {first && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #1e2a36", fontSize: 12, color: "#8494a3" }}>
-          <b style={{ color: "#d7e0e8" }}>{t("v4.buy.title")}</b>{t("v5.buy.body")}
+          <b style={{ color: "#d7e0e8" }}>{t("market.buy.title")}</b>{t("quiet.buy.body")}
         </div>
       )}
     </div>
   );
 }
 
-function V5Section({ v5, win, dp4, dp5 }) {
-  const g = dp5.gloss ?? {};
+function QuietSection({ v5, win, dp4, dp5 }) {
+  const g = dp5.gloss ?? {}, g4 = dp4.gloss ?? {}, rules = dp5.rules ?? {};
   const block = v5.windows?.[String(win)] ?? { mkt: null, cohort: [], prelist: [], note: null };
   const stats = dp5.stats?.[String(win)] ?? {};
   const cohort = block.cohort ?? [];
   const prelist = block.prelist ?? [];
   const tracking = v5.tracking ?? [];
+  const { mktState, stockState, blocking } = ruleStates(block.mkt, cohort.length);
+  const ruleItems = [
+    { key: "price", label: t("quiet.rule.price"), val: t("chip.priceMax", { x: rules.price_max ?? "—" }), state: stockState, why: g4.rule_price },
+    { key: "dil", label: t("quiet.rule.dil"), val: t("chip.dil.post"), state: stockState, why: t("gloss.ruleDil") },
+    { key: "chg", label: t("quiet.rule.chg"), val: t("chip.chgMax", { x: pctFmt(rules.chg_max, 0) }), state: stockState, why: g.chg },
+    { key: "mkt", label: t("quiet.rule.mkt"), val: `${t("chip.win", { w: win })} ${pctFmt(block.mkt)}`, state: mktState, why: g4.rule_mkt },
+    { key: "flow", label: t("quiet.rule.flow"), val: t("chip.flowMin", { x: num(rules.cmf_min) }), state: stockState, why: g.cmf },
+    { key: "vol", label: t("quiet.rule.vol"), val: t("chip.volMax", { x: num(rules.volcalm_max) }), state: stockState, why: g.vol_calme },
+  ];
   return (
     <section style={{ marginTop: 30 }}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
         <h2 style={{ fontSize: 15, margin: 0, fontWeight: 650, textTransform: "uppercase", letterSpacing: 1.2, color: "#e8e8ff" }}>
-          {t("v5.section.title", { w: win })}
+          {t("quiet.section.title", { w: win })}
         </h2>
-        <Tip tip={g.research} style={{
+        <Tip tip={t("research.tip")} style={{
           fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", padding: "2px 8px",
           borderRadius: 3, border: "1px solid #4a3f1a", color: "#f0c040",
         }}>{t("research.badge")}</Tip>
-        <span style={{ color: "#8494a3", fontSize: 13 }}>{t("rules.frozen")}{win === dp5.primary_window ? t("v5.primary") : ""}</span>
+        {win === dp5.primary_window && <span style={{ color: "#8494a3", fontSize: 13 }}>{t("quiet.primary")}</span>}
       </div>
+
+      <p style={{ ...proseStyle, marginTop: 8 }}>{t("quiet.intro")}</p>
+
+      <RulesBlock items={ruleItems} blocking={blocking} />
 
       <div style={{
         display: "flex", flexWrap: "wrap", border: "1px solid #1e2a36", borderRadius: 6,
         background: "#0e141b", margin: "12px 0 6px", fontFamily: "monospace",
       }}>
         {[
-          { v: stats.esperance || "—", vc: "#00e096", l: t("stats.esperance"), tip: (dp4.gloss ?? {}).esperance },
-          { v: stats.mediane || "—", vc: "#d7e0e8", l: t("stats.mediane"), tip: g.mediane },
-          { v: stats.p_explode || "—", vc: "#d7e0e8", l: t("stats.pExplode"), tip: (dp4.gloss ?? {}).p_explode },
-          { v: stats.p_crash || "—", vc: "#d7e0e8", l: t("stats.pCrash"), tip: g.crash },
-          { v: stats.t || "—", vc: "#f0c040", l: t("stats.t"), tip: (dp4.gloss ?? {}).tstat },
-          { v: "6 / 6", vc: "#d7e0e8", l: t("stats.rules"), tip: g.regles },
+          { v: stats.esperance || "—", vc: "#00e096", l: t("stats.esperance") },
+          { v: stats.mediane || "—", vc: "#d7e0e8", l: t("stats.mediane") },
+          { v: stats.p_explode || "—", vc: "#d7e0e8", l: t("stats.pExplode") },
+          { v: stats.p_crash || "—", vc: "#d7e0e8", l: t("stats.pCrash") },
+          { v: stats.t || "—", vc: "#f0c040", l: t("stats.t") },
+          { v: "6 / 6", vc: "#d7e0e8", l: t("stats.rules") },
         ].map((c, i) => (
           <div key={i} style={{ flex: "1 1 120px", padding: "10px 14px", borderRight: i < 5 ? "1px solid #1e2a36" : "none" }}>
             <b style={{ display: "block", fontSize: 17, fontWeight: 640, color: c.vc }}>{c.v}</b>
-            <Tip down tip={c.tip} style={{ fontSize: 11.5, color: "#8494a3", textTransform: "uppercase", letterSpacing: 0.6 }}>{c.l}</Tip>
+            <span style={{ fontSize: 11.5, color: "#8494a3", textTransform: "uppercase", letterSpacing: 0.6 }}>{c.l}</span>
           </div>
         ))}
       </div>
       <div style={{ fontSize: 12.5, color: "#5a6a79", borderLeft: "2px solid #f0c040", padding: "4px 12px", margin: "10px 0 16px" }}>
-        {t("v5.disclaimer", { n: stats.n ?? "—" })}
+        {t("quiet.disclaimer", { n: stats.n ?? "—" })}
       </div>
 
+      <MoreBlock items={[
+        { label: t("quiet.more.research"), text: g.research },
+        { label: t("stats.rules"), text: g.regles },
+        { label: t("stats.mediane"), text: g.mediane },
+        { label: t("stats.pCrash"), text: g.crash },
+        { label: t("quiet.more.windows"), text: g.mkt_switch },
+        { label: t("quiet.more.flash"), text: g.flash },
+        { label: t("quiet.more.tracking"), text: g.tracking },
+      ]} />
+
       {cohort.length > 0 ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-          {cohort.map((e, i) => <V5Card key={e.ticker} entry={e} win={win} rank={i} total={cohort.length} dp4={dp4} dp5={dp5} />)}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginTop: 14 }}>
+          {cohort.map((e, i) => <QuietCard key={e.ticker} entry={e} win={win} rank={i} total={cohort.length} dp5={dp5} />)}
         </div>
       ) : (
-        <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b" }}>
-          <b style={{ color: "#d7e0e8" }}>{noteText(block.note, "v5") || t("v5.emptyNote")}</b>{" "}
-          {t("v5.emptyInfo")}
+        <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b", marginTop: 14 }}>
+          <b style={{ color: "#d7e0e8" }}>{noteText(block.note, "quiet") || t("quiet.emptyNote")}</b>{" "}
+          {t("quiet.emptyInfo")}
           {prelist.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              <Tip tip={t("gloss.prelist")} style={{ fontSize: 12, color: "#8494a3" }}>{t("v5.prelist", { w: win })}</Tip>
+              <Tip tip={t("gloss.prelist")} style={{ fontSize: 12, color: "#8494a3" }}>{t("quiet.prelist", { w: win })}</Tip>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
                 {prelist.map(p => (
                   <span key={p.ticker} style={{
@@ -332,9 +469,9 @@ function V5Section({ v5, win, dp4, dp5 }) {
 
       {tracking.length > 0 && (
         <div style={{ marginTop: 14, fontSize: 12.5, color: "#8494a3" }}>
-          <Tip tip={g.tracking} style={{ textTransform: "uppercase", letterSpacing: 0.6, fontSize: 11.5 }}>
-            {t("v5.tracking", { n: tracking.length })}
-          </Tip>
+          <span style={{ textTransform: "uppercase", letterSpacing: 0.6, fontSize: 11.5 }}>
+            {t("quiet.tracking", { n: tracking.length })}
+          </span>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
             {tracking.slice(0, 24).map((r, i) => (
               <span key={i} style={{
@@ -350,7 +487,7 @@ function V5Section({ v5, win, dp4, dp5 }) {
 }
 
 // ---------------------------------------------------------------------------
-// Étage 2 — suivi des cohortes passées (information, jamais un ordre de vente)
+// Étage 2 — suivi des titres qualifiés (information, jamais un ordre de vente)
 // L'API sert des CODES de statut/checkpoint (Epic 8 S1) : les branches ci-dessous
 // comparent des codes, jamais des chaînes traduites.
 // ---------------------------------------------------------------------------
@@ -401,7 +538,11 @@ function TrackingSection({ tracking, dp4 }) {
                     color: "#8494a3", fontWeight: 600, textTransform: "uppercase", fontSize: 11,
                     letterSpacing: 0.7, textAlign: i === 2 || i === 3 ? "right" : "left",
                     padding: "10px 14px", borderBottom: "1px solid #1e2a36",
-                  }} title={h === "checkpoint" ? g.checkpoint : undefined}>{t(`tracking.h.${h}`)}{h === "checkpoint" ? " ⓘ" : ""}</th>
+                  }}>
+                    {h === "checkpoint" && g.tip_checkpoint
+                      ? <Tip down tip={g.tip_checkpoint}>{t("tracking.h.checkpoint")}</Tip>
+                      : t(`tracking.h.${h}`)}
+                  </th>
                 ))}
               </tr>
             </thead>
@@ -433,8 +574,8 @@ function TrackingSection({ tracking, dp4 }) {
 }
 
 // ---------------------------------------------------------------------------
-// Étage 3 — zones extrêmes (profils v2, à étudier — pas à acheter)
-// Couleurs/emoji seuls ici ; labels, tips et stats gelées v2 via t() (i18n S3).
+// Étage 3 — zones extrêmes (Fusée / Phénix : hypothèse réfutée, matière à
+// recherche humaine — ni liste d'achat, ni signal d'exclusion)
 // ---------------------------------------------------------------------------
 const PROFILE_STYLE = {
   fusee: { emoji: "🚀", fg: "#00e69a", bg: "#00ff9d18", bd: "#00ff9d44" },
@@ -454,7 +595,7 @@ function ProfileBadge({ kind, strength, event }) {
   const pct = strength != null ? Math.round(strength * 100) : null;
   return (
     <Tip tip={t(`gloss.${kind}`)} style={{
-      display: "inline-flex", alignItems: "center", gap: 5,
+      display: "inline-flex", alignItems: "center", gap: 5, flexWrap: "wrap",
       background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, borderBottom: `1px solid ${c.bd}`,
       borderRadius: 20, padding: "4px 11px", fontSize: 12, fontWeight: 700,
       fontFamily: "monospace", letterSpacing: 0.3,
@@ -466,7 +607,7 @@ function ProfileBadge({ kind, strength, event }) {
         background: "#ffcc6622", color: "#ffcc66", fontSize: 9, fontWeight: 700,
         padding: "1px 6px", borderRadius: 10, marginLeft: 3,
         textTransform: "uppercase", letterSpacing: 0.4,
-      }}>{t("badge.nonValide")}</span>
+      }}>{t("badge.refuted")}</span>
     </Tip>
   );
 }
@@ -518,7 +659,7 @@ function StockCard({ stock, onAnalyze, analysis, isLoading }) {
         ))}
       </div>
 
-      {/* Dossier de risque : faits EDGAR + drapeaux, sémantique mesurée (glossaire) */}
+      {/* Dossier de risque : faits tirés des dépôts officiels, sémantique mesurée */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 14 }}>
         {stock.survivalRisk && (
           <Tip tip={t("gloss.goingConcern")} style={{
@@ -584,7 +725,7 @@ export default function App() {
   const [stocks, setStocks] = useState([]);
   const [v4, setV4] = useState({ cohort: [], note: null, mkt21: null, prelist: [], tracking: [] });
   const [v5, setV5] = useState({ windows: {}, flash: false, flash_ret3: null, tracking: [] });
-  const [display, setDisplay] = useState({});  // seuils/textes v4-v5 servis par l'API (Epic 6 S2)
+  const [display, setDisplay] = useState({});  // seuils/textes servis par l'API (Epic 6 S2)
   const [mktWin, setMktWin] = useState(21);   // 7/14/21
   // Bascule FR/EN : le setState force le re-render, t() lit la langue du module.
   const [uiLang, setUiLang] = useState(savedLang);
@@ -694,7 +835,7 @@ export default function App() {
 
   const glanceLine = v4.cohort.length > 0
     ? <>{t("glance.today")} <b style={{ color: "#00e096" }}>{v4.cohort.length > 1 ? t("glance.qualified.many", { n: v4.cohort.length }) : t("glance.qualified.one")}</b> {t("glance.startWith")} <b style={{ color: "#00e096" }}>{v4.cohort[0].ticker}</b> {t("glance.mostOversold")}</>
-    : <>{t("glance.today")} <b>{t("glance.noCohort")}</b> — {v4.mkt21 != null ? t("glance.bullish", { w: dp4.rules?.mkt_window ?? "—", pct: pctFmt(v4.mkt21) }) : t("glance.mktUnavailable")}{t("glance.paused")}</>;
+    : <>{t("glance.today")} <b>{t("glance.noList")}</b> — {v4.mkt21 != null ? t("glance.bullish", { w: dp4.rules?.mkt_window ?? "—", pct: pctFmt(v4.mkt21) }) : t("glance.mktUnavailable")}{t("glance.paused")}</>;
 
   return (
     <div style={{ minHeight: "100vh", background: "#070714", fontFamily: "'Segoe UI', sans-serif", color: "#e8e8ff", padding: "0 0 60px" }}>
@@ -704,6 +845,7 @@ export default function App() {
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: #0a0a1a; }
         ::-webkit-scrollbar-thumb { background: #2a2a6a; border-radius: 2px; }
+        summary::marker { color: #5a6a79; }
       `}</style>
 
       {/* Header */}
@@ -747,7 +889,7 @@ export default function App() {
                   fontSize: 13, fontFamily: "monospace",
                 }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: mkt == null ? "#5a6a79" : mkt < 0 ? "#ff6b6b" : "#00e096" }} />
-                  <Tip down tip={dp5.gloss?.mkt_switch}>{t("header.market")}</Tip>
+                  <Tip down tip={t("header.marketTip")}>{t("header.market")}</Tip>
                   {winButtons.map(w => (
                     <button key={w} onClick={() => setMktWin(w)} style={{
                       background: mktWin === w ? "#1c2f42" : "transparent",
@@ -758,7 +900,7 @@ export default function App() {
                   ))}
                   <b style={{ color: mkt == null ? "#5a6a79" : mkt < 0 ? "#ff6b6b" : "#00e096" }}>{pctFmt(mkt)}</b>
                   {v5.flash && (
-                    <Tip down tip={dp5.gloss?.flash} style={{
+                    <Tip down tip={dp5.gloss?.tip_flash} style={{
                       border: "1px solid #6e2a1c", borderRadius: 3, color: "#ff9b6b",
                       padding: "2px 7px", fontSize: 12, background: "#2c1410",
                     }}>{t("header.flash", { pct: pctFmt(v5.flash_ret3) })}</Tip>
@@ -794,8 +936,10 @@ export default function App() {
           </span>
         </div>
 
-        <V4Section cohort={v4.cohort} note={v4.note} mkt21={v4.mkt21} prelist={v4.prelist} dp4={dp4} />
-        <V5Section v5={v5} win={mktWin} dp4={dp4} dp5={dp5} />
+        <HowToRead />
+
+        <MarketSection cohort={v4.cohort} note={v4.note} mkt21={v4.mkt21} prelist={v4.prelist} dp4={dp4} />
+        <QuietSection v5={v5} win={mktWin} dp4={dp4} dp5={dp5} />
         <TrackingSection tracking={v4.tracking} dp4={dp4} />
 
         {/* Zones extrêmes */}
@@ -809,6 +953,8 @@ export default function App() {
               {t("zones.badge")}
             </Tip>
           </div>
+
+          <p style={{ ...proseStyle, margin: "0 0 14px" }}>{t("zones.intro")}</p>
 
           <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
             {[
