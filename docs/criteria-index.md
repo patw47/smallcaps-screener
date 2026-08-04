@@ -5,7 +5,7 @@ Cet index est **public et versionné** : il liste uniquement les **noms de clés
 valeurs. Les valeurs réelles, leur justification mesurée et leur statut de validation vivent
 dans la page de référence, hors dépôt :
 
-**Page de référence** : <!-- URL_PAGE_REFERENCE -->
+**Page de référence** : <https://app.notion.com/p/3b2681d3ae9481ba8890c7ac95ad994e> (Notion privé, accès sur invitation)
 
 Vérifié par `make check-criteria-coverage` (`scripts/check_criteria_coverage.py`) : chaque clé
 listée ici doit exister dans les defaults neutres du code (`v4.CFG`, `v5.CFG`,
