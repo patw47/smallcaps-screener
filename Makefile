@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-demo build-frontend docs-build docs-check
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-demo build-frontend docs-build docs-check check-runtime
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -43,6 +43,13 @@ check-demo:
 
 # Compilation réelle du frontend, en conteneur (aucun Node ni node_modules requis sur
 # l'hôte) : les gates JS ne parsent que du texte, seul vite dit si le JSX compile.
+# Syntaxe valide sur le Python de PRODUCTION (3.11), pas seulement sur celui de la
+# machine de dev. Une f-string contenant un backslash compile en 3.12 et casse en 3.11 :
+# la suite de tests locale passait pendant que le conteneur refusait de démarrer.
+check-runtime:
+	docker run --rm -v "$(CURDIR)":/src -w /src python:3.11-slim \
+		python -m compileall -q backend/ scripts/
+
 build-frontend:
 	docker run --rm -v "$(CURDIR)/frontend":/app -w /app node:20-alpine \
 		sh -c "npm install --silent --no-audit --no-fund >/dev/null 2>&1 && npx vite build"
