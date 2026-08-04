@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from screener_backend import run_scan, scan_state, FILTERS, OUTPUT_FILE
+from screener_backend import run_scan, scan_state, FILTERS, OUTPUT_FILE, _display_params
 from track import run_tracker, _empty_result
 
 # Scan automatique périodique (heures) — les snapshots s'accumulent pour le suivi de perf
@@ -129,19 +129,31 @@ async def _daily_scanner():
     asyncio.create_task(loop())
 
 
+def _fresh_display(payload: dict) -> dict:
+    """
+    Le bloc `display` est RECALCULÉ à chaque réponse, jamais servi depuis le cache.
+
+    Il y est écrit au moment du scan (`screener_backend.OUTPUT_FILE`), donc un cache
+    produit avant un changement de configuration — ou avant le retrait des seuils du
+    payload — continuerait de servir l'ancien bloc pendant des heures. Il est dérivable
+    et minuscule : le recalculer coûte moins qu'un cache qui ment.
+    """
+    return {**payload, "display": _display_params()}
+
+
 @app.get("/api/scan", summary="Retourne les données (non bloquant, scan en arrière-plan)")
 async def get_scan():
     # Cache frais → retour direct
     cached = _load_json_cache()
     if cached:
-        return cached
+        return _fresh_display(cached)
 
     # Résultat périmé connu → stale-while-revalidate : on le sert et on rafraîchit en fond
     data = _last_result()
     if data is not None:
         await _ensure_background_scan()
-        return {**data, "scanning": scan_state["scanning"],
-                "phase": scan_state["phase"], "stale": True}
+        return _fresh_display({**data, "scanning": scan_state["scanning"],
+                               "phase": scan_state["phase"], "stale": True})
 
     # Aucune donnée encore → démarrer un scan et répondre IMMÉDIATEMENT (jamais de blocage)
     await _ensure_background_scan()
