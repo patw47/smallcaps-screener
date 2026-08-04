@@ -125,6 +125,7 @@
   "chip.flowMin": "/ seuil {x}",
   "chip.vol": "volume",
   "chip.volMax": "/ max {x}×",
+  "chip.thrHidden": "/ seuil non montré",
 
   "tracking.title": "Suivi des titres qualifiés",
   "tracking.subtitle": "position par rapport aux trajectoires mesurées sur le passé — information, jamais un ordre de vente",
@@ -156,6 +157,7 @@
   "status.too_early": "J+{d} — premier point de contrôle à J+{cp}",
   "status.no_data": "données absentes (retrait de la cote ?)",
   "checkpoint.week_one": "1 semaine (seuil {thr})",
+  "checkpoint.week_one.hidden": "1 semaine",
   "checkpoint.window_closed": "fenêtre {h} j close",
   "checkpoint.too_early": "trop tôt",
   "tracking.endOfWindow": "résultat en fin de fenêtre :",

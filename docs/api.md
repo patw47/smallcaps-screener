@@ -18,6 +18,28 @@ All application endpoints are prefixed with `/api`.
 
 A FastAPI startup hook also warms the cache on boot. Clients should poll `GET /api/scan/status` for progress and re-fetch when a scan completes.
 
+### Presentation mode — `?demo=1`
+
+`GET /api/scan?demo=1` returns the same payload **without any rule threshold**: the price
+cap, the fall thresholds, the money-flow floor, the volume multiple, the checkpoint
+threshold, the reference window and the per-stock `margins` (distance to the threshold,
+which would reconstruct it exactly) are removed at every depth, and the glossary texts are
+replaced by their redacted variants. What stays: expectancy, median, probabilities,
+robustness test, case counts, the existence / meaning / today's state of every rule, and
+the **observation schedule** (`checkpoint.day`, `horizon`) — a measurement protocol, not a
+selection criterion.
+
+Filtering happens **before serialisation**: nothing hidden reaches the browser, so the
+browser inspector shows exactly what the page shows. The frontend forwards the flag when
+the page URL carries `?demo=1`.
+
+Setting `DEMO_MODE=1` on the instance forces the mode for every response — a request can
+turn presentation mode *on*, never off.
+
+Residual, documented leak: the qualifying stocks' own values stay visible, so the worst
+qualifying name **bounds** the price cap from below. A bound is not the value, and hiding
+it would mean showing nothing at all.
+
 Response (fresh cache):
 
 ```json

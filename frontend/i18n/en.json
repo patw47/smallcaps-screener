@@ -125,6 +125,7 @@
   "chip.flowMin": "/ min {x}",
   "chip.vol": "volume",
   "chip.volMax": "/ max {x}×",
+  "chip.thrHidden": "/ threshold not shown",
 
   "tracking.title": "Tracking of qualifying stocks",
   "tracking.subtitle": "position against the trajectories measured on the past — information, never a sell order",
@@ -156,6 +157,7 @@
   "status.too_early": "D+{d} — first checkpoint at D+{cp}",
   "status.no_data": "no data (delisted?)",
   "checkpoint.week_one": "1 week (threshold {thr})",
+  "checkpoint.week_one.hidden": "1 week",
   "checkpoint.window_closed": "{h} d window closed",
   "checkpoint.too_early": "too early",
   "tracking.endOfWindow": "end-of-window result:",

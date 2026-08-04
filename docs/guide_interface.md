@@ -254,6 +254,29 @@ direction), **dilution en attente** (seul drapeau clairement défavorable) — e
 
 ---
 
+## Mode présentation
+
+Ouvrir la page avec `?demo=1` (ou poser `DEMO_MODE=1` sur l'instance) montre le même
+tableau de bord **sans les valeurs des règles**. Ce qui change à l'écran :
+
+- chaque pastille et chaque ligne de règle affiche « seuil non montré » à la place du
+  nombre — la règle, son état du jour et son explication restent ;
+- l'infobulle et les paragraphes qui citaient un seuil sont remplacés par une seconde
+  version, expurgée du nombre mais gardant la justification mesurée ;
+- le point de contrôle du suivi affiche son échéance sans son seuil ;
+- le repère « fenêtre de référence » de la Purge silencieuse disparaît.
+
+Ce qui ne change pas : espérance, médiane, probabilités, test de robustesse, nombre de
+cas, **calendrier d'observation** (une mesure, pas un critère de sélection), résultats
+réels des sélections, et les valeurs propres des titres affichés.
+
+Le filtrage a lieu dans l'API, avant l'envoi : les valeurs masquées ne sont pas dans la
+réponse, donc pas davantage dans l'inspecteur du navigateur que sur l'écran. Une
+inférence subsiste et est assumée : le pire titre qualifiant **borne** le plafond de prix
+sans jamais en donner la valeur.
+
+---
+
 ## Ce que l'écran ne dit jamais
 
 - « Achète » ou « vends » — aucune ligne de l'interface n'est un conseil

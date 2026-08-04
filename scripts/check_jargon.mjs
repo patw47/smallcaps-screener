@@ -33,6 +33,12 @@ const SCANNABLE = [
   /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g,
   // texte JSX entre deux balises, sans expression {…} — <span>Cohorte v4</span>
   />([^<>{}]+)</g,
+  // texte JSX ENTRE deux expressions — {n} titres de cohorte {suite}. Laissé de côté
+  // jusqu'ici parce qu'un `[>}]…[<{]` naïf attrape aussi du JS courant (`} else if (…) {`).
+  // Écarter les fragments qui portent de la syntaxe (parenthèses, `;`, `=`) suffit à les
+  // distinguer : du texte destiné à l'écran n'en contient pas. Il doit aussi porter au
+  // moins une lettre — « } : { » n'est pas une phrase.
+  /\}([^<>{}();=]*[A-Za-zÀ-ÿ][^<>{}();=]*)\{/g,
 ];
 
 function* walk(dir) {

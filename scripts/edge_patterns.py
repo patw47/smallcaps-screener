@@ -14,10 +14,17 @@ Les clés structurelles (fenêtres, horizons…) sont ignorées.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import yaml
+
+os.environ.setdefault("CONFIG_FILE", "/nonexistent/never-loaded.yml")  # jamais d'overlay ici
+os.environ.setdefault("DATA_DIR", "/tmp/screener_test")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+
+from screener_backend import value_patterns  # noqa: E402  (source unique des formes)
 
 SKIP_KEYS = {
     "windows", "mkt_window", "beta_window", "beta_min_obs", "volcalm_base",
@@ -42,19 +49,7 @@ def patterns(config_path: Path) -> list[str]:
     pats: set[str] = set()
     for section in ("v4", "v5"):
         for value in _walk(raw.get(section) or {}):
-            a = abs(value)
-            dec = f"{a:g}"
-            if "." in dec:
-                comma = dec.replace(".", ",")
-                pats.add(rf"(^|[^0-9]){comma}($|[^0-9])")
-                pct = a * 100
-                if a < 1 and pct == int(pct):
-                    pats.add(rf"[−≥≤<>-]\s*{int(pct)}\s*%")
-                if a > 1:
-                    pats.add(rf"{dec.replace('.', '[.,]')}\s*[x×]")
-            else:
-                pats.add(rf"[≤<>≥]\s*{dec}\s*\$")
-                pats.add(rf"[≤<>≥]\s*\$\s*{dec}($|[^0-9])")
+            pats |= value_patterns(value)
     return sorted(pats)
 
 

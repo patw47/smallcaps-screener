@@ -15,6 +15,7 @@ nombre d'appels `.info` → moins de throttling Yahoo.
 
 import json
 import os
+import re
 import time
 import math
 import random
@@ -1262,13 +1263,17 @@ def _display_params() -> dict:
     """
     import v4
     import v5
+    # gloss_demo ne sort JAMAIS tel quel : c'est la réserve de textes expurgés, servie
+    # à la place de gloss par demo_payload() (Epic 8 S6), jamais en plus.
+    d4 = {k: v for k, v in v4.CFG["display"].items() if k != "gloss_demo"}
+    d5 = {k: v for k, v in v5.CFG["display"].items() if k != "gloss_demo"}
     return {
         "v4": {
             "rules": {"price_max": v4.CFG["price_max"], "chg1m_max": v4.CFG["chg1m_max"],
                       "mkt_window": v4.CFG["mkt_window"]},
             "checkpoint": {"day": v4.CFG["checkpoint_day"], "thr": v4.CFG["checkpoint_thr"],
                            "horizon": v4.CFG["horizon"]},
-            **v4.CFG["display"],
+            **d4,
         },
         "v5": {
             "rules": {"price_max": v5.CFG["price_max"], "chg_max": v5.CFG["chg_max"],
@@ -1276,9 +1281,152 @@ def _display_params() -> dict:
             "checkpoint": {"day": v5.CFG["checkpoint_day"], "thr": v5.CFG["checkpoint_thr"],
                            "horizon": v5.CFG["horizon"]},
             "windows": list(v5.CFG["windows"]),
-            **v5.CFG["display"],
+            **d5,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Mode présentation (Epic 8 S6) — montrer les résultats, masquer les critères.
+#
+# Le filtrage a lieu AVANT la sérialisation (backend/api.py) : rien de masqué
+# n'atteint le navigateur, sans quoi le masquage serait cosmétique et l'inspecteur
+# suffirait à tout lire. Restent servis : espérance, médiane, probabilités, test de
+# robustesse, nombre de cas, justifications chiffrées, existence/sens/état de chaque
+# règle, et le calendrier d'observation (`checkpoint.day` / `horizon`) — protocole de
+# MESURE, pas critère de sélection : le connaître ne reconstitue aucune liste.
+#
+# Fuite par inférence assumée : les valeurs des titres qualifiants restent affichées,
+# donc le pire d'entre eux BORNE le plafond de prix. Une borne n'est pas la valeur, et
+# la supprimer reviendrait à ne plus rien montrer. `margins`, en revanche, EST la
+# valeur (prix + marge = seuil, exactement) : elle disparaît.
+# ---------------------------------------------------------------------------
+
+# Noms de clés portant une valeur de règle, supprimés à TOUTE profondeur.
+# `thr` = seuil du point de contrôle (son `day` et son `horizon` restent : calendrier).
+# `primary_window` = la fenêtre de référence, seule fenêtre dont la valeur réelle soit
+# privée (son default versionné vaut 0, « non configurée »).
+#
+# `mkt_window` n'y est PAS, et c'est délibéré : sa valeur vit en clair dans le code
+# public depuis l'Epic 6 S2 (default NEUTRE, comme `windows`, `checkpoint_day`,
+# `horizon` — les fenêtres n'ont jamais fait partie de l'edge extrait). Elle est en
+# outre portée par le nom du champ `mkt21` et par les fenêtres du sélecteur, restées
+# visibles. La masquer dans `rules` seulement donnerait l'illusion d'une protection
+# sans en apporter aucune — un masquage partiel est pire qu'un masquage assumé absent.
+DEMO_HIDDEN_KEYS = frozenset({
+    "price_max", "chg1m_max", "chg_max", "cmf_min", "volcalm_max",
+    "primary_window", "thr", "margins",
+})
+
+
+def value_patterns(value: float, loose: bool = False, unit: str | None = None) -> set[str]:
+    """
+    Formes d'écriture (regex ERE) sous lesquelles une valeur gelée peut apparaître :
+    virgule française (« 0,15 »), pourcentage comparé (« ≥ 15 % »), multiplicateur
+    (« 1,25× »), monétaire comparé (« ≤ 8 $ »). Les décimales à point nues ne sont pas
+    émises : trop génériques.
+
+    Deux ancrages, pour deux périmètres qui n'ont pas la même tolérance au faux positif :
+
+    - `loose=False` (défaut) — gate de dépôt (`scripts/edge_patterns.py`), qui grep de la
+      prose publique où presque tout nombre est innocent : le COMPARATEUR est exigé
+      devant la valeur. Sans lui, « survivre à −50 % » ou « 0,8 % des titres » rougiraient.
+    - `loose=True` — textes de RÈGLE servis à l'écran, où la prose écrit aussi bien
+      « perdu au moins 30 % » que « ≥ 30 % » : seul le suffixe (%, $, ×) ancre. À ne pas
+      appliquer aux chiffres de RÉSULTAT (espérance, probabilités…), visibles par
+      décision d'epic et qui valent parfois le même nombre qu'un seuil.
+
+    `unit` restreint les formes à celle sous laquelle le seuil s'écrit réellement
+    (« $ », « % », « × », « » pour un nombre nu). Sans elle, toutes les formes sont
+    émises — c'est ce que veut le gate de dépôt, qui ignore de quelle clé vient la
+    valeur. Avec elle, un seuil de flux valant 0,10 ne fait plus rougir un « −10 % »
+    qui parle d'un mouvement d'indice.
+
+    Source unique des formes — deux définitions divergeraient.
+    """
+    a = abs(float(value))
+    if a in (0.0, 1.0):
+        return set()
+    # Le préfixe exclut la virgule et le point : « 7,3 % » ne doit pas déclencher le
+    # pattern du seuil « 3 % » — son 3 est la décimale d'un autre nombre.
+    head = "(^|[^0-9,.])" if loose else "[−≥≤<>-]\\s*"
+    money = "(^|[^0-9,.])" if loose else "[≤<>≥]\\s*"
+    # 0* : la config écrit 0.1, la prose « 0,10 » — la forme courte doit couvrir les deux.
+    comma = f"{a:g}".replace(".", ",") + "0*"
+    dec = f"{a:g}"
+    pct = a * 100
+    pats: set[str] = set()
+    if unit in (None, "", "×") and "." in dec:       # nombre nu, écriture française
+        pats.add(rf"(^|[^0-9,.]){comma}($|[^0-9])")
+    if unit in (None, "%") and a < 1 and pct == int(pct):
+        pats.add(rf"{head}{int(pct)}\s*%")
+    if unit in (None, "×") and a > 1 and "." in dec:  # « 2× » serait trop générique
+        pats.add(rf"{dec.replace('.', '[.,]')}\s*[x×]")
+    if unit in (None, "$"):
+        num = comma if "." in dec else dec
+        pats.add(rf"{money}{num}\s*\$")
+        pats.add(rf"{'' if loose else '[≤<>≥]\\s*'}\$\s*{num}($|[^0-9])")
+    return pats
+
+
+# Les SEUILS parmi les clés masquées, avec l'unité sous laquelle chacun s'écrit dans un
+# texte. Les fenêtres n'y figurent pas : un nombre de séances s'écrit « 21 j », forme que
+# les fenêtres RESTÉES visibles (le sélecteur de la Purge silencieuse) portent aussi —
+# aucun contrôle automatique ne peut distinguer les deux.
+DEMO_HIDDEN_THRESHOLDS = {
+    "price_max": "$", "chg1m_max": "%", "chg_max": "%",
+    "cmf_min": "", "volcalm_max": "×", "checkpoint_thr": "%",
+}
+
+
+def hidden_values() -> list[tuple[float, str]]:
+    """(valeur, unité) de chaque seuil masqué, tel qu'effectivement chargé (config privée
+    comprise) — la matière du contrôle de non-fuite par les textes."""
+    import v4
+    import v5
+    return [(float(cfg[k]), unit) for cfg in (v4.CFG, v5.CFG)
+            for k, unit in DEMO_HIDDEN_THRESHOLDS.items()
+            if isinstance(cfg.get(k), (int, float))]
+
+
+def _strip_keys(node):
+    """Copie de `node` privée des clés masquées, à toute profondeur."""
+    if isinstance(node, dict):
+        return {k: _strip_keys(v) for k, v in node.items() if k not in DEMO_HIDDEN_KEYS}
+    if isinstance(node, list):
+        return [_strip_keys(v) for v in node]
+    return node
+
+
+def demo_payload(payload: dict) -> dict:
+    """
+    Réponse de scan en mode présentation : clés de seuil retirées, textes du glossaire
+    remplacés par leur version expurgée (`gloss_demo` de la config privée).
+
+    Filet de sécurité : un texte qui contient encore une valeur masquée — parce que sa
+    version expurgée n'a pas été écrite — est VIDÉ plutôt que servi. La config privée
+    n'est pas versionnée, aucun gate de dépôt ne peut donc garantir son contenu ; c'est
+    le seul moyen qu'un oubli d'édition coûte une explication manquante et non une fuite.
+    """
+    import v4
+    import v5
+    out = _strip_keys(payload)
+    pats = [re.compile(p) for v, unit in hidden_values()
+            for p in value_patterns(v, loose=True, unit=unit)]
+
+    for fam, cfg in (("v4", v4.CFG), ("v5", v5.CFG)):
+        block = (out.get("display") or {}).get(fam)
+        if not isinstance(block, dict):
+            continue
+        gloss = dict(block.get("gloss") or {})
+        for key, text in gloss.items():
+            redacted = cfg["display"]["gloss_demo"].get(key) or ""
+            gloss[key] = redacted or text
+            if any(p.search(gloss[key]) for p in pats):
+                print(f"[demo] texte {fam}.gloss.{key} cite un seuil sans version expurgée — vidé")
+                gloss[key] = ""
+        block["gloss"] = gloss
+    return out
 
 
 def _write_snapshot(output: dict) -> None:
