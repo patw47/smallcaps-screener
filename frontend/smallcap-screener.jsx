@@ -606,7 +606,9 @@ const PHASES = ["open", "closed", "no_data"];
 function TrackingSection({ tracking, dp, family, windowCol }) {
   const g = dp.gloss ?? {}, cal = dp.checkpoint ?? {};
   const groups = { open: [], closed: [], no_data: [] };
-  tracking.forEach(r => groups[phaseOf(r)].push(r));
+  // Phase inconnue (backend en avance sur l'écran) → rangée avec les lignes sans
+  // données plutôt que de faire planter la section entière.
+  tracking.forEach(r => (groups[phaseOf(r)] ?? groups.no_data).push(r));
   return (
     <section style={{ marginTop: 34 }}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
@@ -642,6 +644,112 @@ function TrackingSection({ tracking, dp, family, windowCol }) {
           {g.stops_footer}
         </div>
       )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Étage 2 bis — résultats RÉELS par profil (Epic 8 S5). Alimenté par
+// /api/performance, calculé depuis l'origine et jamais affiché jusqu'ici : c'est
+// la seule mesure non biaisée par la survie. Ni le calcul ni l'endpoint ne
+// changent — on affiche ce qui existe déjà.
+//
+// L'appel vit ICI, pas dans App : une réponse vide, un historique absent ou une
+// erreur réseau laissent tout le reste de la page intact (aucun état partagé,
+// aucun throw qui remonte). Le cadre de lecture est rendu dans tous les cas —
+// sans lui, un petit échantillon a l'air de trancher quelque chose.
+// ---------------------------------------------------------------------------
+const PERF_SLEEVES = ["overall", "fusee", "phenix", "unknown"];
+
+function PerfSection() {
+  const [perf, setPerf] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    fetch("/api/performance")
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(setPerf)
+      .catch(() => setFailed(true));
+  }, []);
+
+  const sleeves = perf?.sleeves ?? {};
+  // Réponse vide, historique absent, bloc `sleeves` manquant : tous ces cas
+  // arrivent ici avec 0 ligne suivie et sortent par le même message.
+  const empty = !perf || (perf.n_tracked ?? 0) === 0;
+  // "unknown" n'apparaît que s'il porte des lignes : sinon la colonne raconte une
+  // catégorie vide au lieu d'un résultat.
+  const rows = PERF_SLEEVES.filter(k => sleeves[k] && (k !== "unknown" || sleeves[k].n > 0));
+  const asOf = perf?.as_of ? new Date(perf.as_of) : null;
+  const note = (text) => (
+    <div style={{ border: "1px dashed #1e2a36", borderRadius: 8, padding: "14px 18px", color: "#8494a3", fontSize: 13.5, background: "#0e141b", marginTop: 12 }}>
+      {text}
+    </div>
+  );
+
+  return (
+    <section style={{ marginTop: 34 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
+        <h2 style={{ fontSize: 15, margin: 0, fontWeight: 650, textTransform: "uppercase", letterSpacing: 1.2, color: "#e8e8ff" }}>
+          {t("perf.title")}
+        </h2>
+        <span style={{ color: "#8494a3", fontSize: 13 }}>{t("perf.subtitle")}</span>
+      </div>
+
+      <p style={{ ...proseStyle, margin: 0 }}>{t("perf.intro")}</p>
+
+      {failed ? note(t("perf.unavailable"))
+        : empty || rows.length === 0 ? note(t("perf.empty"))
+          : (
+            <>
+              <div style={{ overflowX: "auto", border: "1px solid #1e2a36", borderRadius: 8, background: "#111820", marginTop: 12 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, fontFamily: "monospace" }}>
+                  <thead>
+                    <tr>
+                      {["sleeve", "n", "mean", "median", "excess", "up50", "up100"].map((h, i) => (
+                        <th key={h} style={{
+                          color: "#8494a3", fontWeight: 600, textTransform: "uppercase", fontSize: 11,
+                          letterSpacing: 0.7, textAlign: i === 0 ? "left" : "right", ...CELL,
+                        }}>{t(`perf.h.${h}`)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(k => {
+                      const s = sleeves[k];
+                      return (
+                        <tr key={k}>
+                          <td style={{ ...CELL, color: "#e8e8ff", fontFamily: "'Segoe UI', sans-serif" }}>{t(`perf.sleeve.${k}`)}</td>
+                          <td style={{ ...CELL, textAlign: "right", color: "#d7e0e8" }}>{s.n}</td>
+                          {[s.mean, s.median, s.excess_mean].map((v, i) => (
+                            <td key={i} style={{ ...CELL, textAlign: "right", color: v == null ? "#8494a3" : v >= 0 ? "#00e096" : "#ff6b6b" }}>
+                              {pctFmt(v)}
+                            </td>
+                          ))}
+                          <td style={{ ...CELL, textAlign: "right", color: "#d7e0e8" }}>{s.n_up50 ?? "—"}</td>
+                          <td style={{ ...CELL, textAlign: "right", color: "#d7e0e8" }}>{s.n_up100 ?? "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p style={{ ...proseStyle, fontSize: 12.5 }}>
+                {t("perf.counts", {
+                  tracked: perf.n_tracked ?? "—", picks: perf.n_picks ?? "—",
+                  when: asOf ? asOf.toLocaleDateString(t("locale")) : "—",
+                })}
+              </p>
+              <p style={{ ...proseStyle, fontSize: 12.5, marginTop: 4 }}>{t("perf.note.overlap")}</p>
+              {rows.includes("unknown") && (
+                <p style={{ ...proseStyle, fontSize: 12.5, marginTop: 4 }}>{t("perf.note.unknown")}</p>
+              )}
+            </>
+          )}
+
+      {["fast", "slow", "verdict"].map(k => (
+        <p key={k} style={{ ...proseStyle, borderLeft: "2px solid #1e2a36", paddingLeft: 12 }}>
+          {t(`perf.frame.${k}`)}
+        </p>
+      ))}
     </section>
   );
 }
@@ -1015,6 +1123,7 @@ export default function App() {
         <QuietSection v5={v5} win={mktWin} dp4={dp4} dp5={dp5} />
         <TrackingSection tracking={v4.tracking} dp={dp4} family={t("market.section.title")} />
         <TrackingSection tracking={v5.tracking} dp={dp5} family={t("quiet.name")} windowCol />
+        <PerfSection />
 
         {/* Zones extrêmes */}
         <section style={{ marginTop: 34 }}>
