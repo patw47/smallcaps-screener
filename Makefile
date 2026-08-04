@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon docs-build docs-check
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage docs-build docs-check
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -26,6 +26,11 @@ check-i18n:
 # dans les dictionnaires i18n ou les chaînes du JSX. Liste étendue au S3.
 check-jargon:
 	node scripts/check_jargon.mjs
+
+# Couverture de l'index des critères (Epic 8 S2) : chaque clé des defaults
+# neutres v4/v5/profils/poids figure dans docs/criteria-index.md.
+check-criteria-coverage:
+	python3 scripts/check_criteria_coverage.py
 
 # Invariance de l'extraction (S2) : nécessite la vraie config config/local.yml
 # et l'historique data/history/ — skip propre sans eux (donc skippé en CI).
