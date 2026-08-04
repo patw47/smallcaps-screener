@@ -197,7 +197,7 @@ backend/
 ├── alerts.py             # Telegram alerts (cohort entries, persistent dedup)
 ├── edgar.py              # SEC/EDGAR point-in-time survival signals (dilution, runway…)
 ├── profiles.py           # Fusée/Phénix detectors
-├── backtest.py           # backtest harness + quick checks
+├── backtest.py           # quick control backtest (--n/--forward/--seed/--period)
 ├── track.py              # live performance tracking of past selections
 └── tests/                # offline deterministic unit tests
 frontend/
