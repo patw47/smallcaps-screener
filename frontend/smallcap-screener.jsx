@@ -419,7 +419,6 @@ function QuietSection({ v5, win, dp4, dp5 }) {
           fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", padding: "2px 8px",
           borderRadius: 3, border: "1px solid #4a3f1a", color: "#f0c040",
         }}>{t("research.badge")}</Tip>
-        {win === dp5.primary_window && <span style={{ color: "#8494a3", fontSize: 13 }}>{t("quiet.primary")}</span>}
       </div>
 
       <p style={{ ...proseStyle, marginTop: 8 }}>{t("quiet.intro")}</p>

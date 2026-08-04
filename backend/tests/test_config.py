@@ -132,18 +132,23 @@ def test_unknown_v4_key_raises(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Mode présentation (Epic 8 S6). Les valeurs utilisées ici sont celles de
-# conftest.py — volontairement différentes des valeurs gelées réelles.
+# Seuils jamais servis (Epic 8 S6, révisé au S7 : plus de mode, un seul chemin).
+# Les valeurs utilisées ici sont celles de conftest.py — volontairement différentes
+# des valeurs gelées réelles.
 # ---------------------------------------------------------------------------
+
+# Clés qui portent une valeur de seuil et ne doivent jamais atteindre le navigateur.
+FORBIDDEN = {"price_max", "chg1m_max", "chg_max", "cmf_min", "volcalm_max",
+             "thr", "primary_window", "margins"}
+
 
 def _scan_payload() -> dict:
     """Réponse de scan de forme complète : bloc d'affichage réel + une entrée de
-    cohorte telle que la produit le constructeur (margins comprises)."""
+    cohorte telle que la produit le constructeur."""
     return {
         "scanned_at": "2026-08-04T12:00:00+00:00",
         "display": sb._display_params(),
-        "v4_cohort": [{"ticker": "AAA", "price": 5.0, "change_1m": -0.2,
-                       "margins": {"price": 2.0, "change_1m": -0.15}}],
+        "v4_cohort": [{"ticker": "AAA", "price": 5.0, "change_1m": -0.2}],
         "stocks": [{"ticker": "AAA", "price": 5.0}],
     }
 
@@ -158,100 +163,73 @@ def _walk(node, path="$"):
             yield from _walk(value, f"{path}[{i}]")
 
 
-def test_demo_payload_drops_every_threshold_key():
-    """Aucune clé de seuil déclarée ne survit, À AUCUNE PROFONDEUR — c'est la réponse
-    sérialisée qui compte, pas ce que le JSX choisit d'afficher."""
-    normal = _scan_payload()
-    present = {k for _, k, _ in _walk(normal) if k in sb.DEMO_HIDDEN_KEYS}
-    assert present, "le payload de test doit porter des clés de seuil, sinon il ne prouve rien"
+def test_no_threshold_key_is_ever_served():
+    """
+    Aucune clé de seuil dans la réponse, À AUCUNE PROFONDEUR — c'est la réponse
+    sérialisée qui compte, pas ce que le JSX choisit d'afficher. Il n'y a plus de mode :
+    ces clés ne sont plus construites, donc plus rien à désactiver par erreur.
+    """
+    served = _scan_payload()
+    leaked = [p for p, k, _ in _walk(served) if k in FORBIDDEN]
+    assert leaked == [], f"seuils servis : {leaked}"
+    # Ce qui doit rester : calendrier d'observation, fenêtres du sélecteur, résultats.
+    assert set(served["display"]["v4"]["checkpoint"]) == {"day", "horizon"}
+    assert set(served["display"]["v5"]["checkpoint"]) == {"day", "horizon"}
+    assert served["display"]["v5"]["windows"]
+    assert served["display"]["v4"]["rules"] == {"mkt_window": v4_mod().CFG["mkt_window"]}
+    # La valeur du titre reste visible (décision d'epic) : elle BORNE le plafond sans le
+    # donner. `margins`, elle, le redonnait exactement — elle n'est plus produite.
+    assert served["v4_cohort"][0]["price"] == 5.0
 
-    demo = sb.demo_payload(normal)
-    leaked = [p for p, k, _ in _walk(demo) if k in sb.DEMO_HIDDEN_KEYS]
-    assert leaked == []
-    # La marge d'un titre reconstituerait le seuil exactement (prix + marge) : elle part
-    # avec le reste, alors même que l'écran ne l'affiche pas.
-    assert "margins" not in demo["v4_cohort"][0]
-    # Ce qui doit rester : calendrier d'observation, fenêtres offertes au choix, résultats.
-    assert set(demo["display"]["v4"]["checkpoint"]) == {"day", "horizon"}
-    assert set(demo["display"]["v5"]["checkpoint"]) == {"day", "horizon"}
-    assert demo["display"]["v5"]["windows"] == list(sb._display_params()["v5"]["windows"])
-    assert demo["v4_cohort"][0]["price"] == 5.0
 
-
-def test_demo_texts_never_cite_a_hidden_value(monkeypatch):
+def test_no_threshold_value_leaks_through_a_served_text():
     """
     Non-fuite par les TEXTES — le chemin de fuite principal : les seuils sont écrits en
-    toutes lettres au milieu de leur justification. Chaque texte servi en présentation
-    est comparé aux valeurs de règle effectivement chargées ; l'une d'elles dans un
-    texte fait échouer le test.
+    toutes lettres au milieu de leur justification. Chaque texte servi est comparé aux
+    valeurs de règle effectivement chargées ; l'une d'elles dans un texte le fait vider.
     """
-    import v4
-    monkeypatch.setattr(v4, "CFG", copy.deepcopy(v4.CFG))
-    # Texte complet citant le seuil chargé, et sa version expurgée : ce que porte la
-    # config privée en production.
-    v4.CFG["display"]["gloss"]["rule_price"] = f"Prix ≤ {v4.CFG['price_max']:g} $ : les explosions étaient bon marché."
-    v4.CFG["display"]["gloss_demo"]["rule_price"] = "Prix sous un plafond : les explosions étaient bon marché."
+    import copy as _copy
+    v4 = v4_mod()
+    cfg = _copy.deepcopy(v4.CFG)
+    cfg["display"]["gloss"]["rule_price"] = (
+        f"Prix ≤ {cfg['price_max']:g} $ : les explosions étaient bon marché.")
+    original, v4.CFG = v4.CFG, cfg
+    try:
+        served = sb._display_params()
+    finally:
+        v4.CFG = original
 
-    demo = sb.demo_payload(_scan_payload())
     pats = [re.compile(p) for v, unit in sb.hidden_values()
             for p in sb.value_patterns(v, loose=True, unit=unit)]
     assert pats, "aucun seuil chargé : le test ne prouverait rien"
-
     for fam in ("v4", "v5"):
-        for key, text in demo["display"][fam]["gloss"].items():
+        for key, text in served[fam]["gloss"].items():
             assert not any(p.search(text) for p in pats), f"{fam}.gloss.{key} cite un seuil"
-    assert demo["display"]["v4"]["gloss"]["rule_price"].startswith("Prix sous un plafond")
+    # Le filet vide le texte fautif plutôt que de le servir : une explication manquante
+    # coûte moins cher qu'une fuite, et le message nomme la clé.
+    assert served["v4"]["gloss"]["rule_price"] == ""
 
 
-def test_demo_empties_a_text_left_without_a_redacted_version(monkeypatch):
-    """Filet : un texte citant un seuil dont la version expurgée manque est VIDÉ, jamais
-    servi. La config privée n'étant pas versionnée, aucun gate de dépôt ne peut la
-    garantir — un oubli doit coûter une explication, pas l'avantage."""
-    import v4
-    monkeypatch.setattr(v4, "CFG", copy.deepcopy(v4.CFG))
-    v4.CFG["display"]["gloss"]["rule_chg"] = f"Chute ≥ {abs(v4.CFG['chg1m_max']) * 100:g} % sur un mois."
-    v4.CFG["display"]["gloss_demo"]["rule_chg"] = ""
-
-    demo = sb.demo_payload(_scan_payload())
-    assert demo["display"]["v4"]["gloss"]["rule_chg"] == ""
-
-
-def test_normal_mode_display_keys_unchanged():
+def test_display_key_set_is_frozen():
     """
-    Non-régression du mode normal : le jeu de clés du bloc d'affichage est figé, zéro
-    ajoutée, zéro retirée. L'invariant porte sur les CLÉS — les valeurs viennent d'une
-    config non versionnée dont le dépôt ne peut pas vérifier l'égalité.
+    Jeu de clés du bloc d'affichage figé : zéro ajoutée, zéro retirée. L'invariant porte
+    sur les CLÉS — les valeurs viennent d'une config non versionnée dont le dépôt ne peut
+    pas vérifier l'égalité.
     """
     display = sb._display_params()
     assert set(display) == {"v4", "v5"}
     assert set(display["v4"]) == {"rules", "checkpoint", "depth_scale", "stats", "gloss"}
-    assert set(display["v5"]) == {"rules", "checkpoint", "windows", "primary_window",
-                                  "stats", "gloss"}
-    assert set(display["v4"]["rules"]) == {"price_max", "chg1m_max", "mkt_window"}
-    assert set(display["v5"]["rules"]) == {"price_max", "chg_max", "cmf_min", "volcalm_max"}
-    assert set(display["v4"]["checkpoint"]) == {"day", "thr", "horizon"}
-    assert set(display["v5"]["checkpoint"]) == {"day", "thr", "horizon"}
-    # La réserve de textes expurgés ne sort jamais telle quelle : elle remplace `gloss`,
-    # elle ne s'y ajoute pas.
-    assert "gloss_demo" not in display["v4"] and "gloss_demo" not in display["v5"]
-    # Et le mode normal sert bien les valeurs, sans filtrage.
+    assert set(display["v5"]) == {"rules", "checkpoint", "windows", "stats", "gloss"}
+    assert set(display["v4"]["rules"]) == {"mkt_window"}
+    assert display["v5"]["rules"] == {}
+    assert set(display["v4"]["checkpoint"]) == {"day", "horizon"}
+    assert set(display["v5"]["checkpoint"]) == {"day", "horizon"}
+    # La fenêtre de référence est la seule fenêtre dont la valeur réelle soit privée.
+    assert "primary_window" not in display["v5"]
+
+
+def v4_mod():
     import v4
-    assert display["v4"]["rules"]["price_max"] == v4.CFG["price_max"]
+    return v4
 
 
-def test_value_patterns_units_and_forms():
-    """Le générateur de formes : ce qu'il attrape, ce qu'il laisse passer. Sans lui
-    juste, le filet vide des textes de résultat ou en laisse fuiter."""
-    pct = [re.compile(p) for p in sb.value_patterns(-0.03, loose=True, unit="%")]
-    assert any(p.search("perdu au moins 3 % sur un mois") for p in pct)
-    assert any(p.search("chute ≥ 3 %") for p in pct)
-    # « 7,3 % » est un résultat mesuré, pas le seuil 3 % : son 3 est une décimale.
-    assert not any(p.search("pire cas mesuré : −7,3 %") for p in pct)
-    # Un seuil de flux (nombre nu) ne doit pas rougir sur un pourcentage d'indice.
-    raw = [re.compile(p) for p in sb.value_patterns(-0.10, loose=True, unit="")]
-    assert any(p.search("flux > −0,10") for p in raw)
-    assert not any(p.search("l'indice a fait −10 % en trois séances") for p in raw)
-    # Forme monétaire, et neutralité des valeurs génériques.
-    dollars = [re.compile(p) for p in sb.value_patterns(8.0, loose=True, unit="$")]
-    assert any(p.search("prix ≤ 8 $") for p in dollars)
-    assert sb.value_patterns(0.0) == set() and sb.value_patterns(1.0) == set()

@@ -11,7 +11,6 @@
   "header.scanBtn": "▶ Scan the market",
   "header.scanning": "⟳ Scanning...",
   "header.winBtn": "{w} d",
-
   "glance.today": "Today:",
   "glance.qualified.one": "1 stock qualifies for the Market washout",
   "glance.qualified.many": "{n} stocks qualify for the Market washout",
@@ -24,7 +23,6 @@
   "intro.p1": "The Market washout is the only list whose profile has a measured average gain that is",
   "intro.positive": "positive",
   "intro.p2": ". The extreme zones below are research material (negative average gain) — not buy candidates. The screener never says \"buy\": it says where to look first, and why.",
-
   "panel.title": "How to read this dashboard",
   "panel.p.role": "This screen is not a trading tool and never says \"buy\" or \"sell\". It says where to look first, and why. Each list is a hypothesis under observation, not a recommendation.",
   "panel.p.frozen": "The entry rules of each list were written down, quantified and frozen BEFORE the first observation, together with their success criteria. That is the only way to avoid telling yourself a story after the fact: adjusting a threshold because you have seen the result amounts to rigging an exam already handed in. Changing any rule resets the observation clock to zero.",
@@ -32,7 +30,6 @@
   "panel.p.survivors": "Every historical figure shown is measured on the past, and on companies still listed today only: bankruptcies have vanished from the data, which necessarily makes those figures optimistic. Treat them as a ceiling of hope, never as a promise.",
   "panel.p.forward": "The only judge is the live tracking further down the page: each qualifying stock is recorded the very same day, at that day's price, then followed until the end of its observation window. Those results, and those alone, will settle the question.",
   "panel.p.checkpoint": "The checkpoint shown in the tracking table is an intermediate reading, never a sell order: systematically cutting the stocks that lag destroys the measured return of the whole set, because a large share of the strongest rises was still going through a negative phase at that stage.",
-
   "gloss.beta": "Sensitivity of the stock to the market: beta 1.6 = when the small-cap index moves −1%, this stock moves −1.6% on average.",
   "gloss.ruleDil": "No document preparing an issuance of new shares filed with the US regulator in the last 180 days: a pending issuance crushes the price when it lands.",
   "gloss.phenix": "A massacred stock, far from its yearly high, whose moves are calming down and which shows the first signs of stabilization.",
@@ -40,10 +37,8 @@
   "gloss.goingConcern": "In their official report, the auditor writes that they doubt the company will survive twelve months — announces a big move, without saying in which direction.",
   "gloss.dilution": "The company filed a document preparing an issuance of new shares: your stake will be reduced and the arrival of the shares crushes the price.",
   "gloss.prelist": "Stocks that pass the per-stock rules but are waiting for the market condition to be met.",
-
   "research.badge": "Statistical research — live observation in progress",
   "research.tip": "This list applies a hypothesis drawn from the past whose promise is not demonstrated: it is under full-scale observation.",
-
   "rules.title": "Entry rules — state today",
   "rules.why": "Why this rule",
   "rules.state.ok": "met",
@@ -54,7 +49,6 @@
   "rules.blocking.stock": "The market meets its condition, but no stock passes all the per-stock rules today.",
   "rules.blocking.unknown": "The state of the market could not be measured today: as a precaution, no list is produced.",
   "rules.more": "More about this list",
-
   "market.section.title": "Market washout",
   "market.section.startHere": "— start here",
   "market.intro": "This list only activates on days when the small-cap market as a whole declines: when everything falls at once, stocks get marked down without anything having happened to them in particular. On rising days it stays empty, and that is the expected behaviour — not a malfunction. The display order follows the stock's own fall: the share of its decline that the market's decline does not explain.",
@@ -79,9 +73,7 @@
   "market.buy.body": ": read the recent filings (the catalyst is in the news, not in our figures) · check the bid/ask spread (if it is 3%, you need +3% just to break even) · size the position to survive −50%.",
   "market.more.research": "What this list is worth",
   "market.more.depth": "The display order",
-
   "quiet.section.title": "Quiet washout — {w} d window",
-  "quiet.primary": " · reference window",
   "quiet.intro": "Same idea, different signature: a stock collapsing in complete indifference — no surge in volume, no money fleeing — looks like a mechanical oversold move rather than a deserved shipwreck. The same measurement is observed over three durations declared in advance and published together: none of them is \"the right one\", the short ones see the flash purges the long one misses, and vice versa.",
   "quiet.rule.price": "Price below the cap",
   "quiet.rule.dil": "No pending dilution",
@@ -104,14 +96,12 @@
   "quiet.more.windows": "Why three windows",
   "quiet.more.flash": "The flash crash flag",
   "quiet.more.tracking": "The tracking journal",
-
   "stats.esperance": "measured average gain at 3 months",
   "stats.mediane": "median stock",
   "stats.pExplode": "frequency of doublings",
   "stats.pCrash": "frequency of halvings",
   "stats.t": "robustness test",
   "stats.rules": "frozen rules active",
-
   "chip.price": "price",
   "chip.priceMax": "/ max {x} $",
   "chip.1m": "1 month",
@@ -126,7 +116,6 @@
   "chip.vol": "volume",
   "chip.volMax": "/ max {x}×",
   "chip.thrHidden": "/ threshold not shown",
-
   "tracking.title": "Tracking of qualifying stocks",
   "tracking.subtitle": "position against the trajectories measured on the past — information, never a sell order",
   "tracking.empty": "No stock recorded yet — waiting for the first bearish market. The journal started on July 6, 2026; each daily scan records its list, empty or not.",
@@ -161,7 +150,6 @@
   "checkpoint.window_closed": "{h} d window closed",
   "checkpoint.too_early": "too early",
   "tracking.endOfWindow": "end-of-window result:",
-
   "perf.title": "Real results of the selections",
   "perf.subtitle": "measured live, with nothing erased — this is the table that will decide",
   "perf.intro": "Every stock that shows up in a scan is recorded the same day, at that day's price, then tracked until today. The list of selections is frozen in advance and never rewritten afterwards: that is what sets these figures apart from the ones measured on the past, where the companies that disappeared were erased from the data. A stock whose prices are no longer published drops out of the tracked count — the gap between the two numbers below measures it.",
@@ -184,7 +172,6 @@
   "perf.note.unknown": "\"Recorded before the profiles\": rows from scans older than the two profiles. Their compartment is unknown and will stay that way — they still count in the whole basket.",
   "perf.empty": "No selection tracked yet. The table fills itself as the daily scans accumulate: a stock enters on the day it first appears, and never leaves.",
   "perf.unavailable": "Real results temporarily unavailable. The tracking keeps running server-side; the rest of the page is up to date.",
-
   "zones.title": "🔥🚀 Extreme zones — to study, not to buy",
   "zones.intro": "These two profiles come from an earlier hypothesis: spotting the stocks sitting at the extremes of the day's distribution, where exploration saw the strongest rises concentrate. It was tested once and for all in July 2026, with its success criteria written in advance, and it was refuted: doublings are indeed far more frequent there, so are collapses, and the measured average gain stays negative in both cases. The profiles remain on screen because they select the pool shown here and because they are material for human research — never a buy list.",
   "zones.tip": "Zones where both the strongest rises and the worst collapses concentrate: reading the file replaces the figure there.",
@@ -194,7 +181,6 @@
   "filters.phenix": "🔥 Phoenix ({n})",
   "zones.empty.scanning": "Scan in progress... try again in a few moments",
   "zones.empty.noMatch": "No candidate with these filters",
-
   "profile.fusee.label": "Rocket",
   "profile.phenix.label": "Phoenix",
   "badge.refuted": "hypothesis tested and refuted in July 2026",
@@ -206,7 +192,6 @@
   "profile.phenix.crashLabel": "· −50%:",
   "profile.phenix.crashVal": "2.3× the base rate",
   "profile.phenix.espVal": "−11%",
-
   "card.today": "% today",
   "card.mktCap": "Mkt Cap",
   "card.volRatio": "Vol Ratio",
@@ -223,7 +208,6 @@
   "analyze.profile.none": "none",
   "analyze.none": "None",
   "analyze.prompt": "You are an analyst specialized in US small caps. Search for recent news on this stock (last 90 days: 8-K, press releases, refinancing, clinical trials, contracts, delisting threat), then give a concise brief.\n\nStock: {ticker} — {name}\nSector: {sector} | Price: ${price}\nMarket Cap: ${marketCap}M | Volume ratio 10d/50d: {volumeRatio}x\n1-month performance: {change1m}%\nDetected profile: {profile}\nPositives: {positives}\nRed flags: {flags}\n\nContext: our study showed the outcome depends on the CONTENT of upcoming news — not on the figures above. The figures say where to look; the news says what to think.\nAnswer in English. Structure:\n1. Recent news found (dated, sourced — or \"nothing found\", that is information too)\n2. Possible catalysts and main risk given this news\n3. One-sentence verdict (research, not advice)",
-
   "footer.removed.title": "Removed from the interface",
   "footer.removed.body": ": the 0-10 grade (refuted by its own study — its ten slices all lost against the index) · the model-computed probability of doubling (terminal verdict, never deployed) · breakout alerts (measured non-predictive trigger) — replaced by the \"new Market washout entry\" alert.",
   "footer.trace.title": "Traceability",
