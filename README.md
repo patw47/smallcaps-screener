@@ -155,6 +155,21 @@ curl http://localhost:8000/api/performance                 # performance of past
 DATA_DIR=/tmp/screener_test PYTHONPATH=backend pytest backend/tests/
 ```
 
+### Verification targets
+
+Every gate is a `make` target; `make test` is the offline suite.
+
+| Target | Guards against |
+| --- | --- |
+| `make test` | Regressions in the offline deterministic suite. |
+| `make check-edge` | Any frozen v4/v5 value or private-protocol reference reaching the repo. |
+| `make check-demo` | A threshold key or value reaching the browser in presentation mode. |
+| `make check-jargon` | Version numbers, internal vocabulary or protocol references reaching the screen. |
+| `make i18n-parity` / `make check-i18n` | Missing translations; hard-coded UI strings in the JSX. |
+| `make check-criteria-coverage` | A rule or scoring key absent from the public criteria index. |
+| `make build-frontend` | JSX that no longer compiles (containerised `vite build`). |
+| `make docs-build` | A broken public documentation build (strict MkDocs). |
+
 ## Configuration
 
 Screener thresholds live in the `FILTERS` dict at the top of
@@ -165,9 +180,27 @@ the code ships neutral defaults, and the real values load at startup from
 `REQUIRE_LOCAL_CONFIG=1` in production so a scan refuses to start without it.
 `make check-edge` gates the repo against value leaks.
 
+### Presentation mode (Epic 8 S6)
+
+`GET /api/scan?demo=1` — or `DEMO_MODE=1` on the instance — returns a response with **no
+rule threshold at any depth**: filtering happens before serialization, so nothing hidden
+reaches the browser (masking in the JSX would still ship the values to the inspector).
+`DEMO_MODE` set on the instance cannot be lifted by a client; the query parameter only
+turns masking on.
+
+Still served: expectancy, median, probabilities, robustness test, case counts, each rule's
+existence, meaning and state of the day, and the **observation schedule** — a measurement
+protocol, not a selection criterion. Hidden: price cap, drop thresholds, money-flow
+threshold, volume multiple, checkpoint threshold, primary window.
+
+Tooltip texts quoting a threshold need a redacted twin under `display.gloss_demo` in
+`config/local.yml`; a runtime net blanks any text still quoting a loaded value.
+`make check-demo` gates both the keys and the served texts.
+
 | Variable | Used by | Required | Description |
 | --- | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | Frontend (`VITE_ANTHROPIC_API_KEY`) | Only for AI analysis | Key for the browser-side Claude analysis button. |
+| `DEMO_MODE` | Backend | No (default off) | Presentation mode for the whole instance — thresholds stripped before serialization. Cannot be disabled per request. |
 | `SCAN_EVERY_HOURS` | Backend | No (default 24) | Interval between automatic background scans. |
 | `SCAN_TRADING_DAYS_ONLY` | Backend | No (default `true`) | Skip weekend auto-scans. |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Backend | No | Enable cohort alerts. Absent → alerting silently disabled. |
@@ -178,7 +211,7 @@ the code ships neutral defaults, and the real values load at startup from
 
 | Endpoint | Method | Description |
 | --- | --- | --- |
-| `/api/scan` | GET | Ranked results + washout cohorts (non-blocking; triggers a background scan if stale). |
+| `/api/scan` | GET | Ranked results + washout cohorts (non-blocking; triggers a background scan if stale). `?demo=1` → presentation mode, thresholds stripped before serialization. |
 | `/api/scan/status` | GET | `scanning` / `phase` / `progress`. |
 | `/api/scan/force` | POST | Force a fresh background scan. |
 | `/api/performance` | GET | Return of past selections since first flagged, vs IWM. |
