@@ -79,6 +79,11 @@ const noteText = (note, ns) => note?.code
 
 const statusText = (s) => s?.code ? t(`status.${s.code}`, { d: s.d, cp: s.cp }) : "";
 
+// Drapeau d'un titre. Deux formes coexistent : les drapeaux hérités sont des phrases
+// fabriquées côté serveur, ceux de contexte (Epic 1 S7) sont des codes + variables
+// traduits ici — comme les notes et statuts depuis l'Epic 8 S1.
+const flagText = (f) => f?.code ? t(`flag.${f.code}`, { d: f.d }) : f;
+
 const checkpointText = (c, thr) => c?.code
   ? t(`checkpoint.${c.code}${c.code === "week_one" && thr == null ? ".hidden" : ""}`,
     { h: c.h, thr: pctFmt(thr, 0) })
@@ -863,12 +868,15 @@ function StockCard({ stock, onAnalyze, analysis, isLoading }) {
             borderRadius: 20, border: "1px solid #f0c04033",
           }}>{t("card.distress")}</Tip>
         )}
-        {stock.flags.map(f => (
-          <Tip key={f} tip={/dilution/i.test(f) ? t("gloss.dilution") : f} style={{
-            background: "#ff6b6b0d", color: "#ff6b6b", fontSize: 10, padding: "3px 8px",
-            borderRadius: 20, border: "1px solid #ff6b6b22",
-          }}>⚠ {f}</Tip>
-        ))}
+        {stock.flags.map((f, i) => {
+          const texte = flagText(f);
+          return (
+            <Tip key={f?.code ?? `${i}`} tip={/dilution/i.test(texte) ? t("gloss.dilution") : texte} style={{
+              background: "#ff6b6b0d", color: "#ff6b6b", fontSize: 10, padding: "3px 8px",
+              borderRadius: 20, border: "1px solid #ff6b6b22",
+            }}>⚠ {texte}</Tip>
+          );
+        })}
         {stock.positives.map(p => (
           <span key={p} style={{ background: "#00ff9d0d", color: "#00cc7a", fontSize: 10, padding: "3px 8px", borderRadius: 20, border: "1px solid #00ff9d22" }}>✓ {p}</span>
         ))}
@@ -970,7 +978,7 @@ export default function App() {
       marketCap: stock.marketCap, volumeRatio: stock.volumeRatio, change1m: stock.change1m,
       profile: t(`analyze.profile.${stock.isPhenix ? "phenix" : stock.isFusee ? "fusee" : "none"}`),
       positives: stock.positives.join(", ") || "—",
-      flags: stock.flags.length > 0 ? stock.flags.join(", ") : t("analyze.none"),
+      flags: stock.flags.length > 0 ? stock.flags.map(flagText).join(", ") : t("analyze.none"),
     });
 
     try {
