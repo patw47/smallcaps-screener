@@ -41,6 +41,9 @@ CFG: dict = {
             "tstat": "", "profondeur": "", "rule_price": "", "rule_chg": "", "rule_mkt": "",
             "checkpoint": "", "checkpoint_above": "", "checkpoint_below": "",
             "stops_footer": "", "first_pick": "",
+            # Epic 8 S3 — infobulle : UNE phrase citant le seuil (le survol
+            # n'existe pas au tactile, les paragraphes vont dans les dépliants).
+            "tip_checkpoint": "",
         },
     },
 }
