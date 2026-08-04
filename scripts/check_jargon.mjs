@@ -26,8 +26,14 @@ const BANNED = [
 const I18N = ["frontend/i18n/fr.json", "frontend/i18n/en.json"];
 const SKIP = new Set(["i18n", "node_modules", "dist", "v", "cache"]);
 const EXT = /\.(jsx?|mjs)$/;
-// Chaînes littérales simple/double quote (pas les gabarits : ils ne portent que du CSS).
-const STRINGS = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+// Les deux formes de texte destiné à l'écran. Le reste d'une ligne de JSX est du
+// code (v4_cohort, display.v4, la variable v4…) : des identifiants, jamais affichés.
+const SCANNABLE = [
+  // chaînes littérales simple/double quote (pas les gabarits : ils ne portent que du CSS)
+  /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g,
+  // texte JSX entre deux balises, sans expression {…} — <span>Cohorte v4</span>
+  />([^<>{}]+)</g,
+];
 
 function* walk(dir) {
   for (const name of readdirSync(dir)) {
@@ -48,11 +54,15 @@ const report = (where, what, text) => {
 };
 
 const scan = (where, text) => {
-  if (text.includes("://")) return;  // URL : jamais du texte affiché (…/v1/messages)
+  const clean = text.replace(/\w+:\/\/\S+/g, " ");  // retire les URL (…/v1/messages), pas la phrase
   for (const { re, what } of BANNED) {
-    if (re.test(text)) report(where, what, text);
+    if (re.test(clean)) report(where, what, text);
   }
 };
+
+// ponytail: numéro de ligne recalculé par occurrence — fichiers de quelques
+// centaines de lignes, un index cumulé ne se justifierait pas.
+const lineOf = (src, idx) => src.slice(0, idx).split("\n").length;
 
 for (const file of I18N) {
   for (const [key, value] of Object.entries(JSON.parse(readFileSync(file, "utf8")))) {
@@ -61,9 +71,10 @@ for (const file of I18N) {
 }
 
 for (const file of walk("frontend")) {
-  stripComments(readFileSync(file, "utf8")).split("\n").forEach((line, i) => {
-    for (const str of line.match(STRINGS) ?? []) scan(`${file}:${i + 1}`, str);
-  });
+  const src = stripComments(readFileSync(file, "utf8"));
+  for (const re of SCANNABLE) {
+    for (const m of src.matchAll(re)) scan(`${file}:${lineOf(src, m.index)}`, m[1] ?? m[0]);
+  }
 }
 
 if (!fail) console.log("check-jargon OK");
