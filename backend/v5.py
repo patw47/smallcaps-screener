@@ -55,8 +55,6 @@ CFG: dict = {
     },
 }
 
-# Epic 8 S6 — voir v4.py : version expurgée des textes citant un seuil.
-CFG["display"]["gloss_demo"] = dict.fromkeys(CFG["display"]["gloss"], "")
 
 
 def _ret(close: pd.Series | None, w: int) -> float | None:

@@ -78,8 +78,10 @@ def test_entry_rules(edgar_stub):
     assert [e["ticker"] for e in cohort] == ["OK"]
     assert note["code"] == "market_bearish" and note["n"] == 1
     e = cohort[0]
-    assert e["margins"]["price"] == pytest.approx(v4.CFG["price_max"] - 5.0)
-    assert e["margins"]["change_1m"] == pytest.approx(v4.CFG["chg1m_max"] - (-0.10))
+    # `margins` (distance au seuil) n'est plus produite : ajoutée au prix affiché, elle
+    # redonnait le plafond exactement (Epic 8 S7).
+    assert "margins" not in e
+    assert e["price"] == 5.0 and e["change_1m"] == -0.10
     assert e["mkt21"] < 0
 
 

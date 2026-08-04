@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from screener_backend import run_scan, scan_state, FILTERS, OUTPUT_FILE, demo_payload
+from screener_backend import run_scan, scan_state, FILTERS, OUTPUT_FILE
 from track import run_tracker, _empty_result
 
 # Scan automatique périodique (heures) — les snapshots s'accumulent pour le suivi de perf
@@ -22,10 +22,6 @@ SCAN_EVERY_HOURS = float(os.environ.get("SCAN_EVERY_HOURS", "24"))
 # Ne scanner que les jours de bourse (lun-ven) : évite des snapshots week-end redondants
 # (marché fermé → mêmes prix que vendredi). Pas de calendrier de fériés (hors scope).
 SCAN_TRADING_DAYS_ONLY = os.environ.get("SCAN_TRADING_DAYS_ONLY", "true").lower() in ("1", "true", "yes")
-# Mode présentation (Epic 8 S6) : posé sur l'instance, il ne peut plus être levé par le
-# client — ?demo=1 ne fait que l'activer pour une réponse. Un masquage qu'une requête
-# suffit à retirer n'en serait pas un.
-DEMO_MODE = os.environ.get("DEMO_MODE", "").lower() in ("1", "true", "yes")
 
 app = FastAPI(title="SmallCaps Screener API", version="1.0.0")
 
@@ -97,11 +93,6 @@ def _is_trading_day(dt: datetime | None = None) -> bool:
     return d.weekday() < 5
 
 
-def _out(payload: dict, demo: bool) -> dict:
-    """Dernier passage avant sérialisation : en présentation, le payload part filtré."""
-    return demo_payload(payload) if (demo or DEMO_MODE) else payload
-
-
 def _last_result() -> dict | None:
     """Dernier résultat connu : mémoire, sinon fichier (même périmé)."""
     if _cached_data is not None:
@@ -139,29 +130,26 @@ async def _daily_scanner():
 
 
 @app.get("/api/scan", summary="Retourne les données (non bloquant, scan en arrière-plan)")
-async def get_scan(demo: bool = False):
-    """`demo=1` (ou DEMO_MODE sur l'instance) → réponse de présentation : aucune valeur
-    de seuil, textes du glossaire expurgés. Le filtrage a lieu ICI, avant la
-    sérialisation — rien de masqué n'atteint le navigateur."""
+async def get_scan():
     # Cache frais → retour direct
     cached = _load_json_cache()
     if cached:
-        return _out(cached, demo)
+        return cached
 
     # Résultat périmé connu → stale-while-revalidate : on le sert et on rafraîchit en fond
     data = _last_result()
     if data is not None:
         await _ensure_background_scan()
-        return _out({**data, "scanning": scan_state["scanning"],
-                     "phase": scan_state["phase"], "stale": True}, demo)
+        return {**data, "scanning": scan_state["scanning"],
+                "phase": scan_state["phase"], "stale": True}
 
     # Aucune donnée encore → démarrer un scan et répondre IMMÉDIATEMENT (jamais de blocage)
     await _ensure_background_scan()
-    return _out({
+    return {
         "scanned_at": None, "universe_size": 0, "candidates": 0,
         "stocks": [], "rejection_stats": {},
         "scanning": scan_state["scanning"], "phase": scan_state["phase"],
-    }, demo)
+    }
 
 
 @app.get("/api/scan/status", summary="Statut du scan en cours")

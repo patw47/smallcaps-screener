@@ -11,7 +11,6 @@
   "header.scanBtn": "▶ Scanner le marché",
   "header.scanning": "⟳ Scan...",
   "header.winBtn": "{w} j",
-
   "glance.today": "Aujourd'hui :",
   "glance.qualified.one": "1 titre qualifié en Purge de marché",
   "glance.qualified.many": "{n} titres qualifiés en Purge de marché",
@@ -24,7 +23,6 @@
   "intro.p1": "La Purge de marché est la seule liste dont le profil a un gain moyen mesuré",
   "intro.positive": "positif",
   "intro.p2": ". Les zones extrêmes plus bas sont de la matière à recherche (gain moyen négatif) — pas des candidats à l'achat. Le screener ne dit jamais « achète » : il dit où regarder en premier, et pourquoi.",
-
   "panel.title": "Comment lire ce tableau de bord",
   "panel.p.role": "Cet écran n'est pas un outil de trading et ne dit jamais « achète » ni « vends ». Il dit où regarder en premier, et pourquoi. Chaque liste est une hypothèse en cours d'observation, pas une recommandation.",
   "panel.p.frozen": "Les règles d'entrée de chaque liste ont été écrites, chiffrées et figées AVANT la première observation, en même temps que leurs critères de succès. C'est la seule façon d'éviter de se raconter une histoire après coup : ajuster un seuil parce qu'on a vu le résultat revient à truquer un examen déjà rendu. Toute modification d'une règle remet à zéro le compteur d'observation.",
@@ -32,7 +30,6 @@
   "panel.p.survivors": "Tous les chiffres historiques affichés sont mesurés sur le passé, et sur les sociétés encore cotées uniquement : les faillites ont disparu des données, ce qui rend forcément ces chiffres optimistes. À traiter comme un plafond d'espoir, jamais comme une promesse.",
   "panel.p.forward": "Le seul juge est le suivi en direct, plus bas dans la page : chaque titre qualifié est enregistré le jour même, à son prix du jour, puis suivi jusqu'à la fin de sa fenêtre d'observation. Ce sont ces résultats-là, et eux seuls, qui trancheront.",
   "panel.p.checkpoint": "Le point de contrôle affiché dans le suivi est une lecture intermédiaire, jamais un ordre de vente : couper systématiquement les titres en retard détruit le rendement mesuré de l'ensemble, parce qu'une part importante des plus fortes hausses passait encore par une phase négative à ce stade.",
-
   "gloss.beta": "Sensibilité du titre au marché : bêta 1,6 = quand l'indice small caps fait −1 %, ce titre fait −1,6 % en moyenne.",
   "gloss.ruleDil": "Aucun document préparant une émission de nouvelles actions déposé au régulateur américain dans les 180 derniers jours : une émission en attente écrase le cours à son arrivée.",
   "gloss.phenix": "Titre massacré, loin de son plus-haut annuel, dont les mouvements se calment et qui montre les premiers signes de stabilisation.",
@@ -40,10 +37,8 @@
   "gloss.goingConcern": "Dans son rapport officiel, l'auditeur écrit douter que l'entreprise survive douze mois — annonce un gros mouvement, sans en dire le sens.",
   "gloss.dilution": "L'entreprise a déposé un document préparant une émission de nouvelles actions : ta part sera réduite et l'arrivée des titres écrase le cours.",
   "gloss.prelist": "Titres qui passent les règles propres au titre mais attendent que la condition de marché soit remplie.",
-
   "research.badge": "Recherche statistique — observation en direct en cours",
   "research.tip": "Cette liste applique une hypothèse tirée du passé, dont la promesse n'est pas démontrée : elle est en cours d'observation grandeur nature.",
-
   "rules.title": "Les règles d'entrée — état du jour",
   "rules.why": "Pourquoi cette règle",
   "rules.state.ok": "remplie",
@@ -54,7 +49,6 @@
   "rules.blocking.stock": "Le marché remplit sa condition, mais aucun titre ne passe l'ensemble des règles propres au titre aujourd'hui.",
   "rules.blocking.unknown": "L'état du marché n'a pas pu être mesuré aujourd'hui : par prudence, aucune liste n'est produite.",
   "rules.more": "En savoir plus sur cette liste",
-
   "market.section.title": "Purge de marché",
   "market.section.startHere": "— commencer ici",
   "market.intro": "Cette liste ne s'active que les jours où l'ensemble du marché des petites capitalisations recule : quand tout baisse en même temps, des titres sont bradés sans qu'il leur soit rien arrivé de particulier. Les jours de hausse, elle reste vide, et c'est le fonctionnement attendu — pas une panne. L'ordre d'affichage suit la chute propre au titre : la part de sa baisse que le recul du marché n'explique pas.",
@@ -79,9 +73,7 @@
   "market.buy.body": " : lire les dépôts récents (le catalyseur est dans les news, pas dans nos chiffres) · vérifier l'écart achat/vente (s'il fait 3 %, il faut +3 % pour revenir à zéro) · dimensionner pour survivre à −50 %.",
   "market.more.research": "Ce que vaut cette liste",
   "market.more.depth": "L'ordre d'affichage",
-
   "quiet.section.title": "Purge silencieuse — fenêtre {w} j",
-  "quiet.primary": " · fenêtre de référence",
   "quiet.intro": "Même idée, autre signature : un titre qui s'effondre dans l'indifférence — sans emballement du volume, sans fuite d'argent — ressemble à une survente mécanique plutôt qu'à un naufrage mérité. La même mesure est observée sur trois durées déclarées à l'avance et publiées ensemble : aucune n'est « la bonne », les courtes voient les purges éclair que les longues manquent, et inversement.",
   "quiet.rule.price": "Prix au-dessous du plafond",
   "quiet.rule.dil": "Aucune dilution en attente",
@@ -104,14 +96,12 @@
   "quiet.more.windows": "Pourquoi trois fenêtres",
   "quiet.more.flash": "Le drapeau krach éclair",
   "quiet.more.tracking": "Le journal de suivi",
-
   "stats.esperance": "gain moyen mesuré à 3 mois",
   "stats.mediane": "titre médian",
   "stats.pExplode": "fréquence des doublements",
   "stats.pCrash": "fréquence des chutes de moitié",
   "stats.t": "test de robustesse",
   "stats.rules": "règles figées actives",
-
   "chip.price": "prix",
   "chip.priceMax": "/ seuil {x} $",
   "chip.1m": "1 mois",
@@ -126,7 +116,6 @@
   "chip.vol": "volume",
   "chip.volMax": "/ max {x}×",
   "chip.thrHidden": "/ seuil non montré",
-
   "tracking.title": "Suivi des titres qualifiés",
   "tracking.subtitle": "position par rapport aux trajectoires mesurées sur le passé — information, jamais un ordre de vente",
   "tracking.empty": "Aucun titre enregistré pour l'instant — en attente du premier marché baissier. Le journal a démarré le 6 juillet 2026 ; chaque scan quotidien enregistre sa liste, vide ou pas.",
@@ -161,7 +150,6 @@
   "checkpoint.window_closed": "fenêtre {h} j close",
   "checkpoint.too_early": "trop tôt",
   "tracking.endOfWindow": "résultat en fin de fenêtre :",
-
   "perf.title": "Résultats réels des sélections",
   "perf.subtitle": "mesurés en direct, sans effacer les disparus — c'est ce tableau qui tranchera",
   "perf.intro": "Chaque titre apparu dans un scan est enregistré le jour même, à son prix du jour, puis suivi jusqu'à aujourd'hui. La liste des sélections est figée à l'avance et n'est jamais réécrite après coup : c'est ce qui distingue ces chiffres de ceux mesurés sur le passé, où les sociétés disparues ont été effacées des données. Un titre dont les cours ne sont plus publiés sort du décompte suivi — l'écart entre les deux nombres ci-dessous le mesure.",
@@ -184,7 +172,6 @@
   "perf.note.unknown": "« Enregistrés avant les profils » : lignes venues de scans antérieurs à l'existence des deux profils. Leur compartiment est inconnu et le restera — elles comptent dans l'ensemble.",
   "perf.empty": "Aucune sélection suivie pour l'instant. Le tableau se remplit seul au fil des scans quotidiens : un titre y entre le jour de sa première apparition, et n'en sort plus.",
   "perf.unavailable": "Résultats réels momentanément indisponibles. Le suivi continue de tourner côté serveur ; le reste de la page est à jour.",
-
   "zones.title": "🔥🚀 Zones extrêmes — à étudier, pas à acheter",
   "zones.intro": "Ces deux profils viennent d'une hypothèse antérieure : repérer les titres situés aux extrêmes de la distribution du jour, là où l'exploration voyait se concentrer les plus fortes hausses. Elle a été testée une fois pour toutes en juillet 2026, avec ses critères de succès écrits d'avance, et elle a été réfutée : les doublements y sont bien plus fréquents, les effondrements aussi, et le gain moyen mesuré reste négatif dans les deux cas. Les profils restent affichés parce qu'ils sélectionnent le vivier montré ici et qu'ils constituent une matière de recherche humaine — jamais une liste d'achat.",
   "zones.tip": "Zones où se concentrent à la fois les plus fortes hausses et les pires effondrements : une lecture de dossier y remplace le chiffre.",
@@ -194,7 +181,6 @@
   "filters.phenix": "🔥 Phénix ({n})",
   "zones.empty.scanning": "Scan en cours... relancez dans quelques instants",
   "zones.empty.noMatch": "Aucune candidate avec ces filtres",
-
   "profile.fusee.label": "Fusée",
   "profile.phenix.label": "Phénix",
   "badge.refuted": "hypothèse testée et réfutée en juillet 2026",
@@ -206,7 +192,6 @@
   "profile.phenix.crashLabel": "· −50 % :",
   "profile.phenix.crashVal": "2,3× la base",
   "profile.phenix.espVal": "−11 %",
-
   "card.today": "% today",
   "card.mktCap": "Mkt Cap",
   "card.volRatio": "Vol Ratio",
@@ -223,7 +208,6 @@
   "analyze.profile.none": "aucun",
   "analyze.none": "Aucun",
   "analyze.prompt": "Tu es un analyste spécialisé small caps US. Cherche les news récentes sur cette action (90 derniers jours : 8-K, communiqués, refinancement, essais cliniques, contrats, menace de retrait de la cote), puis donne un brief concis.\n\nAction: {ticker} — {name}\nSecteur: {sector} | Prix: ${price}\nMarket Cap: ${marketCap}M | Volume ratio 10j/50j: {volumeRatio}x\nPerformance 1 mois: {change1m}%\nProfil détecté: {profile}\nPoints positifs: {positives}\nRed flags: {flags}\n\nContexte : notre étude a montré que l'issue dépend du CONTENU des news à venir — pas des chiffres ci-dessus. Les chiffres disent où regarder ; les news disent quoi penser.\nRéponds en français. Structure:\n1. News récentes trouvées (datées, sourcées — ou \"rien trouvé\", c'est une info aussi)\n2. Catalyseurs possibles et risque principal au vu de ces news\n3. Verdict en une phrase (recherche, pas conseil)",
-
   "footer.removed.title": "Retiré de l'interface",
   "footer.removed.body": " : la note de 0 à 10 (réfutée par sa propre étude — ses dix tranches sortaient perdantes face à l'indice) · la probabilité de doublement calculée par modèle (verdict terminal, jamais déployée) · les alertes de cassure (déclencheur mesuré non prédictif) — remplacées par l'alerte « nouvelle entrée en Purge de marché ».",
   "footer.trace.title": "Traçabilité",

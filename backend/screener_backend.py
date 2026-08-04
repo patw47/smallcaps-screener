@@ -1251,72 +1251,66 @@ def run_scan(tickers: list[str] | None = None) -> dict:
 
 def _display_params() -> dict:
     """
-    Paramètres d'affichage v4/v5 pour le frontend (Epic 6 S2) : seuils des règles,
-    chiffres gelés des bandeaux et textes du glossaire UI. Tout vient de la config
-    locale (defaults neutres sans elle) — le JSX public ne porte plus aucune valeur.
-    Jamais consigné dans les snapshots (dérivable, et le suivi n'en a pas besoin).
+    Paramètres d'affichage v4/v5 pour le frontend (Epic 6 S2) : chiffres gelés des
+    bandeaux et textes du glossaire UI. Tout vient de la config locale (defaults
+    neutres sans elle). Jamais consigné dans les snapshots (dérivable).
 
-    `checkpoint` porte le calendrier d'observation des deux familles (jour du point
-    de contrôle, horizon de clôture) : protocole de MESURE, donc affiché même en
-    mode présentation — le connaître ne permet de reconstituer aucune liste. Seul
-    `thr`, qui est un seuil, relève de ce qui se masque (Epic 8 S6).
+    **Aucune valeur de seuil n'est construite ici** (Epic 8 S7) : le S6 en avait fait
+    un mode optionnel, or un masquage optionnel est un masquage qu'on oublie. Ce qui
+    n'existe pas dans la réponse ne peut pas être servi par erreur.
+
+    Ce qui reste : `mkt_window` et `windows` (valeurs publiques depuis l'Epic 6 S2, et
+    portées par le sélecteur de toute façon) et `checkpoint.day` / `horizon` — le
+    calendrier d'observation, protocole de MESURE et non critère de sélection : le
+    connaître ne reconstitue aucune liste. Les textes passent par `_redact()`.
     """
     import v4
     import v5
-    # gloss_demo ne sort JAMAIS tel quel : c'est la réserve de textes expurgés, servie
-    # à la place de gloss par demo_payload() (Epic 8 S6), jamais en plus.
-    d4 = {k: v for k, v in v4.CFG["display"].items() if k != "gloss_demo"}
-    d5 = {k: v for k, v in v5.CFG["display"].items() if k != "gloss_demo"}
+    # `primary_window` est la fenêtre de référence — la seule fenêtre dont la valeur
+    # réelle soit privée (default versionné à 0). Elle ne sort pas ; les trois fenêtres
+    # du sélecteur, elles, restent (valeurs publiques depuis l'Epic 6 S2).
+    hors = {"gloss", "primary_window"}
+    d4 = {k: v for k, v in v4.CFG["display"].items() if k not in hors}
+    d5 = {k: v for k, v in v5.CFG["display"].items() if k not in hors}
     return {
         "v4": {
-            "rules": {"price_max": v4.CFG["price_max"], "chg1m_max": v4.CFG["chg1m_max"],
-                      "mkt_window": v4.CFG["mkt_window"]},
-            "checkpoint": {"day": v4.CFG["checkpoint_day"], "thr": v4.CFG["checkpoint_thr"],
-                           "horizon": v4.CFG["horizon"]},
+            "rules": {"mkt_window": v4.CFG["mkt_window"]},
+            "checkpoint": {"day": v4.CFG["checkpoint_day"], "horizon": v4.CFG["horizon"]},
+            "gloss": _redact(v4.CFG["display"].get("gloss") or {}),
             **d4,
         },
         "v5": {
-            "rules": {"price_max": v5.CFG["price_max"], "chg_max": v5.CFG["chg_max"],
-                      "cmf_min": v5.CFG["cmf_min"], "volcalm_max": v5.CFG["volcalm_max"]},
-            "checkpoint": {"day": v5.CFG["checkpoint_day"], "thr": v5.CFG["checkpoint_thr"],
-                           "horizon": v5.CFG["horizon"]},
+            "rules": {},
+            "checkpoint": {"day": v5.CFG["checkpoint_day"], "horizon": v5.CFG["horizon"]},
             "windows": list(v5.CFG["windows"]),
+            "gloss": _redact(v5.CFG["display"].get("gloss") or {}),
             **d5,
         },
     }
 
 
 # ---------------------------------------------------------------------------
-# Mode présentation (Epic 8 S6) — montrer les résultats, masquer les critères.
+# Seuils de règle : jamais servis (Epic 8 S7 — révision de la décision du S6).
 #
-# Le filtrage a lieu AVANT la sérialisation (backend/api.py) : rien de masqué
-# n'atteint le navigateur, sans quoi le masquage serait cosmétique et l'inspecteur
-# suffirait à tout lire. Restent servis : espérance, médiane, probabilités, test de
-# robustesse, nombre de cas, justifications chiffrées, existence/sens/état de chaque
-# règle, et le calendrier d'observation (`checkpoint.day` / `horizon`) — protocole de
-# MESURE, pas critère de sélection : le connaître ne reconstitue aucune liste.
+# Le S6 en avait fait un mode optionnel. Un masquage optionnel est un masquage
+# qu'on oublie : l'écran est déjà affiché quand on pense à l'activer. Les seuils
+# ne sont donc plus construits du tout — il n'y a plus de chemin qui les serve,
+# donc plus rien à désactiver par erreur.
 #
-# Fuite par inférence assumée : les valeurs des titres qualifiants restent affichées,
-# donc le pire d'entre eux BORNE le plafond de prix. Une borne n'est pas la valeur, et
-# la supprimer reviendrait à ne plus rien montrer. `margins`, en revanche, EST la
-# valeur (prix + marge = seuil, exactement) : elle disparaît.
+# L'écran garde tout le reste : espérance, médiane, probabilités, test de
+# robustesse, nombre de cas, justifications chiffrées, existence, sens et état du
+# jour de chaque règle, et le calendrier d'observation (`checkpoint.day` /
+# `horizon`) — protocole de MESURE, pas critère de sélection : le connaître ne
+# reconstitue aucune liste. Les valeurs vivent dans la page de référence privée.
+#
+# Fuite par inférence assumée : les valeurs des titres qualifiants restent
+# affichées, donc le pire d'entre eux BORNE le plafond de prix. Une borne n'est
+# pas la valeur, et la supprimer reviendrait à ne plus rien montrer.
+#
+# `mkt_window` et `windows` restent servies : leur valeur vit en clair dans le
+# code public depuis l'Epic 6 S2 (defaults NEUTRES — les fenêtres n'ont jamais
+# fait partie de l'edge extrait), et le sélecteur les affiche de toute façon.
 # ---------------------------------------------------------------------------
-
-# Noms de clés portant une valeur de règle, supprimés à TOUTE profondeur.
-# `thr` = seuil du point de contrôle (son `day` et son `horizon` restent : calendrier).
-# `primary_window` = la fenêtre de référence, seule fenêtre dont la valeur réelle soit
-# privée (son default versionné vaut 0, « non configurée »).
-#
-# `mkt_window` n'y est PAS, et c'est délibéré : sa valeur vit en clair dans le code
-# public depuis l'Epic 6 S2 (default NEUTRE, comme `windows`, `checkpoint_day`,
-# `horizon` — les fenêtres n'ont jamais fait partie de l'edge extrait). Elle est en
-# outre portée par le nom du champ `mkt21` et par les fenêtres du sélecteur, restées
-# visibles. La masquer dans `rules` seulement donnerait l'illusion d'une protection
-# sans en apporter aucune — un masquage partiel est pire qu'un masquage assumé absent.
-DEMO_HIDDEN_KEYS = frozenset({
-    "price_max", "chg1m_max", "chg_max", "cmf_min", "volcalm_max",
-    "primary_window", "thr", "margins",
-})
 
 
 def value_patterns(value: float, loose: bool = False, unit: str | None = None) -> set[str]:
@@ -1372,63 +1366,43 @@ def value_patterns(value: float, loose: bool = False, unit: str | None = None) -
     return pats
 
 
-# Les SEUILS parmi les clés masquées, avec l'unité sous laquelle chacun s'écrit dans un
+# Les seuils jamais servis, avec l'unité sous laquelle chacun s'écrit dans un
 # texte. Les fenêtres n'y figurent pas : un nombre de séances s'écrit « 21 j », forme que
 # les fenêtres RESTÉES visibles (le sélecteur de la Purge silencieuse) portent aussi —
 # aucun contrôle automatique ne peut distinguer les deux.
-DEMO_HIDDEN_THRESHOLDS = {
+HIDDEN_THRESHOLDS = {
     "price_max": "$", "chg1m_max": "%", "chg_max": "%",
     "cmf_min": "", "volcalm_max": "×", "checkpoint_thr": "%",
 }
 
 
 def hidden_values() -> list[tuple[float, str]]:
-    """(valeur, unité) de chaque seuil masqué, tel qu'effectivement chargé (config privée
+    """(valeur, unité) de chaque seuil, tel qu'effectivement chargé (config privée
     comprise) — la matière du contrôle de non-fuite par les textes."""
     import v4
     import v5
     return [(float(cfg[k]), unit) for cfg in (v4.CFG, v5.CFG)
-            for k, unit in DEMO_HIDDEN_THRESHOLDS.items()
+            for k, unit in HIDDEN_THRESHOLDS.items()
             if isinstance(cfg.get(k), (int, float))]
 
 
-def _strip_keys(node):
-    """Copie de `node` privée des clés masquées, à toute profondeur."""
-    if isinstance(node, dict):
-        return {k: _strip_keys(v) for k, v in node.items() if k not in DEMO_HIDDEN_KEYS}
-    if isinstance(node, list):
-        return [_strip_keys(v) for v in node]
-    return node
-
-
-def demo_payload(payload: dict) -> dict:
+def _redact(gloss: dict) -> dict:
     """
-    Réponse de scan en mode présentation : clés de seuil retirées, textes du glossaire
-    remplacés par leur version expurgée (`gloss_demo` de la config privée).
-
-    Filet de sécurité : un texte qui contient encore une valeur masquée — parce que sa
-    version expurgée n'a pas été écrite — est VIDÉ plutôt que servi. La config privée
-    n'est pas versionnée, aucun gate de dépôt ne peut donc garantir son contenu ; c'est
-    le seul moyen qu'un oubli d'édition coûte une explication manquante et non une fuite.
+    Filet permanent : un texte d'affichage qui cite une valeur de seuil est VIDÉ plutôt
+    que servi. La config privée n'est pas versionnée, aucun gate de dépôt ne peut donc
+    garantir son contenu ; c'est le seul moyen qu'une phrase mal relue coûte une
+    explication manquante et non une fuite. Le message nomme la clé — un oubli ne reste
+    jamais silencieux.
     """
-    import v4
-    import v5
-    out = _strip_keys(payload)
     pats = [re.compile(p) for v, unit in hidden_values()
             for p in value_patterns(v, loose=True, unit=unit)]
-
-    for fam, cfg in (("v4", v4.CFG), ("v5", v5.CFG)):
-        block = (out.get("display") or {}).get(fam)
-        if not isinstance(block, dict):
-            continue
-        gloss = dict(block.get("gloss") or {})
-        for key, text in gloss.items():
-            redacted = cfg["display"]["gloss_demo"].get(key) or ""
-            gloss[key] = redacted or text
-            if any(p.search(gloss[key]) for p in pats):
-                print(f"[demo] texte {fam}.gloss.{key} cite un seuil sans version expurgée — vidé")
-                gloss[key] = ""
-        block["gloss"] = gloss
+    out = {}
+    for key, text in gloss.items():
+        if isinstance(text, str) and any(p.search(text) for p in pats):
+            print(f"[display] texte {key} cite un seuil — vidé (réécris-le sans le chiffre)")
+            out[key] = ""
+        else:
+            out[key] = text
     return out
 
 

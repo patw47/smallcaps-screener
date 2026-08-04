@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-demo build-frontend docs-build docs-check check-runtime
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -38,8 +38,8 @@ check-criteria-coverage:
 # de seuil, à aucune profondeur, et aucun texte n'y cite une valeur de règle chargée.
 # Seul gate qui lit config/local.yml pour juger ce qui SORT (check-edge, lui, juge le
 # dépôt) — sans config privée il tourne sur les defaults neutres et le dit.
-check-demo:
-	python3 scripts/check_demo.py
+check-thresholds:
+	python3 scripts/check_thresholds.py
 
 # Compilation réelle du frontend, en conteneur (aucun Node ni node_modules requis sur
 # l'hôte) : les gates JS ne parsent que du texte, seul vite dit si le JSX compile.

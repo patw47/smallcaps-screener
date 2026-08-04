@@ -18,23 +18,20 @@ All application endpoints are prefixed with `/api`.
 
 A FastAPI startup hook also warms the cache on boot. Clients should poll `GET /api/scan/status` for progress and re-fetch when a scan completes.
 
-### Presentation mode — `?demo=1`
+### Rule thresholds are never served
 
-`GET /api/scan?demo=1` returns the same payload **without any rule threshold**: the price
-cap, the fall thresholds, the money-flow floor, the volume multiple, the checkpoint
-threshold, the reference window and the per-stock `margins` (distance to the threshold,
-which would reconstruct it exactly) are removed at every depth, and the glossary texts are
-replaced by their redacted variants. What stays: expectancy, median, probabilities,
-robustness test, case counts, the existence / meaning / today's state of every rule, and
-the **observation schedule** (`checkpoint.day`, `horizon`) — a measurement protocol, not a
-selection criterion.
+`GET /api/scan` returns a payload **without any rule threshold**: the price cap, the fall
+thresholds, the money-flow floor, the volume multiple, the checkpoint threshold, the
+reference window and the per-stock `margins` (distance to the threshold, which would
+reconstruct it exactly) are never built. There is no flag and no mode — nothing to switch
+on before showing the screen to someone, and nothing to forget.
 
-Filtering happens **before serialisation**: nothing hidden reaches the browser, so the
-browser inspector shows exactly what the page shows. The frontend forwards the flag when
-the page URL carries `?demo=1`.
+What stays: expectancy, median, probabilities, robustness test, case counts, the existence
+/ meaning / today's state of every rule, and the **observation schedule**
+(`checkpoint.day`, `horizon`) — a measurement protocol, not a selection criterion.
 
-Setting `DEMO_MODE=1` on the instance forces the mode for every response — a request can
-turn presentation mode *on*, never off.
+Glossary texts are written without their figure; a runtime net blanks any text still
+quoting a loaded value and names the key in the logs.
 
 Residual, documented leak: the qualifying stocks' own values stay visible, so the worst
 qualifying name **bounds** the price cap from below. A bound is not the value, and hiding
