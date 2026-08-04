@@ -105,7 +105,8 @@ def build_cohorts(tradables: list[tuple[str, dict]], prices: dict,
     Structure renvoyée (consignée telle quelle dans le snapshot) :
       {"windows": {"7": {"mkt", "note", "cohort", "prelist"}, ...},
        "flash": bool, "flash_ret3": float|None}
-    Les jours haussiers (ou benchmark manquant), la cohorte est vide (§8.4 : pas de
+    `note` est un CODE + ses variables (Epic 8 S1), traduit par le frontend.
+    Les jours haussiers (ou benchmark manquant), la cohorte est vide (pas de
     bénéfice du doute) ; la pré-liste montre les titres passant les règles-titre seules
     (zéro appel EDGAR ces jours-là). EDGAR n'est interrogé que pour les candidats des
     fenêtres baissières (cache disque + mémos edgar existants — coût marginal ~nul).
@@ -131,7 +132,7 @@ def build_cohorts(tradables: list[tuple[str, dict]], prices: dict,
         mkt = _ret(bench, w)
         if mkt is None:
             out["windows"][str(w)] = {"mkt": None, "cohort": [], "prelist": [],
-                                      "note": "benchmark indisponible → cohorte vide (§8.4)"}
+                                      "note": {"code": "benchmark_missing"}}
             continue
 
         entries = []
@@ -144,7 +145,7 @@ def build_cohorts(tradables: list[tuple[str, dict]], prices: dict,
         if mkt >= 0:
             out["windows"][str(w)] = {
                 "mkt": round(mkt, 4), "cohort": [], "prelist": entries[:CFG["prelist_max"]],
-                "note": f"marché haussier (IWM {w}j {mkt:+.1%}) → variante en pause (§8.4)",
+                "note": {"code": "market_bullish", "w": w, "mkt": round(mkt, 4)},
             }
             continue
 
@@ -155,7 +156,7 @@ def build_cohorts(tradables: list[tuple[str, dict]], prices: dict,
             cohort.append({**e, "mkt": round(mkt, 4)})
         out["windows"][str(w)] = {
             "mkt": round(mkt, 4), "cohort": cohort, "prelist": [],
-            "note": f"marché baissier (IWM {w}j {mkt:+.1%}) → {len(cohort)} qualifiés",
+            "note": {"code": "market_bearish", "w": w, "mkt": round(mkt, 4), "n": len(cohort)},
         }
     return out
 
@@ -192,12 +193,13 @@ def _load_entries(history_dir: Path) -> dict[tuple[int, str], dict]:
 
 
 def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
-    """Position de chaque titre de cohorte v5, par fenêtre — mêmes conventions que v4."""
+    """Position de chaque titre de cohorte v5, par fenêtre — mêmes conventions que v4,
+    codes de statut/checkpoint compris (Epic 8 S1)."""
     cp_day, cp_thr, horizon = CFG["checkpoint_day"], CFG["checkpoint_thr"], CFG["horizon"]
     out: list[dict] = []
     for (w, tk), ent in _load_entries(history_dir).items():
         row = {"ticker": tk, "window": w, **ent, "days_held": None, "ret": None,
-               "checkpoint": None, "status": "données absentes (délisting ?)"}
+               "checkpoint": None, "status": {"code": "no_data"}}
         df = prices.get(tk)
         if df is not None and "Close" in df:
             close = df["Close"].dropna()
@@ -216,18 +218,18 @@ def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
                 row["ret"] = round(cur / ent["entry_price"] - 1, 4)
                 if days >= horizon:
                     r63 = float(after.iloc[horizon - 1]) / ent["entry_price"] - 1
-                    row["checkpoint"] = f"fenêtre {horizon}j close"
-                    row["status"] = ("explosion (≥ +100 %)" if r63 >= 1.0
-                                     else "crash (≤ −50 %)" if r63 <= -0.5 else "close")
+                    row["checkpoint"] = {"code": "window_closed", "h": horizon}
+                    row["status"] = {"code": "explosion" if r63 >= 1.0
+                                     else "crash" if r63 <= -0.5 else "closed"}
                     row["ret_63"] = round(r63, 4)
                 elif days >= cp_day:
                     r5 = float(after.iloc[cp_day - 1]) / ent["entry_price"] - 1
-                    row["checkpoint"] = f"1 semaine (seuil {cp_thr:+.0%})"
+                    row["checkpoint"] = {"code": "week_one"}
                     row["ret_5"] = round(r5, 4)
-                    row["status"] = "au-dessus" if r5 >= cp_thr else "sous le seuil"
+                    row["status"] = {"code": "above" if r5 >= cp_thr else "below"}
                 else:
-                    row["checkpoint"] = "trop tôt"
-                    row["status"] = f"J+{days} — premier checkpoint à J+{cp_day}"
+                    row["checkpoint"] = {"code": "too_early"}
+                    row["status"] = {"code": "too_early", "d": days, "cp": cp_day}
         out.append(row)
     out.sort(key=lambda r: (r["entry_date"], r["window"]), reverse=True)
     return out

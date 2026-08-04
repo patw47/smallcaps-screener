@@ -1108,8 +1108,9 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         v4_cohort, v4_note, v4_mkt21, v4_prelist = build_cohort(survivors, prices, bench_close)
         v4_tracking = build_tracking(prices, HISTORY_DIR)
     except Exception as e:  # jamais fatal : l'instrumentation ne casse pas le scan
-        v4_cohort, v4_note, v4_mkt21, v4_prelist, v4_tracking = [], f"erreur (ignorée) : {type(e).__name__}", None, [], []
-    print(f"[v4] {v4_note} · suivi : {len(v4_tracking)} titres")
+        v4_cohort, v4_mkt21, v4_prelist, v4_tracking = [], None, [], []
+        v4_note = {"code": "error", "name": type(e).__name__}
+    print(f"[v4] note={v4_note['code']} · suivi : {len(v4_tracking)} titres")
 
     # --- Cohortes v5 (Epic 5, protocole SIGNÉ 2026-07-09) : trois fenêtres pré-déclarées
     # (7/14/21) + drapeau ⚡. Instrumentation additive (Validation D) — jamais fatal.
@@ -1120,7 +1121,7 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         v5_data["tracking"] = v5_build_tracking(prices, HISTORY_DIR)
     except Exception as e:
         v5_data = {"windows": {}, "flash": False, "flash_ret3": None, "tracking": [],
-                   "note": f"erreur (ignorée) : {type(e).__name__}"}
+                   "note": {"code": "error", "name": type(e).__name__}}
     v5_counts = " · ".join(f"{w}j:{len(b.get('cohort', []))}" for w, b in v5_data["windows"].items())
     print(f"[v5] cohortes {{{v5_counts}}} · ⚡ {'OUI' if v5_data['flash'] else 'non'}"
           f" · suivi : {len(v5_data['tracking'])} lignes")
@@ -1208,7 +1209,7 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         "pool_mode": FILTERS["pool_mode"],
         "v3_model": False,               # thèse v3 échouée, aucun modèle : clé gardée au contrat
         "v4_cohort": v4_cohort,          # Epic 4 : cohorte du jour (instrumentation forward)
-        "v4_note": v4_note,              # raison lisible (marché haussier → cohorte vide)
+        "v4_note": v4_note,              # code + variables (Epic 8 S1), traduit par le frontend
         "v4_mkt21": v4_mkt21,            # état du marché (IWM 21 j) affiché en tête
         "v4_prelist": v4_prelist,        # jours haussiers : règles-titre seules, sans EDGAR
         "v4_tracking": v4_tracking,      # suivi des cohortes passées (§A.6, affichage)
@@ -1305,7 +1306,7 @@ def _write_snapshot(output: dict) -> None:
             # Epic 4 (protocole v4 §4) : la cohorte du jour, matière première du jugement
             # forward. v4_note documente les jours à cohorte vide (marché haussier ≠ panne).
             "v4_cohort": output.get("v4_cohort", []),
-            "v4_note": output.get("v4_note", ""),
+            "v4_note": output.get("v4_note") or {},
             # Epic 5 (protocole v5 §9) : les trois cohortes du jour + ⚡ — sans pré-liste
             # ni tracking (dérivables), seule la matière première du jugement forward.
             "v5": {

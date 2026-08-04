@@ -78,13 +78,15 @@ def _passes_price_rules(sig: dict) -> bool:
 
 
 def build_cohort(tradables: list[tuple[str, dict]], prices: dict,
-                 bench_close: pd.Series | None) -> tuple[list[dict], str, float | None, list[dict]]:
+                 bench_close: pd.Series | None) -> tuple[list[dict], dict, float | None, list[dict]]:
     """
     Cohorte v4 du jour sur le pool tradable complet (avant toute sélection de profil).
-    Renvoie (cohorte, note lisible, mkt, pré-liste). Cohorte vide + note explicite si le
-    marché monte ou si le benchmark manque (§2.4 : pas de bénéfice du doute). Les jours
-    haussiers, la pré-liste donne les titres passant les règles-titre SEULES (dilution non
-    vérifiée — zéro appel EDGAR ces jours-là), triés par chute, plafonnés à prelist_max.
+    Renvoie (cohorte, note, mkt, pré-liste). La note est un CODE + ses variables
+    (Epic 8 S1) — le frontend traduit ; aucune phrase française ne sort d'ici.
+    Cohorte vide + note explicite si le marché monte ou si le benchmark manque (pas de
+    bénéfice du doute). Les jours haussiers, la pré-liste donne les titres passant les
+    règles-titre SEULES (dilution non vérifiée — zéro appel EDGAR ces jours-là), triés
+    par chute, plafonnés à prelist_max.
 
     Coût réseau : EDGAR n'est interrogé que pour les titres passant déjà les règles prix,
     et uniquement les jours de marché baissier (cache disque + mémos edgar existants).
@@ -92,14 +94,13 @@ def build_cohort(tradables: list[tuple[str, dict]], prices: dict,
     w = CFG["mkt_window"]
     mkt = market_return_21d(bench_close)
     if mkt is None:
-        return [], "benchmark indisponible → cohorte vide (§2.4)", None, []
+        return [], {"code": "benchmark_missing"}, None, []
     if mkt >= 0:
         prelist = sorted((
             {"ticker": tk, "price": sig["price"], "change_1m": sig["change_1m"]}
             for tk, sig in tradables if _passes_price_rules(sig)
         ), key=lambda e: e["change_1m"])[:CFG["prelist_max"]]
-        return ([], f"marché haussier (IWM {w}j {mkt:+.1%}) → la méthode ne s'applique pas (§2.4)",
-                mkt, prelist)
+        return [], {"code": "market_bullish", "w": w, "mkt": round(mkt, 4)}, mkt, prelist
 
     import edgar
 
@@ -137,9 +138,9 @@ def build_cohort(tradables: list[tuple[str, dict]], prices: dict,
             },
         })
 
-    # Ordre indicatif §A.5 : plus survendu d'abord (résidu le plus négatif) ; sans bêta → fin.
+    # Ordre indicatif : plus survendu d'abord (résidu le plus négatif) ; sans bêta → fin.
     cohort.sort(key=lambda e: (e["resid"] is None, e["resid"] if e["resid"] is not None else 0.0))
-    return cohort, f"marché baissier (IWM {w}j {mkt:+.1%}) → {len(cohort)} qualifiés", mkt, []
+    return cohort, {"code": "market_bearish", "w": w, "mkt": round(mkt, 4), "n": len(cohort)}, mkt, []
 
 
 # ---------------------------------------------------------------------------
@@ -172,15 +173,20 @@ def _load_cohort_entries(history_dir: Path) -> dict[str, dict]:
 
 def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
     """
-    Position de chaque titre de cohorte vs les trajectoires historiques (protocole §A.6).
+    Position de chaque titre de cohorte vs les trajectoires historiques.
     Jours de bourse comptés sur l'index du titre lui-même (robuste aux jours fériés).
     Un titre sans données de prix aujourd'hui est signalé (délisting possible = information).
+
+    `status` et `checkpoint` sont des CODES + variables (Epic 8 S1), traduits par le
+    frontend : above / below / explosion / crash / closed / too_early / no_data et
+    week_one / window_closed / too_early. Les seuils du checkpoint ne voyagent pas ici,
+    le frontend les tient déjà du bloc `display`.
     """
     cp_day, cp_thr, horizon = CFG["checkpoint_day"], CFG["checkpoint_thr"], CFG["horizon"]
     out: list[dict] = []
     for tk, ent in _load_cohort_entries(history_dir).items():
         row = {"ticker": tk, **ent, "days_held": None, "ret": None,
-               "checkpoint": None, "status": "données absentes (délisting ?)"}
+               "checkpoint": None, "status": {"code": "no_data"}}
         df = prices.get(tk)
         if df is not None and "Close" in df:
             close = df["Close"].dropna()
@@ -202,18 +208,18 @@ def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
                 if days >= horizon:
                     d63 = float(after.iloc[horizon - 1])
                     r63 = d63 / ent["entry_price"] - 1
-                    row["checkpoint"] = f"fenêtre {horizon}j close"
-                    row["status"] = ("explosion (≥ +100 %)" if r63 >= 1.0
-                                     else "crash (≤ −50 %)" if r63 <= -0.5 else "close")
+                    row["checkpoint"] = {"code": "window_closed", "h": horizon}
+                    row["status"] = {"code": "explosion" if r63 >= 1.0
+                                     else "crash" if r63 <= -0.5 else "closed"}
                     row["ret_63"] = round(r63, 4)
                 elif days >= cp_day:
                     r5 = float(after.iloc[cp_day - 1]) / ent["entry_price"] - 1
-                    row["checkpoint"] = f"1 semaine (seuil {cp_thr:+.0%})"
+                    row["checkpoint"] = {"code": "week_one"}
                     row["ret_5"] = round(r5, 4)
-                    row["status"] = "au-dessus" if r5 >= cp_thr else "sous le seuil"
+                    row["status"] = {"code": "above" if r5 >= cp_thr else "below"}
                 else:
-                    row["checkpoint"] = "trop tôt"
-                    row["status"] = f"J+{days} — premier checkpoint à J+{cp_day}"
+                    row["checkpoint"] = {"code": "too_early"}
+                    row["status"] = {"code": "too_early", "d": days, "cp": cp_day}
         out.append(row)
     out.sort(key=lambda r: r["entry_date"], reverse=True)
     return out
