@@ -186,6 +186,37 @@ selon des critères écrits à l'avance.
 
 ---
 
+## Étage 2 bis — Résultats réels des sélections
+
+Le résultat, compartiment par compartiment, de tout ce qui a réellement été sélectionné
+depuis l'origine — servi par `GET /api/performance`, calculé depuis le premier scan et
+affiché ici pour la première fois. Chaque titre y entre le jour de sa première apparition,
+au prix de ce jour-là, et n'en sort plus : **aucune ligne n'est réécrite après coup**.
+C'est ce qui distingue ce tableau des chiffres mesurés sur le passé affichés plus haut,
+où les sociétés disparues ont été effacées des données.
+
+Une ligne par compartiment — ensemble, 🚀 Fusée, 🔥 Phénix, et « enregistrés avant les
+profils » quand il en reste — avec le nombre de titres suivis, le gain moyen, le titre
+médian, l'écart contre l'indice et les décomptes de hausses de moitié et de doublements.
+Un même titre peut porter les deux profils : les compartiments ne s'additionnent pas.
+
+Trois précautions de lecture sont affichées en permanence sous le tableau, y compris les
+jours où il est vide :
+
+- **Ce qui se tranchera vite** : le gain moyen. Quelques dizaines de lignes suffisent à
+  voir de quel côté penche l'ensemble par rapport à l'indice.
+- **Ce qui ne se tranchera pas avant des années** : la fréquence des doublements. Le taux
+  de base est de l'ordre d'un titre sur cinquante par trimestre ; démontrer qu'un
+  compartiment fait mieux demande des centaines de lignes closes.
+- **Le verdict déjà rendu** : l'hypothèse Fusée / Phénix a été testée et réfutée en
+  juillet 2026. Ce tableau ne la rejuge pas ; il mesure ce qui a été sélectionné, et c'est
+  le seul résultat qui pourrait un jour la contredire.
+
+Si le suivi est indisponible (serveur, réseau), la section le dit et **le reste de la page
+reste à jour** : l'appel est isolé.
+
+---
+
 ## Étage 3 — Zones extrêmes (🔥 Phénix · 🚀 Fusée)
 
 ### Ce que c'est

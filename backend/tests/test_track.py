@@ -204,6 +204,54 @@ def test_run_tracker_mixed_history_backfill(tmp_path, monkeypatch):
     assert r["sleeves"]["overall"]["n"] == 2
 
 
+# ---------------------------------------------------------------------------
+# Contrat de forme consommé par l'écran « Résultats réels » (Epic 8 S5).
+# L'écran lit chaque champ de compartiment sans le tester : une clé qui manque
+# dans la réponse SANS historique afficherait un tableau troué au lieu de zéros.
+# ---------------------------------------------------------------------------
+
+SLEEVE_KEYS = {"n", "mean", "median", "hit", "excess_mean", "n_up50", "n_up100"}
+
+
+def test_empty_history_keeps_every_sleeve_key(tmp_path):
+    r = run_tracker(tmp_path / "vide", quiet=True)
+    for name in ("overall", "fusee", "phenix", "unknown"):
+        assert set(r["sleeves"][name]) == SLEEVE_KEYS, name
+    # les agrégats de tête aussi : l'en-tête du tableau les affiche tels quels
+    for key in ("n_picks", "n_tracked", "as_of"):
+        assert key in r
+
+
+def test_sleeves_partition_minimal_history(tmp_path, monkeypatch):
+    # Historique minimal couvrant les trois compartiments affichés : un titre de
+    # chaque profil + une sélection antérieure aux profils, qui doit tomber dans
+    # « inconnu » sans polluer Fusée ni Phénix.
+    hd = tmp_path / "h"
+    _write_snap(hd, "20260101_000000.json",
+                {"scanned_at": "2026-01-01T00:00:00+00:00",
+                 "picks": [{"ticker": "OLD", "price": 10.0, "score": 7}]})            # pré-profil
+    _write_snap(hd, "20260102_000000.json",
+                {"scanned_at": "2026-01-02T00:00:00+00:00",
+                 "picks": [{"ticker": "FUS", "price": 10.0, "score": 8, "is_fusee": True, "is_phenix": False},
+                           {"ticker": "PHX", "price": 10.0, "score": 6, "is_fusee": False, "is_phenix": True}]})
+    idx = pd.date_range("2026-01-01", periods=10, freq="D")
+    flat = pd.DataFrame({"Close": [10.0] * 10}, index=idx)                 # 0 %
+    up = pd.DataFrame({"Close": [10.0] * 9 + [16.0]}, index=idx)           # +60 %
+    down = pd.DataFrame({"Close": [10.0] * 9 + [8.0]}, index=idx)          # −20 %
+    iwm = pd.DataFrame({"Close": [100.0] * 10}, index=idx)
+    monkeypatch.setattr(track, "_download_prices",
+                        lambda tks, bench, period=None: {"OLD": flat, "FUS": up, "PHX": down,
+                                                         sb.FILTERS["rs_benchmark"]: iwm})
+
+    sl = run_tracker(hd, quiet=True)["sleeves"]
+    assert sl["fusee"]["n"] == 1 and sl["phenix"]["n"] == 1 and sl["unknown"]["n"] == 1
+    assert sl["overall"]["n"] == 3                       # l'inconnu compte dans l'ensemble
+    assert abs(sl["fusee"]["mean"] - 0.60) < 1e-9        # compartiments peuplés DISTINCTEMENT
+    assert abs(sl["phenix"]["mean"] + 0.20) < 1e-9
+    assert sl["unknown"]["mean"] == 0.0
+    assert sl["fusee"]["n_up50"] == 1 and sl["phenix"]["n_up50"] == 0
+
+
 def test_empty_result_carries_sleeves(tmp_path):
     # Forme homogène : même sans historique, le bloc sleeves existe et est bien formé.
     r = run_tracker(tmp_path / "vide", quiet=True)
