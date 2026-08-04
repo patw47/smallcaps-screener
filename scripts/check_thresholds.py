@@ -3,24 +3,30 @@ Gate des seuils (Epic 8 S6, révisé au S7) — sort 0 si propre.
 
 Vérifie, sur LA réponse de scan (il n'y a plus de mode : les seuils ne sont
 jamais servis), que :
-  1. aucune des clés de seuil déclarées (`HIDDEN_THRESHOLDS`) n'y figure, à aucune
-     profondeur — sinon le masquage serait cosmétique, l'inspecteur du navigateur
-     lisant tout ce qui est sérialisé ;
+  1. aucune des clés de seuil déclarées n'y figure, à aucune profondeur — sinon le
+     masquage serait cosmétique, l'inspecteur du navigateur lisant tout ce qui est
+     sérialisé ;
   2. aucune VALEUR de seuil effectivement chargée n'apparaît dans une chaîne servie.
      C'est le chemin de fuite principal : les seuils sont écrits en toutes lettres au
      milieu de leur justification, dans une config privée non versionnée — donc hors
-     de portée de `check-edge`, qui ne surveille que le dépôt.
+     de portée de `check-edge`, qui ne surveille que le dépôt ;
+  3. `get_scan` recalcule le bloc d'affichage sur chaque chemin qui sert des données.
+     Le bloc est écrit dans le cache au moment du scan : sans recalcul, un cache
+     antérieur au retrait des seuils continue de les servir pendant des heures, et un
+     gate qui n'examine qu'une réponse reconstruite reste vert sur un payload que
+     personne ne reçoit. C'est exactement ce trou qui a été trouvé en interrogeant
+     l'API réelle après le déploiement.
 
-La réponse examinée est le vrai `screener_data.json` quand il existe (VPS, conteneur) ;
-sinon elle est reconstruite hors ligne avec les VRAIES valeurs de config : bloc
-d'affichage complet + une cohorte produite par le vrai constructeur (EDGAR neutralisé,
-aucun réseau). Le gate exige que cette entrée porte bien les clés masquées avant
-filtrage — un gate incapable de rougir passerait pour vert.
+La réponse examinée est le vrai `screener_data.json` quand il existe (VPS, conteneur),
+avec son bloc d'affichage recalculé comme le fait l'API ; sinon elle est reconstruite
+hors ligne avec les VRAIES valeurs de config : bloc d'affichage complet + une cohorte
+produite par le vrai constructeur (EDGAR neutralisé, aucun réseau).
 
 Lancer : make check-thresholds
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -52,15 +58,61 @@ def _offline_cohort() -> list[dict]:
 
 
 def build_response() -> tuple[dict, str]:
-    """(payload de scan servi en mode normal, origine)."""
+    """
+    (payload de scan tel que l'API le sert, origine).
+
+    Le cache disque porte un bloc `display` figé au moment du scan : le servir tel quel
+    resservirait les seuils d'avant un changement de configuration pendant des heures.
+    L'API le recalcule à chaque réponse (`api._fresh_display`) — ce gate reproduit
+    exactement ce chemin, cache compris, plutôt que de reconstruire une réponse idéale
+    que personne ne reçoit. C'est un vrai cache servi qui a révélé le trou.
+    """
     if sb.OUTPUT_FILE.exists():
         try:
             payload = json.loads(sb.OUTPUT_FILE.read_text())
-            payload["display"] = sb._display_params()
-            return payload, f"scan réel ({sb.OUTPUT_FILE})"
+            stale = payload.get("display")
+            payload["display"] = sb._display_params()  # comme l'API
+            origine = f"scan réel ({sb.OUTPUT_FILE})"
+            if stale is not None:
+                origine += " · bloc d'affichage du cache écarté et recalculé"
+            return payload, origine
         except Exception as e:  # fichier tronqué : on retombe sur la reconstruction
             print(f"[check-thresholds] {sb.OUTPUT_FILE} illisible ({e}) — réponse reconstruite")
     return {"display": sb._display_params(), "v4_cohort": _offline_cohort()}, "réponse reconstruite hors ligne"
+
+
+def check_api_recomputes_display() -> list[str]:
+    """
+    Dans `get_scan`, tout `return` qui sert des données doit passer par le recalcul du
+    bloc d'affichage. Sans ça, un cache écrit avant un changement de seuils continue de
+    les servir pendant des heures — et un gate qui n'examine qu'une réponse reconstruite
+    reste vert sur un payload que personne ne reçoit. C'est ce trou-là qui a été trouvé
+    en interrogeant l'API réelle, pas en relisant le code.
+
+    Lecture par AST plutôt que par motif de ligne : `_last_result()` contient un
+    `return _cached_data` légitime, qui n'est pas un chemin de réponse.
+    """
+    src = (ROOT / "backend" / "api.py").read_text(encoding="utf-8")
+    fn = next((n for n in ast.walk(ast.parse(src))
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "get_scan"), None)
+    if fn is None:
+        return ["backend/api.py : endpoint get_scan introuvable"]
+
+    errs = []
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Return) or node.value is None:
+            continue
+        # Un dict entièrement littéral ne sert aucune donnée de scan (réponse « scan en
+        # cours », stocks vide) : rien à recalculer. Dès qu'il déballe une variable
+        # (`{**data, …}`, clé None en AST), il sert un payload et doit passer par le
+        # recalcul — c'est le chemin stale-while-revalidate.
+        if isinstance(node.value, ast.Dict) and all(k is not None for k in node.value.keys):
+            continue
+        rendu = ast.unparse(node.value)
+        if "_fresh_display" not in rendu:
+            errs.append(f"chemin de réponse de get_scan sans recalcul du bloc "
+                        f"d'affichage : return {rendu[:70]}")
+    return errs
 
 
 def walk(node, path="$"):
@@ -101,6 +153,8 @@ def main() -> int:
     for path, key, _ in walk(served):
         if key in FORBIDDEN_KEYS:
             errors.append(f"clé de seuil servie : {path}")
+
+    errors.extend(check_api_recomputes_display())
 
     # Périmètre : les textes de RÈGLE (glossaire). Les chiffres de résultat (espérance,
     # probabilités, test de robustesse) et les valeurs des titres qualifiés restent
