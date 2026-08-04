@@ -24,6 +24,13 @@ markdown_extensions:
   - pymdownx.highlight
   - pymdownx.superfences
 
+# Epic 8 S6 : l'index de couverture reste versionné (il sert `make check-criteria-coverage`)
+# mais n'est pas publié. Absent de la nav, il restait atteignable à son URL directe, ce qui
+# rendait publique l'adresse de la page de référence privée qu'il cite. Il ne contient que
+# des noms de clés — c'est l'URL, pas le contenu, qui motive l'exclusion.
+exclude_docs: |
+  criteria-index.md
+
 # Allowlist explicite (Epic 6 S4) — les protocoles v4/v5 n'existent plus dans le
 # repo (Epic 6 S2), mais cette liste protège contre tout futur document sensible
 # ajouté par erreur : seuls les fichiers ci-dessous sont publiés.

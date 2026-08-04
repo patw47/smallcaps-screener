@@ -53,6 +53,21 @@ function Tip({ tip, down, children, style }) {
 const pctFmt = (x, digits = 1) => x == null ? "—" : `${x > 0 ? "+" : ""}${(x * 100).toFixed(digits)} %`;
 
 // ---------------------------------------------------------------------------
+// Mode présentation (Epic 8 S6) : l'API ne SERT PAS les seuils — la clé manque, elle
+// n'arrive pas vide. L'écran se contente donc de constater l'absence : il dit que la
+// règle a une valeur sans la montrer. Aucun drapeau à propager, et surtout aucun
+// nombre qui n'a jamais atteint le navigateur ne peut s'afficher par accident.
+// ---------------------------------------------------------------------------
+const capped = (key, x, vars, hiddenKey = "chip.thrHidden") =>
+  t(x == null ? hiddenKey : key, vars);
+
+// Le mode présentation se demande dans l'URL de la page (…/?demo=1) et se décide côté
+// service : l'instance peut l'imposer en permanence, une requête ne peut jamais le lever.
+const DEMO_PARAM =
+  typeof location !== "undefined" && new URLSearchParams(location.search).has("demo")
+    ? "?demo=1" : "";
+
+// ---------------------------------------------------------------------------
 // Traduction des codes servis par l'API (Epic 8 S1). Le backend renvoie
 // {code, variables} ; tout le texte affiché vient des dictionnaires i18n, dans
 // la langue choisie par le client. `ns` = market ou quiet (mêmes codes, textes
@@ -65,7 +80,8 @@ const noteText = (note, ns) => note?.code
 const statusText = (s) => s?.code ? t(`status.${s.code}`, { d: s.d, cp: s.cp }) : "";
 
 const checkpointText = (c, thr) => c?.code
-  ? t(`checkpoint.${c.code}`, { h: c.h, thr: pctFmt(thr, 0) })
+  ? t(`checkpoint.${c.code}${c.code === "week_one" && thr == null ? ".hidden" : ""}`,
+    { h: c.h, thr: pctFmt(thr, 0) })
   : "—";
 
 // ---------------------------------------------------------------------------
@@ -218,8 +234,8 @@ function MarketCard({ entry, rank, total, dp4 }) {
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
         {[
-          <>{t("chip.price")} <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> {t("chip.priceMax", { x: rules.price_max ?? "—" })}</>,
-          <>{t("chip.1m")} <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.change_1m)}</b> {t("chip.chgMax", { x: pctFmt(rules.chg1m_max, 0) })}</>,
+          <>{t("chip.price")} <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> {capped("chip.priceMax", rules.price_max, { x: rules.price_max })}</>,
+          <>{t("chip.1m")} <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.change_1m)}</b> {capped("chip.chgMax", rules.chg1m_max, { x: pctFmt(rules.chg1m_max, 0) })}</>,
           <>{t("chip.dil.pre")} <b style={{ color: "#d7e0e8" }}>{t("chip.dil.none")}</b> {t("chip.dil.post")}</>,
           <>{t("chip.mkt", { w: rules.mkt_window ?? "—" })} <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt21)})</b></>,
         ].map((text, i) => (
@@ -244,9 +260,9 @@ function MarketSection({ cohort, note, mkt21, prelist, dp4 }) {
   const noteLabel = noteText(note, "market");
   const { mktState, stockState, blocking } = ruleStates(mkt21, cohort.length);
   const ruleItems = [
-    { key: "price", label: t("market.rule.price"), val: t("chip.priceMax", { x: rules.price_max ?? "—" }), state: stockState, why: g.rule_price },
+    { key: "price", label: t("market.rule.price"), val: capped("chip.priceMax", rules.price_max, { x: rules.price_max }), state: stockState, why: g.rule_price },
     { key: "dil", label: t("market.rule.dil"), val: t("chip.dil.post"), state: stockState, why: t("gloss.ruleDil") },
-    { key: "chg", label: t("market.rule.chg"), val: t("chip.chgMax", { x: pctFmt(rules.chg1m_max, 0) }), state: stockState, why: g.rule_chg },
+    { key: "chg", label: t("market.rule.chg"), val: capped("chip.chgMax", rules.chg1m_max, { x: pctFmt(rules.chg1m_max, 0) }), state: stockState, why: g.rule_chg },
     { key: "mkt", label: t("market.rule.mkt"), val: `${t("chip.win", { w: rules.mkt_window ?? "—" })} ${pctFmt(mkt21)}`, state: mktState, why: g.rule_mkt },
   ];
   return (
@@ -355,12 +371,12 @@ function QuietCard({ entry, win, rank, total, dp5 }) {
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
         {[
-          <>{t("chip.price")} <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> {t("chip.priceMax", { x: rules.price_max ?? "—" })}</>,
-          <>{t("chip.win", { w: win })} <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.chg)}</b> {t("chip.chgMax", { x: pctFmt(rules.chg_max, 0) })}</>,
+          <>{t("chip.price")} <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> {capped("chip.priceMax", rules.price_max, { x: rules.price_max })}</>,
+          <>{t("chip.win", { w: win })} <b style={{ color: "#d7e0e8" }}>{pctFmt(entry.chg)}</b> {capped("chip.chgMax", rules.chg_max, { x: pctFmt(rules.chg_max, 0) })}</>,
           <>{t("chip.dil.pre")} <b style={{ color: "#d7e0e8" }}>{t("chip.dil.none")}</b> {t("chip.dil.post")}</>,
           <>{t("chip.mkt", { w: win })} <b style={{ color: "#d7e0e8" }}>({pctFmt(entry.mkt)})</b></>,
-          <>{t("chip.flow")} <b style={{ color: "#d7e0e8" }}>{entry.cmf}</b> {t("chip.flowMin", { x: num(rules.cmf_min) })}</>,
-          <>{t("chip.vol")} <b style={{ color: "#d7e0e8" }}>{entry.vol_calm}×</b> {t("chip.volMax", { x: num(rules.volcalm_max) })}</>,
+          <>{t("chip.flow")} <b style={{ color: "#d7e0e8" }}>{entry.cmf}</b> {capped("chip.flowMin", rules.cmf_min, { x: num(rules.cmf_min) })}</>,
+          <>{t("chip.vol")} <b style={{ color: "#d7e0e8" }}>{entry.vol_calm}×</b> {capped("chip.volMax", rules.volcalm_max, { x: num(rules.volcalm_max) })}</>,
         ].map((text, i) => (
           <span key={i} style={{
             background: "#16202b", border: "1px solid #1c4033", borderRadius: 4,
@@ -386,12 +402,12 @@ function QuietSection({ v5, win, dp4, dp5 }) {
   const prelist = block.prelist ?? [];
   const { mktState, stockState, blocking } = ruleStates(block.mkt, cohort.length);
   const ruleItems = [
-    { key: "price", label: t("quiet.rule.price"), val: t("chip.priceMax", { x: rules.price_max ?? "—" }), state: stockState, why: g4.rule_price },
+    { key: "price", label: t("quiet.rule.price"), val: capped("chip.priceMax", rules.price_max, { x: rules.price_max }), state: stockState, why: g4.rule_price },
     { key: "dil", label: t("quiet.rule.dil"), val: t("chip.dil.post"), state: stockState, why: t("gloss.ruleDil") },
-    { key: "chg", label: t("quiet.rule.chg"), val: t("chip.chgMax", { x: pctFmt(rules.chg_max, 0) }), state: stockState, why: g.chg },
+    { key: "chg", label: t("quiet.rule.chg"), val: capped("chip.chgMax", rules.chg_max, { x: pctFmt(rules.chg_max, 0) }), state: stockState, why: g.chg },
     { key: "mkt", label: t("quiet.rule.mkt"), val: `${t("chip.win", { w: win })} ${pctFmt(block.mkt)}`, state: mktState, why: g4.rule_mkt },
-    { key: "flow", label: t("quiet.rule.flow"), val: t("chip.flowMin", { x: num(rules.cmf_min) }), state: stockState, why: g.cmf },
-    { key: "vol", label: t("quiet.rule.vol"), val: t("chip.volMax", { x: num(rules.volcalm_max) }), state: stockState, why: g.vol_calme },
+    { key: "flow", label: t("quiet.rule.flow"), val: capped("chip.flowMin", rules.cmf_min, { x: num(rules.cmf_min) }), state: stockState, why: g.cmf },
+    { key: "vol", label: t("quiet.rule.vol"), val: capped("chip.volMax", rules.volcalm_max, { x: num(rules.volcalm_max) }), state: stockState, why: g.vol_calme },
   ];
   return (
     <section style={{ marginTop: 30 }}>
@@ -921,7 +937,7 @@ export default function App() {
   const [lastScan, setLastScan] = useState(null);
 
   const fetchData = useCallback(() => {
-    return fetch("/api/scan")
+    return fetch(`/api/scan${DEMO_PARAM}`)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(json => {
         setStocks(normalizeStocks(json.stocks ?? []));

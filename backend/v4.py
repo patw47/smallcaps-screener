@@ -50,6 +50,12 @@ CFG: dict = {
     },
 }
 
+# Epic 8 S6 — seconde version des textes citant un seuil : même justification,
+# nombre retiré. Servie À LA PLACE de `gloss` en mode présentation ; une clé
+# laissée vide veut dire « ce texte ne cite aucun seuil, il passe tel quel ».
+# Mêmes clés que gloss, dérivées (jamais recopiées) pour ne pas diverger.
+CFG["display"]["gloss_demo"] = dict.fromkeys(CFG["display"]["gloss"], "")
+
 
 def market_return_21d(bench_close: pd.Series | None) -> float | None:
     """Rendement du benchmark sur les CFG['mkt_window'] dernières séances ; None si insuffisant."""

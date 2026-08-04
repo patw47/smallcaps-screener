@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage docs-build docs-check
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-demo build-frontend docs-build docs-check
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -33,6 +33,21 @@ check-jargon:
 # neutres v4/v5/profils/poids figure dans docs/criteria-index.md.
 check-criteria-coverage:
 	python3 scripts/check_criteria_coverage.py
+
+# Mode présentation (Epic 8 S6) : la réponse servie en présentation ne porte aucune clé
+# de seuil, à aucune profondeur, et aucun texte n'y cite une valeur de règle chargée.
+# Seul gate qui lit config/local.yml pour juger ce qui SORT (check-edge, lui, juge le
+# dépôt) — sans config privée il tourne sur les defaults neutres et le dit.
+check-demo:
+	python3 scripts/check_demo.py
+
+# Compilation réelle du frontend, en conteneur (aucun Node ni node_modules requis sur
+# l'hôte) : les gates JS ne parsent que du texte, seul vite dit si le JSX compile.
+build-frontend:
+	docker run --rm -v "$(CURDIR)/frontend":/app -w /app node:20-alpine \
+		sh -c "npm install --silent --no-audit --no-fund >/dev/null 2>&1 && npx vite build"
+	docker run --rm -v "$(CURDIR)/frontend":/app -w /app node:20-alpine \
+		sh -c "rm -rf node_modules dist package-lock.json"
 
 # Invariance de l'extraction (S2) : nécessite la vraie config config/local.yml
 # et l'historique data/history/ — skip propre sans eux (donc skippé en CI).
