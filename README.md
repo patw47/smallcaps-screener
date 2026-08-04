@@ -168,6 +168,7 @@ Every gate is a `make` target; `make test` is the offline suite.
 | `make i18n-parity` / `make check-i18n` | Missing translations; hard-coded UI strings in the JSX. |
 | `make check-criteria-coverage` | A rule or scoring key absent from the public criteria index. |
 | `make build-frontend` | JSX that no longer compiles (containerised `vite build`). |
+| `make check-runtime` | Python that compiles on the dev interpreter but not on the production 3.11 container. |
 | `make docs-build` | A broken public documentation build (strict MkDocs). |
 
 ## Configuration
