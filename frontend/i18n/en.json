@@ -212,5 +212,7 @@
   "footer.removed.body": ": the 0-10 grade (refuted by its own study — its ten slices all lost against the index) · the model-computed probability of doubling (terminal verdict, never deployed) · breakout alerts (measured non-predictive trigger) — replaced by the \"new Market washout entry\" alert.",
   "footer.trace.title": "Traceability",
   "footer.trace.body": ": every figure displayed is served by the API from tables frozen before observation — nothing invented, nothing recomputed live. All terms:",
-  "footer.trace.gloss": "docs/glossaire.md"
+  "footer.trace.gloss": "docs/glossaire.md",
+  "flag.binary_event": "Biotech / pharma — binary events: technical signals are unreliable here",
+  "flag.earnings_soon": "Earnings in {d} d — a move may come from that, not from the setup"
 }

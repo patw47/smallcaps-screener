@@ -212,5 +212,7 @@
   "footer.removed.body": " : la note de 0 à 10 (réfutée par sa propre étude — ses dix tranches sortaient perdantes face à l'indice) · la probabilité de doublement calculée par modèle (verdict terminal, jamais déployée) · les alertes de cassure (déclencheur mesuré non prédictif) — remplacées par l'alerte « nouvelle entrée en Purge de marché ».",
   "footer.trace.title": "Traçabilité",
   "footer.trace.body": " : chaque chiffre affiché est servi par l'API depuis des tables figées avant observation — rien d'inventé, rien de recalculé en direct. Tous les termes :",
-  "footer.trace.gloss": "docs/glossaire.md"
+  "footer.trace.gloss": "docs/glossaire.md",
+  "flag.binary_event": "Biotech / pharma — évènements binaires : les signaux techniques y sont peu fiables",
+  "flag.earnings_soon": "Résultats dans {d} j — un mouvement peut venir de là, pas de la configuration"
 }

@@ -109,6 +109,11 @@ FILTERS = {
     "insider_pct_min": 5.0,         # % détention (AFFICHAGE informatif ; plus au scoring depuis S5)
     "revenue_growth_min": 0.10,
     "short_interest_high": 15.0,
+    # --- Drapeaux de contexte (Epic 1 S7) : INFORMATION seulement, jamais une exclusion.
+    # Ils ne changent ni le score, ni le tri, ni l'appartenance à une liste — ils disent
+    # à l'humain qu'un signal technique se lit différemment sur ce titre-là.
+    "binary_event_industries": ("biotech", "pharmaceutical", "drug manufacturer"),
+    "earnings_soon_days": 14,       # « résultats imminents » : cassure peut-être due à eux
     # --- Insiders EDGAR Form 4 (Sprint 5) : achats nets datés, point-in-time ---
     "insider_window_days": 180,     # fenêtre d'agrégation des achats nets (3-6 mois)
     "survival_window_days": 180,    # fenêtre des signaux de survie EDGAR (dilution, NT) — Epic 3 S2
@@ -534,8 +539,50 @@ def _rs_metrics(close: pd.Series, bench_close: pd.Series,
     return outperf, rising, strength
 
 
+def _is_binary_event_sector(info: dict) -> bool:
+    """
+    Le titre appartient-il à un secteur à évènements binaires (biotech / pharma) ?
+
+    Sur ces titres, une décision réglementaire ou un résultat d'essai déplace le cours
+    de dizaines de pourcents en une séance, indépendamment de toute configuration
+    technique : une chute « propre au titre » y veut dire autre chose qu'ailleurs.
+    `industry` d'abord (plus précis que `sector`, qui range toute la santé ensemble).
+    """
+    champs = " ".join(str(info.get(k) or "") for k in ("industry", "sector")).lower()
+    return any(motif in champs for motif in FILTERS["binary_event_industries"])
+
+
+def _days_to_earnings(info: dict, now: datetime | None = None) -> int | None:
+    """
+    Jours avant les prochains résultats, ou None si la date est absente ou passée.
+    **Best effort assumé** : yfinance ne sert cette date que pour une partie des
+    micro-caps — une absence n'est jamais une erreur, juste un drapeau en moins.
+    """
+    for cle in ("earningsTimestampStart", "earningsTimestamp"):
+        epoch = _safe_float(info.get(cle), None)
+        if not epoch:
+            continue
+        try:
+            quand = datetime.fromtimestamp(epoch, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            continue
+        jours = (quand - (now or datetime.now(tz=timezone.utc))).days
+        if jours >= 0:
+            return jours
+    return None
+
+
 def _build_positives_flags(stock: dict) -> tuple[list[str], list[str]]:
     positives, flags = [], []
+
+    # Contexte (Epic 1 S7) — CODES + variables traduits par le frontend, comme les notes
+    # et statuts depuis l'Epic 8 S1. Les drapeaux hérités sont encore des phrases
+    # françaises fabriquées ici ; le JSX accepte les deux formes le temps de la bascule.
+    if stock.get("binary_event"):
+        flags.append({"code": "binary_event"})
+    jours = stock.get("days_to_earnings")
+    if jours is not None and jours <= FILTERS["earnings_soon_days"]:
+        flags.append({"code": "earnings_soon", "d": jours})
 
     vr = stock.get("vol_ratio")
     if vr and FILTERS["score_vol_ratio_min"] <= vr <= FILTERS["score_vol_ratio_max"]:
@@ -1005,6 +1052,11 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
     ipo_epoch = info.get("firstTradeDateEpochUtc")
     ipo_year = datetime.fromtimestamp(ipo_epoch, tz=timezone.utc).year if ipo_epoch else None
 
+    # --- Contexte (Epic 1 S7) — lu dans le .info DÉJÀ récupéré : aucun appel réseau de
+    # plus (Yahoo bannit l'IP sur les rafales, cf. enrich_workers=2).
+    binary_event = _is_binary_event_sector(info)
+    days_to_earnings = _days_to_earnings(info)
+
     # --- Bilan : None si donnée absente (ne pas pénaliser l'absence) ---
     total_cash = _safe_float(info.get("totalCash"), None)
     total_debt = _safe_float(info.get("totalDebt"), None)
@@ -1049,6 +1101,10 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
         "cash_positive": cash_positive,
         "cash_bin": (1.0 if cash_positive is True else (0.0 if cash_positive is False else None)),
         "ipo_year": ipo_year,
+        # Contexte (Epic 1 S7) — information seulement, jamais une exclusion ni un point
+        # de score. `days_to_earnings` reste None quand yfinance n'a pas la date.
+        "binary_event": binary_event,
+        "days_to_earnings": days_to_earnings,
         "catalyst_type": None,
         "catalyst_date": None,
         **signals,  # inclut les facteurs continus f_accum / f_atr_ratio / f_pct_recent / f_ext / f_rs

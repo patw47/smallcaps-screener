@@ -342,3 +342,86 @@ def test_pass_a_near_pivot_and_low_ext_signals():
     assert signals["near_pivot"] is True
     # pente douce → prix reste proche de la MA50 → peu étiré
     assert signals["low_ext"] is True
+
+
+# ---------------------------------------------------------------------------
+# Drapeaux de contexte (Epic 1 S7) — INFORMATION seulement, jamais une exclusion.
+# Ils disent à l'humain qu'un signal technique se lit autrement sur ce titre-là.
+# ---------------------------------------------------------------------------
+
+def test_binary_event_sector_detected_on_industry_and_sector():
+    """Une biotech porte le drapeau ; un industriel non. `industry` est plus précis que
+    `sector` (qui range toute la santé ensemble) — les deux sont lus."""
+    biotech = {"industry": "Biotechnology", "sector": "Healthcare"}
+    pharma = {"industry": "Drug Manufacturers — Specialty & Generic", "sector": "Healthcare"}
+    dispositif = {"industry": "Medical Devices", "sector": "Healthcare"}
+    acier = {"industry": "Steel", "sector": "Industrials"}
+
+    assert screener_backend._is_binary_event_sector(biotech) is True
+    assert screener_backend._is_binary_event_sector(pharma) is True
+    # Santé ≠ évènement binaire : un fabricant de dispositifs ne vit pas sur un verdict FDA
+    assert screener_backend._is_binary_event_sector(dispositif) is False
+    assert screener_backend._is_binary_event_sector(acier) is False
+    # Donnée absente : silencieux, jamais une exception
+    assert screener_backend._is_binary_event_sector({}) is False
+    assert screener_backend._is_binary_event_sector({"industry": None, "sector": None}) is False
+
+
+def test_days_to_earnings_best_effort():
+    """La date est détectée quand elle existe ; absente, illisible ou passée → None,
+    jamais une erreur (yfinance ne la sert que pour une partie des micro-caps)."""
+    from datetime import datetime, timedelta, timezone as tz
+    maintenant = datetime(2026, 8, 4, tzinfo=tz.utc)
+    dans_5j = (maintenant + timedelta(days=5)).timestamp()
+    passe = (maintenant - timedelta(days=3)).timestamp()
+
+    assert screener_backend._days_to_earnings({"earningsTimestamp": dans_5j}, maintenant) == 5
+    # `earningsTimestampStart` est prioritaire (yfinance le sert plus souvent)
+    assert screener_backend._days_to_earnings(
+        {"earningsTimestampStart": dans_5j, "earningsTimestamp": passe}, maintenant) == 5
+    assert screener_backend._days_to_earnings({"earningsTimestamp": passe}, maintenant) is None
+    assert screener_backend._days_to_earnings({}, maintenant) is None
+    assert screener_backend._days_to_earnings({"earningsTimestamp": None}, maintenant) is None
+    # Valeur aberrante : ne doit pas remonter d'exception
+    assert screener_backend._days_to_earnings({"earningsTimestamp": 1e30}, maintenant) is None
+
+
+def test_context_flags_are_codes_never_french_sentences():
+    """Les deux drapeaux sortent en CODE + variables, traduits par le frontend — le
+    backend ne fabrique plus de phrase affichable (Epic 8 S1)."""
+    _, flags = screener_backend._build_positives_flags(
+        {"binary_event": True, "days_to_earnings": 3})
+    codes = {f["code"]: f for f in flags if isinstance(f, dict)}
+    assert codes["binary_event"] == {"code": "binary_event"}
+    assert codes["earnings_soon"] == {"code": "earnings_soon", "d": 3}
+
+
+def test_context_flags_silent_when_data_missing_or_far():
+    """Donnée absente ou résultats lointains : aucun drapeau, aucune erreur."""
+    _, flags = screener_backend._build_positives_flags({})
+    assert [f for f in flags if isinstance(f, dict)] == []
+
+    loin = screener_backend.FILTERS["earnings_soon_days"] + 1
+    _, flags = screener_backend._build_positives_flags(
+        {"binary_event": False, "days_to_earnings": loin})
+    assert [f for f in flags if isinstance(f, dict)] == []
+
+    # Frontière exacte : le jour du seuil est encore signalé
+    _, flags = screener_backend._build_positives_flags(
+        {"days_to_earnings": screener_backend.FILTERS["earnings_soon_days"]})
+    assert {"code": "earnings_soon", "d": screener_backend.FILTERS["earnings_soon_days"]} in flags
+
+
+def test_context_flags_never_exclude_a_name():
+    """Le critère central du sprint : ces drapeaux n'excluent RIEN. Un titre biotech avec
+    résultats imminents produit les mêmes positifs qu'un titre neutre par ailleurs."""
+    base = {"cash_positive": True, "revenue_growth": 0.5}
+    pos_neutre, flags_neutre = screener_backend._build_positives_flags(dict(base))
+    pos_flague, flags_flague = screener_backend._build_positives_flags(
+        {**base, "binary_event": True, "days_to_earnings": 2})
+
+    # Mêmes points positifs : le contexte n'enlève ni n'ajoute rien au reste
+    assert pos_flague == pos_neutre
+    # Et il n'ajoute que les deux drapeaux d'information
+    ajoutes = [f for f in flags_flague if f not in flags_neutre]
+    assert ajoutes == [{"code": "binary_event"}, {"code": "earnings_soon", "d": 2}]
