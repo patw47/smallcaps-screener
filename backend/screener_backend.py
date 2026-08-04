@@ -1364,8 +1364,11 @@ def value_patterns(value: float, loose: bool = False, unit: str | None = None) -
         pats.add(rf"{dec.replace('.', '[.,]')}\s*[x×]")
     if unit in (None, "$"):
         num = comma if "." in dec else dec
+        # Préfixe sorti de la f-string : un backslash dans une expression `{…}` est une
+        # SyntaxError avant Python 3.12, et le conteneur tourne en 3.11.
+        money_pre = "" if loose else "[≤<>≥]\\s*"
         pats.add(rf"{money}{num}\s*\$")
-        pats.add(rf"{'' if loose else '[≤<>≥]\\s*'}\$\s*{num}($|[^0-9])")
+        pats.add(rf"{money_pre}\$\s*{num}($|[^0-9])")
     return pats
 
 
