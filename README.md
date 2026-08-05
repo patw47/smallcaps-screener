@@ -86,6 +86,15 @@ forward record — never on the in-sample numbers.
   `data/history/`; `GET /api/performance` measures each pick's return **since it was first
   flagged** and compares it to IWM. Robust by design — a delisted ticker, a data outage or
   a corrupt snapshot never breaks the report (it always returns a well-formed payload).
+- **Leak-proof cohorts**: a tracked name is followed to its horizon even once it leaves the
+  discovered universe — prices missing from the day's scan are backfilled before any
+  lifecycle computation. This matters in both directions: doubling in value pushes a name
+  past the market-cap ceiling, so *the success condition used to be the ejection condition*,
+  while a collapse drops it under the price floor. "No data" now means one thing only: the
+  stock genuinely does not quote. `make check-cohort` is the guard.
+- **Snapshots keep the evidence**: each dated snapshot archives the five distress markers
+  and the dollar volume alongside every pick, so a past day's state can be reconstructed
+  instead of recomputed. `make check-snapshot-keys` guards against a key being dropped.
 - **Automatic scans**: the backend re-scans every `SCAN_EVERY_HOURS` (default 24), **only
   on trading days** (`SCAN_TRADING_DAYS_ONLY`, default on), so the snapshot history builds
   up on its own.
