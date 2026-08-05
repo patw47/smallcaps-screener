@@ -120,6 +120,12 @@ FILTERS = {
     "edgar_cache_ttl_hours": 24,    # TTL cache des listes de filings (soumissions par CIK)
     "edgar_rate_limit_s": 0.12,     # ≥0.11 → ≤ ~9 req/s (SEC exige ≤ 10 req/s)
     "edgar_max_filings": 12,        # garde-fou : nb max de Form 4 parsés par ticker (récents ; ~3-6 mois d'activité)
+    # --- Marqueur « cours sous le plancher de cotation » (Epic 9 S2) : la règle de la
+    # place de cotation ne mord qu'après une SÉRIE CONSÉCUTIVE sous le plancher. Un
+    # contact isolé un après-midi de panique n'est pas une non-conformité.
+    "sub_dollar_price": 1.0,        # plancher de cotation (USD)
+    "sub_dollar_min_days": 30,      # séances consécutives sous le plancher avant que la règle morde
+    "sub_dollar_window": 63,        # fenêtre d'observation (~3 mois de séances)
     # --- Backtest study (Sprint 6) : l'instrument de mesure (aucun ajustement de poids ici) ---
     "study_cost_roundtrip": 0.01,   # décote aller-retour (1%) appliquée aux rendements nets
     "study_position_usd": 10_000,   # position notionnelle pour la contrainte de capacité
@@ -345,6 +351,34 @@ def _median_dollar_volume(close: pd.Series, volume: pd.Series, window: int) -> f
     dv = close.iloc[-window:] * volume.iloc[-window:]
     val = float(dv.median())
     return None if math.isnan(val) else val
+
+
+def sub_dollar_marker(close: pd.Series) -> tuple[int, bool]:
+    """
+    Marqueur « cours sous le plancher de cotation » : (longueur de la série, drapeau).
+
+    La règle de conformité ne mord qu'après une série CONSÉCUTIVE sous le plancher :
+    « a touché le plancher au moins une fois dans la fenêtre » compterait un après-midi
+    de panique comme six mois de végétation. La longueur est renvoyée à côté du booléen —
+    c'est elle qui porte la gravité, et un seuil brut la jette. Source unique de la règle :
+    la production comme le rapport de prévalence passent par ici.
+    """
+    if close is None or len(close) == 0:
+        return 0, False
+    under = close.tail(FILTERS["sub_dollar_window"]) < FILTERS["sub_dollar_price"]
+    run = best = 0
+    for u in under:
+        run = run + 1 if u else 0
+        best = max(best, run)
+    return best, bool(best >= FILTERS["sub_dollar_min_days"])
+
+
+def _reverse_split_flag(df: pd.DataFrame) -> bool | None:
+    """Regroupement d'actions (ratio ∈ ]0,1[) dans la fenêtre ; None si la colonne manque."""
+    if df is None or "Stock Splits" not in df.columns:
+        return None
+    sp = df["Stock Splits"].tail(FILTERS["high_window"])
+    return bool(((sp > 0) & (sp < 1)).any())
 
 
 def _atr(df: pd.DataFrame, window: int) -> float | None:
@@ -1005,13 +1039,12 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
 
     # --- Features v3 dérivées du prix (Epic 3 S3) : close vs SMA20, penny stock récent ---
     close_vs_sma20 = (price / sma20 - 1) if sma20 else None   # T6 (stabilisation)
-    sub_dollar_flag = bool(float(close.tail(63).min()) < 1.0)  # S5 (a récemment touché < 1 $)
+    # S5, corrigé en SÉRIE CONSÉCUTIVE (Epic 9 S2) : le drapeau suit la règle de cotation,
+    # et la longueur de série reste exposée à côté du booléen.
+    sub_dollar_days, sub_dollar_flag = sub_dollar_marker(close)
     # Reverse split récent (ratio ∈ ]0,1[) depuis la colonne d'actions yfinance — signal de
     # détresse / conformité de cotation (S2). Point-in-time : df est déjà tronqué à la date as-of.
-    reverse_split_flag = None
-    if "Stock Splits" in df.columns:
-        sp = df["Stock Splits"].tail(FILTERS["high_window"])
-        reverse_split_flag = bool(((sp > 0) & (sp < 1)).any())
+    reverse_split_flag = _reverse_split_flag(df)
 
     signals = {
         "price": round(price, 2),
@@ -1052,6 +1085,7 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         # Features v3 dérivées du prix (Epic 3 S3) :
         "close_vs_sma20": round(close_vs_sma20, 4) if close_vs_sma20 is not None else None,
         "sub_dollar_flag": sub_dollar_flag,
+        "sub_dollar_days": sub_dollar_days,         # longueur de la série consécutive (gravité)
         "reverse_split_flag": reverse_split_flag,   # S2 (reverse split récent = détresse)
     }
     return signals, "ok"
@@ -1135,6 +1169,23 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
         print(f"[edgar] {ticker} erreur (ignorée) : {type(e).__name__}")
     insider_net_buying_pos = bool(insider_net is not None and insider_net > 0)
 
+    # --- Marqueurs de détresse issus des dépôts officiels (Epic 9 S2) — DESCRIPTIF SEUL :
+    # jamais une exclusion, jamais un point de score, jamais un critère de tri. Ils n'existaient
+    # que dans le contrat de `scoring.RISK_FLAGS`, sans jamais être posés sur un candidat.
+    # Couche B : disponibles sur les seuls survivants de l'entonnoir (un appel par candidat,
+    # mêmes soumissions EDGAR que les insiders ci-dessus — cache disque partagé).
+    # None = EDGAR muet (ticker inconnu, User-Agent absent) : neutre, ne pénalise pas.
+    dilution_flag = late_filing_flag = going_concern_flag = None
+    try:
+        from edgar import survival_signals
+        surv = survival_signals(ticker)
+        if surv is not None:
+            dilution_flag = surv["dilution_flag"]
+            late_filing_flag = surv["late_filing_flag"]
+            going_concern_flag = surv["going_concern_flag"]
+    except Exception as e:
+        print(f"[edgar] {ticker} survie, erreur (ignorée) : {type(e).__name__}")
+
     short_interest_pct = (_safe_float(info.get("shortPercentOfFloat"), 0) or 0) * 100
     revenue_growth = _safe_float(info.get("revenueGrowth"))
     float_shares = _safe_float(info.get("floatShares"), None)
@@ -1155,6 +1206,10 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
         "revenue_growth": round(revenue_growth, 4) if revenue_growth is not None else None,
         "float_shares": int(float_shares) if float_shares is not None else None,
         "low_float": low_float,
+        # Marqueurs de détresse « dépôts officiels » (Epic 9 S2) — affichage/mesure seulement.
+        "dilution_flag": dilution_flag,
+        "late_filing_flag": late_filing_flag,
+        "going_concern_flag": going_concern_flag,
         "cash_positive": cash_positive,
         "cash_bin": (1.0 if cash_positive is True else (0.0 if cash_positive is False else None)),
         "ipo_year": ipo_year,
@@ -1542,6 +1597,15 @@ def _write_snapshot(output: dict) -> None:
                 "fusee_strength": s.get("fusee_strength"),
                 "phenix_strength": s.get("phenix_strength"),
                 "profile_strength": s.get("profile_strength"),
+                # Epic 9 S2 : les cinq marqueurs de détresse + le volume en dollars. Sans
+                # eux, chaque scan jette une observation datée que rien ne reconstitue —
+                # la prévalence se mesure alors sur un cliché, jamais sur une série.
+                "sub_dollar_flag": s.get("sub_dollar_flag"),
+                "reverse_split_flag": s.get("reverse_split_flag"),
+                "dilution_flag": s.get("dilution_flag"),
+                "late_filing_flag": s.get("late_filing_flag"),
+                "going_concern_flag": s.get("going_concern_flag"),
+                "dollar_volume": s.get("dollar_volume"),
             }
             for s in output.get("stocks", [])
         ]

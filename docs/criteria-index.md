@@ -9,7 +9,7 @@ dans la page de référence, hors dépôt :
 
 Vérifié par `make check-criteria-coverage` (`scripts/check_criteria_coverage.py`) : chaque clé
 listée ici doit exister dans les defaults neutres du code (`v4.CFG`, `v5.CFG`,
-`FILTERS["profiles"]`, `FILTERS["score_weights"]`) — les noms de clés sont publics par
+`FILTERS["profiles"]`, `FILTERS["score_weights"]`, `FILTERS`) — les noms de clés sont publics par
 construction (seules leurs valeurs sont secrètes, cf. `v4.py`/`v5.py`), donc rien ci-dessous
 n'est une fuite.
 
@@ -63,3 +63,13 @@ n'est une fuite.
 ## Sections transverses
 - ecarte
 - croisement
+
+## Marqueurs de détresse
+
+Mesure DESCRIPTIVE (Epic 9 S2) : ces clés ne sélectionnent, ne classent et ne notent rien.
+Elles vivent dans `FILTERS`, pas dans une section de règles — leurs valeurs sont publiques
+(la règle de cotation qu'elles reproduisent l'est aussi) et lisibles dans `docs/backend.md`.
+
+- sub_dollar_price
+- sub_dollar_min_days
+- sub_dollar_window

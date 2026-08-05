@@ -170,7 +170,13 @@ Every gate is a `make` target; `make test` is the offline suite.
 | `make build-frontend` | JSX that no longer compiles (containerised `vite build`). |
 | `make check-runtime` | Python that compiles on the dev interpreter but not on the production 3.11 container. |
 | `make check-cohort` | A tracked stock still quoting but read as "no data" — replays the tracking on the live history from an *empty* universe (needs the running container and network). |
+| `make check-snapshot-keys` | A selection key silently dropped or renamed in the dated snapshots — the history is read years later and never rewritten (needs the running container). |
 | `make docs-build` | A broken public documentation build (strict MkDocs). |
+
+`make flag-prevalence` is not a gate but a report: prevalence of the five distress markers,
+with the two denominators kept apart (price-derived markers over the whole universe,
+filing-derived markers over the funnel survivors) and a per-sector breakdown with
+biotechnology separated out. Descriptive only — no marker enters selection, ranking or score.
 
 ## Configuration
 

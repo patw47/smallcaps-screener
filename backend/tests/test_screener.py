@@ -425,3 +425,191 @@ def test_context_flags_never_exclude_a_name():
     # Et il n'ajoute que les deux drapeaux d'information
     ajoutes = [f for f in flags_flague if f not in flags_neutre]
     assert ajoutes == [{"code": "binary_event"}, {"code": "earnings_soon", "d": 2}]
+
+
+# ---------------------------------------------------------------------------
+# Epic 9 S2 — marqueur « cours sous le plancher de cotation », en SÉRIE CONSÉCUTIVE
+#
+# La règle de cotation ne mord qu'après une série ininterrompue sous le plancher.
+# Le drapeau d'avant valait « a effleuré le plancher au moins une fois dans la
+# fenêtre » : un après-midi de panique y comptait autant que six mois de végétation.
+# La longueur de la série est exposée à côté du booléen — c'est elle qui porte la
+# gravité, et un seuil brut la jette.
+# ---------------------------------------------------------------------------
+
+def _sub_dollar_history(pattern_under: list[bool], n: int = 200) -> pd.DataFrame:
+    """Titre à 3 $ dont les dernières séances suivent `pattern_under` (True = sous 1 $).
+    Le cours FINAL reste au-dessus du plancher de tradabilité : le titre passe la Passe A,
+    donc le drapeau est bien lu sur un candidat réel et non sur un rejet."""
+    closes = [3.0] * (n - len(pattern_under))
+    closes += [0.50 if under else 3.0 for under in pattern_under]
+    return _make_df(closes, [500_000] * n)
+
+
+def test_sub_dollar_flag_raised_after_consecutive_run():
+    # Effet injecté : la série atteint exactement la longueur de la règle → drapeau levé.
+    n = FILTERS["sub_dollar_min_days"]
+    df = _sub_dollar_history([True] * n + [False] * 20)
+    signals, reason = analyze_prices("RUN", df, None)
+    assert reason == "ok"
+    assert signals["sub_dollar_days"] == n
+    assert signals["sub_dollar_flag"] is True
+
+
+def test_sub_dollar_flag_not_raised_one_session_short():
+    # Effet insuffisant : une séance de moins → pas de non-conformité, série exposée quand même.
+    n = FILTERS["sub_dollar_min_days"] - 1
+    df = _sub_dollar_history([True] * n + [False] * 20)
+    signals, reason = analyze_prices("SHORT", df, None)
+    assert reason == "ok"
+    assert signals["sub_dollar_days"] == n
+    assert signals["sub_dollar_flag"] is False
+
+
+def test_sub_dollar_flag_ignores_isolated_contact():
+    # Bruit pur : un contact isolé entouré de clôtures au-dessus du plancher.
+    # C'est le cas que l'ancien drapeau (minimum de la fenêtre) levait à tort.
+    df = _sub_dollar_history([False] * 10 + [True] + [False] * 20)
+    signals, reason = analyze_prices("SPIKE", df, None)
+    assert reason == "ok"
+    assert signals["sub_dollar_days"] == 1
+    assert signals["sub_dollar_flag"] is False
+    assert float(df["Close"].tail(FILTERS["sub_dollar_window"]).min()) < FILTERS["sub_dollar_price"]
+
+
+# ---------------------------------------------------------------------------
+# Epic 9 S2 — non-régression de la SÉLECTION, tolérance zéro
+#
+# Artefact : la séquence ORDONNÉE des tickers sélectionnés, produite depuis des
+# fixtures de prix figées. Invariant : égalité exacte de la séquence et de son ordre.
+# Brancher un marqueur de détresse dans la sélection ou le classement fait échouer
+# ce test — la mesure de prévalence est descriptive, elle n'entre nulle part.
+#
+# Le même test verrouille le report du S1 (finding 1) : le complément de prix des
+# titres suivis mute `prices` EN PLACE, et les constructeurs de cohorte le reçoivent
+# enrichi de titres HORS UNIVERS. C'est inoffensif tant qu'ils itèrent sur les
+# tradables et n'utilisent `prices` qu'en lookup — rien ne le testait. La fixture
+# injecte ici un intrus par ce chemin exact (entrée de cohorte historique hors
+# univers), calibré pour qualifier partout s'il était vu : le test rougit dès qu'un
+# constructeur se met à itérer sur `prices`.
+# ---------------------------------------------------------------------------
+
+INTRUDER = "ZZOUT"     # jamais dans l'univers scanné, seulement dans l'historique suivi
+
+
+def _ohlcv_df(closes: list[float], vol: float = 500_000) -> pd.DataFrame:
+    """OHLCV complet : les capteurs v2 (flux d'argent, calme du volume) exigent High/Low,
+    sans quoi les constructeurs de cohorte v5 écartent TOUT et l'assertion serait vide.
+    Clôture au milieu de la bande chaque séance → flux d'argent neutre."""
+    idx = pd.date_range("2025-01-01", periods=len(closes), freq="B")
+    return pd.DataFrame({"High": [c * 1.02 for c in closes], "Low": [c * 0.98 for c in closes],
+                         "Close": closes, "Volume": [vol] * len(closes)}, index=idx)
+
+
+def _trend_df(start: float, daily: float, n: int = 200, vol: float = 500_000) -> pd.DataFrame:
+    return _ohlcv_df([start * (1 + daily) ** i for i in range(n)], vol)
+
+
+@pytest.fixture
+def offline_scan(monkeypatch, tmp_path):
+    """Scan complet hors ligne : prix figés, `.info` figé, dépôts officiels muets,
+    historique de suivi dans tmp_path. Renvoie l'univers scanné."""
+    bench = FILTERS["rs_benchmark"]
+    universe = [f"T{i}" for i in range(8)]
+    frames = {tk: _trend_df(10.0, 0.0002 * i) for i, tk in enumerate(universe)}
+    frames[bench] = _trend_df(100.0, 0.0001)
+    # Trois SÉLECTIONS portent un marqueur, un par capteur : sans cela, brancher un
+    # marqueur dans la sélection ne changerait rien et le test ne pourrait pas rougir.
+    frames["T7"] = _ohlcv_df([0.50] * 170 + [0.50 + i * (2.5 / 29) for i in range(30)])
+    frames["T0"] = frames["T0"].assign(**{"Stock Splits": [0.0] * 190 + [0.1] + [0.0] * 9})
+    # L'intrus est CALIBRÉ pour qualifier s'il était vu : tradable (prix et liquidité),
+    # sous le plafond de prix des règles de cohorte, et en chute franche sur un mois
+    # comme sur une semaine. Son absence des listes est donc une preuve, pas un hasard.
+    frames[INTRUDER] = _ohlcv_df(
+        [5.0] * 170 + [5.0 - i * (1.0 / 22) for i in range(23)]
+        + [4.0 - i * (1.0 / 6) for i in range(7)],
+        900_000)
+
+    def fake_download(tickers, bench_symbol, period=None):
+        out = {tk: frames[tk] for tk in tickers if tk in frames}
+        if bench_symbol in frames:
+            out[bench_symbol] = frames[bench_symbol]
+        return out
+
+    monkeypatch.setattr(screener_backend, "_download_prices", fake_download)
+    monkeypatch.setattr(screener_backend, "_fetch_info",
+                        lambda tk: {"exchange": "NMS", "marketCap": 300e6, "shortName": tk,
+                                    "sector": "Healthcare", "industry": "Biotechnology"})
+    import edgar
+    monkeypatch.setattr(edgar, "survival_signals", lambda tk, *a, **k: {
+        "dilution_flag": tk == "T1", "late_filing_flag": False, "going_concern_flag": False})
+    monkeypatch.setattr(edgar, "net_insider_buying", lambda *a, **k: None)
+    monkeypatch.setattr(screener_backend, "HISTORY_DIR", tmp_path)
+    # Entrée de cohorte HORS UNIVERS : c'est elle qui déclenche le complément de prix
+    # (Epic 9 S1) et fait entrer l'intrus dans le dictionnaire partagé.
+    (tmp_path / "20260101_000000.json").write_text(json.dumps({
+        "scanned_at": "2026-01-01T00:00:00+00:00", "candidates": 0, "picks": [],
+        "v4_cohort": [{"ticker": INTRUDER, "price": 40.0}], "v4_note": {},
+        "v5": {"windows": {}, "flash": False, "flash_ret3": None},
+    }))
+    return universe
+
+
+# Séquence gelée : membres de profil (deux d'une famille, trois de l'autre), classés par
+# force de profil décroissante. Identique avant et après le sprint, tolérance zéro.
+SELECTION_FROZEN = ["T7", "T6", "T0", "T1", "T2"]
+
+
+def test_selection_sequence_frozen(offline_scan):
+    out = screener_backend.run_scan(offline_scan)
+    assert [s["ticker"] for s in out["stocks"]] == SELECTION_FROZEN
+
+
+def test_backfilled_prices_never_leak_into_selection(offline_scan):
+    out = screener_backend.run_scan(offline_scan)
+    # Le complément a bien eu lieu : sans lui le test ne prouverait rien.
+    assert any(r["ticker"] == INTRUDER for r in out["v4_tracking"])
+    # Et l'intrus est bien calibré : il passe la Passe A ET les règles-titre des DEUX
+    # familles de cohorte. Sans cette garde, son absence des listes ne prouverait rien.
+    import v4
+    import v5
+    df = screener_backend._download_prices([INTRUDER], FILTERS["rs_benchmark"])[INTRUDER]
+    sig, reason = analyze_prices(INTRUDER, df, None)
+    assert reason == "ok" and v4._passes_price_rules(sig)
+    assert v5._title_entry(INTRUDER, sig, df, min(v5.CFG["windows"])) is not None
+    listes = {
+        "stocks": [s["ticker"] for s in out["stocks"]],
+        "v4_cohort": [e["ticker"] for e in out["v4_cohort"]],
+        "v4_prelist": [e["ticker"] for e in out["v4_prelist"]],
+    }
+    for w, bloc in (out["v5"].get("windows") or {}).items():
+        for quoi in ("cohort", "prelist"):
+            listes[f"v5[{w}].{quoi}"] = [e["ticker"] for e in bloc.get(quoi) or []]
+    for nom, tickers in listes.items():
+        assert INTRUDER not in tickers, f"titre hors univers entré dans {nom}"
+
+
+def test_snapshot_archives_the_five_markers_and_dollar_volume(offline_scan, tmp_path):
+    # Les cinq marqueurs et le volume en dollars sont ARCHIVÉS : sans eux, chaque scan
+    # jette une observation datée que rien ne reconstitue, et la prévalence n'est plus
+    # qu'un cliché. On vérifie le jeu de clés ET les valeurs, sur les trois capteurs.
+    screener_backend.run_scan(offline_scan)
+    snap = json.loads(sorted(tmp_path.glob("*.json"))[-1].read_text())
+    picks = {p["ticker"]: p for p in snap["picks"]}
+    nouvelles = {"sub_dollar_flag", "reverse_split_flag", "dilution_flag",
+                 "late_filing_flag", "going_concern_flag", "dollar_volume"}
+    assert all(nouvelles <= set(p) for p in picks.values())
+    assert picks["T7"]["sub_dollar_flag"] is True      # série consécutive sous le plancher
+    assert picks["T0"]["reverse_split_flag"] is True   # regroupement d'actions
+    assert picks["T1"]["dilution_flag"] is True        # dépôt d'émission d'actions
+    assert all(p["dollar_volume"] > 0 for p in picks.values())
+
+
+def test_markers_never_enter_selection_or_ranking(offline_scan):
+    # Le critère central du sprint : les trois titres marqués sont TOUS sélectionnés, et
+    # à leur rang. La mesure est descriptive — elle n'exclut ni ne déclasse personne.
+    out = screener_backend.run_scan(offline_scan)
+    marques = {"T7", "T0", "T1"}
+    assert marques <= set(SELECTION_FROZEN)
+    assert [s["ticker"] for s in out["stocks"]] == SELECTION_FROZEN
+    assert {s["ticker"] for s in out["stocks"] if s["survival_risk"]} == marques

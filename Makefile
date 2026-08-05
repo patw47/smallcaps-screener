@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort flag-prevalence check-snapshot-keys
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -56,6 +56,19 @@ check-runtime:
 # qu'une copie figée ; le script arrive par l'entrée standard (image sans scripts/).
 check-cohort:
 	docker compose exec -T backend python - < scripts/check_cohort.py
+
+# Prévalence des marqueurs de détresse (Epic 9 S2) : rapport DESCRIPTIF, deux dénominateurs
+# distincts (univers pour la couche prix, sélections pour la couche des dépôts) + ventilation
+# par secteur, biotechnologie isolée. Réseau et données réelles — donc dans le conteneur,
+# script sur l'entrée standard (l'image ne porte pas scripts/).
+flag-prevalence:
+	docker compose exec -T backend python - < scripts/flag_prevalence.py
+
+# Non-régression des instantanés (Epic 9 S2) : le dernier instantané écrit porte toutes les
+# clés de sélection antérieures, plus exactement les six nouvelles. Dans le conteneur : c'est
+# lui qui porte l'historique vivant.
+check-snapshot-keys:
+	docker compose exec -T backend python - < scripts/check_snapshot_keys.py
 
 build-frontend:
 	docker run --rm -v "$(CURDIR)/frontend":/app -w /app node:20-alpine \
