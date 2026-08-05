@@ -199,8 +199,13 @@ def _load_entries(history_dir: Path) -> dict[tuple[int, str], dict]:
 
 def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
     """Position de chaque titre de cohorte v5, par fenêtre — mêmes conventions que v4
-    (cycle de vie calculé par `lifecycle.track_row`, avec le cfg v5)."""
+    (cycle de vie calculé par `lifecycle.track_row`, avec le cfg v5), y compris le
+    complément de prix des titres sortis de l'univers du jour (Epic 9 S1)."""
+    from screener_backend import backfill_tracked_prices
+
+    entries = _load_entries(history_dir)
+    backfill_tracked_prices(prices, ((tk, e["entry_date"]) for (w, tk), e in entries.items()))
     out = [lifecycle.track_row({"ticker": tk, "window": w}, ent, prices.get(tk), CFG)
-           for (w, tk), ent in _load_entries(history_dir).items()]
+           for (w, tk), ent in entries.items()]
     out.sort(key=lambda r: (r["entry_date"], r["window"]), reverse=True)
     return out

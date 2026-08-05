@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -49,6 +49,13 @@ check-thresholds:
 check-runtime:
 	docker run --rm -v "$(CURDIR)":/src -w /src python:3.11-slim \
 		python -m compileall -q backend/ scripts/
+
+# Étanchéité de la cohorte de suivi (Epic 9 S1) : sur les données de suivi COURANTES,
+# tout titre en « données absentes » est confirmé sans cotation par un appel isolé.
+# Tourne dans le conteneur — c'est lui qui porte l'historique vivant, l'hôte n'en a
+# qu'une copie figée ; le script arrive par l'entrée standard (image sans scripts/).
+check-cohort:
+	docker compose exec -T backend python - < scripts/check_cohort.py
 
 build-frontend:
 	docker run --rm -v "$(CURDIR)/frontend":/app -w /app node:20-alpine \
