@@ -23,6 +23,13 @@
 > (its own shape, not a pill), `medium`/`low` as pills. Two dedicated components
 > (`RiskAlert`, `RiskChip`), deliberately separate from the context-flag rendering.
 > `survival_risk` remains in the payload, unchanged.
+>
+> **Epic 10 S2 — counter and sort, browser-side only.** The list header shows how many names
+> are displayed and how many carry at least one marker (both computed from what is rendered).
+> A sort by marker count, both directions, sits alongside the existing sort; the default stays
+> the scan order. It lives entirely in the browser (`riskSort` state) — no sort or filter
+> parameter is added to the API contract, and nothing is ever hidden: a sort moves rows, it
+> does not remove them.
 
 ## Files
 

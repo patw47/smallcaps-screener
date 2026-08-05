@@ -770,3 +770,46 @@ def test_marker_detail_travels_to_the_served_response(offline_scan):
 
     # Les sélections sans marqueur portent une liste vide, jamais une absence de clé.
     assert all(par_ticker[tk] == [] for tk in par_ticker if tk not in {"T7", "T1", "T0"})
+
+
+# ---------------------------------------------------------------------------
+# Epic 10 S2 — le tri vit dans l'interface, JAMAIS côté serveur
+#
+# Artefact : la séquence ordonnée des tickers de la réponse servie (le fichier que
+# l'API renvoie, pas la valeur de retour). Invariant : identique à celle produite par
+# le scan, et le contrat ne porte aucun paramètre de tri ni de filtre. Tolérance zéro.
+# Trier côté serveur — dans `run_scan`, avant l'écriture, ou par un paramètre d'API —
+# fait échouer ce test.
+# ---------------------------------------------------------------------------
+
+def test_served_order_is_the_scan_order(offline_scan):
+    out = screener_backend.run_scan(offline_scan)
+    servi = json.loads(screener_backend.OUTPUT_FILE.read_text())
+    ordre_servi = [s["ticker"] for s in servi["stocks"]]
+
+    # Ce qui est écrit pour l'API est exactement ce que le scan a classé, et rien ne
+    # l'a réordonné en chemin.
+    assert ordre_servi == [s["ticker"] for s in out["stocks"]] == SELECTION_FROZEN
+
+    # Non-vacuité : trier par nombre de marqueurs DONNERAIT un ordre différent. Sans
+    # cette garde, l'égalité ci-dessus pourrait être vraie par coïncidence de fixture.
+    par_marqueurs = [s["ticker"] for s in
+                     sorted(servi["stocks"], key=lambda s: -len(s["risk_markers"]))]
+    assert par_marqueurs != ordre_servi
+
+
+def test_scan_contract_carries_no_sort_or_filter_param():
+    # Lu par AST sur le fichier réel : la route qui sert la liste ne prend AUCUN
+    # paramètre. Pas de `sort=`, pas de `filter=` — donc rien à trier côté serveur.
+    src = ast.parse((Path(__file__).resolve().parents[1] / "api.py").read_text())
+    routes = {}
+    for node in ast.walk(src):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for deco in node.decorator_list:
+                if not (isinstance(deco, ast.Call) and deco.args
+                        and isinstance(deco.args[0], ast.Constant)):
+                    continue
+                routes[deco.args[0].value] = node.args
+    args = routes["/api/scan"]
+    assert not (args.args or args.posonlyargs or args.kwonlyargs
+                or args.vararg or args.kwarg), "la route servant la liste a pris un paramètre"
