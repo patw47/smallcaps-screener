@@ -178,6 +178,39 @@ def test_survival_point_in_time_excludes_future_filings(edgar_env, monkeypatch):
     assert r["going_concern_flag"] is False     # aucun 10-Q/10-K ≤ as_of
 
 
+def test_survival_flags_carry_their_filing_dates(edgar_env, monkeypatch):
+    # Epic 10 S1 : la date du fait est CONSERVÉE depuis la boucle des soumissions déjà
+    # parcourue — aucune requête supplémentaire. Dilution : le dépôt le plus récent des
+    # deux (424B5 du 05-03, après le S-3 du 01-03).
+    fake = _make_survival_get()
+    calls = {"n": 0}
+
+    def counting_get(url):
+        calls["n"] += 1
+        return fake(url)
+
+    monkeypatch.setattr(edgar, "_get", counting_get)
+    r = edgar.survival_signals("TEST", now=NOW, window_days=180)
+    assert r["dilution_date"] == "2026-03-05"
+    assert r["late_filing_date"] == "2026-04-20"
+    assert r["going_concern_date"] == "2026-05-15"       # dernier 10-Q ≤ as_of
+
+    avant = calls["n"]
+    edgar.reset_pit_memos()
+    edgar.survival_signals("TEST", now=NOW, window_days=180)
+    assert calls["n"] == avant   # tout ressort du cache : les dates ne coûtent aucun appel
+
+
+def test_survival_dates_absent_when_flag_is_down(edgar_env, monkeypatch):
+    # Drapeau bas → aucune date inventée. Point-in-time : à cette date, ni NT 10-Q ni 10-Q.
+    monkeypatch.setattr(edgar, "_get", _make_survival_get())
+    r = edgar.survival_signals("TEST", now=datetime(2026, 4, 1, tzinfo=timezone.utc),
+                               window_days=180)
+    assert r["late_filing_flag"] is False and r["late_filing_date"] is None
+    assert r["going_concern_flag"] is False and r["going_concern_date"] is None
+    assert r["dilution_flag"] is True and r["dilution_date"] == "2026-03-05"
+
+
 def test_survival_going_concern_absent(edgar_env, monkeypatch):
     # 10-Q présent mais SANS « substantial doubt » → going_concern False (dilution/late intacts).
     clean = "<html><body>Operations are profitable. No liquidity issues.</body></html>"

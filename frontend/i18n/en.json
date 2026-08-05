@@ -196,7 +196,6 @@
   "card.mktCap": "Mkt Cap",
   "card.volRatio": "Vol Ratio",
   "card.1m": "1 month",
-  "card.distress": "⚠ declared distress — extreme volatility (both tails)",
   "analyze.header": "⚡ Claude analysis",
   "analyze.loading": "⟳ Analyzing...",
   "analyze.again": "↻ Re-analyze",
@@ -214,5 +213,19 @@
   "footer.trace.body": ": every figure displayed is served by the API from tables frozen before observation — nothing invented, nothing recomputed live. All terms:",
   "footer.trace.gloss": "docs/glossaire.md",
   "flag.binary_event": "Biotech / pharma — binary events: technical signals are unreliable here",
-  "flag.earnings_soon": "Earnings in {d} d — a move may come from that, not from the setup"
+  "flag.earnings_soon": "Earnings in {d} d — a move may come from that, not from the setup",
+  "risk.level.high": "High severity",
+  "risk.level.medium": "Medium severity",
+  "risk.level.low": "Low severity",
+  "risk.since": "recorded on {d}",
+  "risk.going_concern": "Official doubt about the company's ability to keep operating",
+  "risk.reverse_split": "Share consolidation",
+  "risk.dilution": "New share issuance in preparation",
+  "risk.late_filing": "Periodic report filed late",
+  "risk.sub_dollar": "Price below the listing floor, {n} sessions in a row",
+  "risk.tip.going_concern": "In their official report, the auditor writes that they doubt the company will survive twelve months: it is the most direct accounting signal of distress there is.",
+  "risk.tip.reverse_split": "The company reduced the number of shares outstanding to mechanically lift its price — most often in order to stay listed.",
+  "risk.tip.dilution": "A document preparing an issuance of new shares has been filed: your stake will be reduced. Read it against the line of business — a company with no revenue yet funds itself this way as a matter of course, so the fact is frequent there and does not say the same thing as elsewhere.",
+  "risk.tip.late_filing": "The quarterly or annual report was not filed on time and the company declared it: internal disorder, or disagreement with the auditor.",
+  "risk.tip.sub_dollar": "The price stayed below the floor required by the listing venue for several sessions in a row. Past a certain duration, the company receives a non-compliance notice."
 }

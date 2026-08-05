@@ -80,7 +80,7 @@ def measure_price_layer() -> tuple[dict[str, tuple[int, int]], int, int]:
         rows.append({
             "ticker": tk,
             "sub_dollar_flag": sb.sub_dollar_marker(close)[1],
-            "reverse_split_flag": sb._reverse_split_flag(df),
+            "reverse_split_flag": sb._reverse_split_marker(df)[0],
         })
     return {f: _count(rows, f) for f in PRICE_FLAGS}, len(universe), len(rows)
 

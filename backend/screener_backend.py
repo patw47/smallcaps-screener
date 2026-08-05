@@ -373,12 +373,20 @@ def sub_dollar_marker(close: pd.Series) -> tuple[int, bool]:
     return best, bool(best >= FILTERS["sub_dollar_min_days"])
 
 
-def _reverse_split_flag(df: pd.DataFrame) -> bool | None:
-    """Regroupement d'actions (ratio ∈ ]0,1[) dans la fenêtre ; None si la colonne manque."""
+def _reverse_split_marker(df: pd.DataFrame) -> tuple[bool | None, str | None]:
+    """
+    Regroupement d'actions (ratio ∈ ]0,1[) dans la fenêtre : (drapeau, date de l'opération).
+
+    La date sort de la série DÉJÀ parcourue (index de la dernière séance à ratio réduit) —
+    aucun appel réseau de plus. Drapeau None si la colonne manque (capteur muet, neutre).
+    """
     if df is None or "Stock Splits" not in df.columns:
-        return None
+        return None, None
     sp = df["Stock Splits"].tail(FILTERS["high_window"])
-    return bool(((sp > 0) & (sp < 1)).any())
+    hits = sp[(sp > 0) & (sp < 1)]
+    if hits.empty:
+        return False, None
+    return True, str(pd.Timestamp(hits.index[-1]).date())
 
 
 def _atr(df: pd.DataFrame, window: int) -> float | None:
@@ -1044,7 +1052,7 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
     sub_dollar_days, sub_dollar_flag = sub_dollar_marker(close)
     # Reverse split récent (ratio ∈ ]0,1[) depuis la colonne d'actions yfinance — signal de
     # détresse / conformité de cotation (S2). Point-in-time : df est déjà tronqué à la date as-of.
-    reverse_split_flag = _reverse_split_flag(df)
+    reverse_split_flag, reverse_split_date = _reverse_split_marker(df)
 
     signals = {
         "price": round(price, 2),
@@ -1087,6 +1095,7 @@ def analyze_prices(ticker: str, df: pd.DataFrame,
         "sub_dollar_flag": sub_dollar_flag,
         "sub_dollar_days": sub_dollar_days,         # longueur de la série consécutive (gravité)
         "reverse_split_flag": reverse_split_flag,   # S2 (reverse split récent = détresse)
+        "reverse_split_date": reverse_split_date,   # date de l'opération (Epic 10 S1)
     }
     return signals, "ok"
 
@@ -1176,6 +1185,7 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
     # mêmes soumissions EDGAR que les insiders ci-dessus — cache disque partagé).
     # None = EDGAR muet (ticker inconnu, User-Agent absent) : neutre, ne pénalise pas.
     dilution_flag = late_filing_flag = going_concern_flag = None
+    dilution_date = late_filing_date = going_concern_date = None
     try:
         from edgar import survival_signals
         surv = survival_signals(ticker)
@@ -1183,6 +1193,10 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
             dilution_flag = surv["dilution_flag"]
             late_filing_flag = surv["late_filing_flag"]
             going_concern_flag = surv["going_concern_flag"]
+            # Dates du fait (Epic 10 S1) — `.get` : un marqueur sans date reste affiché.
+            dilution_date = surv.get("dilution_date")
+            late_filing_date = surv.get("late_filing_date")
+            going_concern_date = surv.get("going_concern_date")
     except Exception as e:
         print(f"[edgar] {ticker} survie, erreur (ignorée) : {type(e).__name__}")
 
@@ -1210,6 +1224,9 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
         "dilution_flag": dilution_flag,
         "late_filing_flag": late_filing_flag,
         "going_concern_flag": going_concern_flag,
+        "dilution_date": dilution_date,
+        "late_filing_date": late_filing_date,
+        "going_concern_date": going_concern_date,
         "cash_positive": cash_positive,
         "cash_bin": (1.0 if cash_positive is True else (0.0 if cash_positive is False else None)),
         "ipo_year": ipo_year,

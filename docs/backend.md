@@ -173,14 +173,23 @@ them enters selection, ranking or score** — a dedicated test fails if one ever
 
 | Marker | Layer | Where computed | Available on |
 |---|---|---|---|
-| `sub_dollar_flag` / `sub_dollar_days` | price | Pass A (`sub_dollar_run`) | whole universe |
-| `reverse_split_flag` | price | Pass A (`_reverse_split_flag`) | whole universe |
+| `sub_dollar_flag` / `sub_dollar_days` | price | Pass A (`sub_dollar_marker`) | whole universe |
+| `reverse_split_flag` / `reverse_split_date` | price | Pass A (`_reverse_split_marker`) | whole universe |
 | `dilution_flag`, `late_filing_flag`, `going_concern_flag` | filings | Pass B (`edgar.survival_signals`) | funnel survivors |
 
 `sub_dollar_flag` is a **consecutive run**, not a touch: it needs `sub_dollar_min_days`
 uninterrupted closes below `sub_dollar_price` within `sub_dollar_window`, mirroring the
 listing rule. `sub_dollar_days` carries the run length — a raw boolean throws away the
 gravity, counting one panic afternoon like six months of drifting below the floor.
+
+Since Epic 10 S1 each served stock also carries **`risk_markers`**: the detail of the
+markers actually raised, as `{code, level, date?, days?}` entries — codes and variables
+only, translated by the frontend, never a display string built in the backend. Levels are
+data (`scoring.MARKER_LEVELS`): `high` for going concern and share consolidation, `medium`
+for upcoming issuance, `low` for late filing and sub-dollar price. A stock with no marker
+carries an **empty list**, and the aggregate `survival_risk` boolean stays served unchanged
+next to it. Dates come from data already fetched (filing dates, split date) — no extra
+network call is ever made for them.
 
 Filing markers are `None` when EDGAR is silent (unknown ticker, no User-Agent): a mute
 sensor is never counted as a healthy name. `make flag-prevalence` reports prevalence per
