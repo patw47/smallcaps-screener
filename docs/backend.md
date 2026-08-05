@@ -165,6 +165,27 @@ Two distinct notions, so the screener can *watch beforehand* and *ping at depart
 `_breakout` is a pure function (offline-testable). These fields ride on every Pass A signal
 set, so every candidate in the JSON/snapshots carries them.
 
+## Distress markers — measured, never applied (Epic 9 S2)
+
+Five markers, **two layers, two denominators**. They colour the dashboard
+(`scoring.RISK_FLAGS` → `survival_risk`) and are archived in the dated snapshots; **none of
+them enters selection, ranking or score** — a dedicated test fails if one ever does.
+
+| Marker | Layer | Where computed | Available on |
+|---|---|---|---|
+| `sub_dollar_flag` / `sub_dollar_days` | price | Pass A (`sub_dollar_run`) | whole universe |
+| `reverse_split_flag` | price | Pass A (`_reverse_split_flag`) | whole universe |
+| `dilution_flag`, `late_filing_flag`, `going_concern_flag` | filings | Pass B (`edgar.survival_signals`) | funnel survivors |
+
+`sub_dollar_flag` is a **consecutive run**, not a touch: it needs `sub_dollar_min_days`
+uninterrupted closes below `sub_dollar_price` within `sub_dollar_window`, mirroring the
+listing rule. `sub_dollar_days` carries the run length — a raw boolean throws away the
+gravity, counting one panic afternoon like six months of drifting below the floor.
+
+Filing markers are `None` when EDGAR is silent (unknown ticker, no User-Agent): a mute
+sensor is never counted as a healthy name. `make flag-prevalence` reports prevalence per
+layer, with a per-sector breakdown isolating biotechnology.
+
 ## Telegram alerts (`alerts.py`)
 
 On each scan, `notify_new_v4_entries` and `notify_new_v5_entries` ping the names **newly
