@@ -817,6 +817,61 @@ def _download_prices(tickers: list[str], bench_symbol: str,
     return prices
 
 
+def _period_for(days: int) -> str:
+    """Profondeur de téléchargement couvrant l'ancienneté de la plus vieille entrée suivie."""
+    if days <= 55:
+        return "3mo"
+    if days <= 120:
+        return "6mo"
+    if days <= 250:
+        return "1y"
+    return "2y"
+
+
+def backfill_tracked_prices(prices: dict, entries) -> list[str]:
+    """
+    Complète EN PLACE `prices` pour les titres SUIVIS qui en sont absents.
+
+    Le dictionnaire vient du scan du jour : il ne porte que l'univers découvert
+    aujourd'hui, alors que les lignes suivies viennent de tout l'historique. Un titre
+    sorti de l'univers — capitalisation envolée APRÈS une hausse, ou effondrée sous le
+    plancher — cote pourtant normalement. Sans ce complément il est lu « données
+    absentes », ce qui efface autant les réussites que les échecs : la condition de
+    succès (doubler) est aussi une condition d'éjection de l'univers.
+
+    `entries` : paires (ticker, date d'entrée ISO) ; la plus ancienne des MANQUANTES
+    fixe la profondeur téléchargée. Ordre de grandeur : quelques dizaines de symboles.
+
+    Échec propre : réseau muet ou titre réellement sans cotation ⇒ le ticker reste
+    absent, donc « données absentes », et le rapport global tient. Renvoie les tickers
+    effectivement récupérés.
+    """
+    missing: dict[str, str] = {}
+    for tk, day in entries:
+        if not tk or not day or tk in prices:
+            continue
+        if day < missing.get(tk, "9999-99-99"):   # la plus ancienne entrée du titre
+            missing[tk] = day
+    if not missing:
+        return []
+
+    try:
+        oldest = datetime.fromisoformat(min(missing.values()))
+        period = _period_for((datetime.now(tz=timezone.utc).date() - oldest.date()).days)
+    except (TypeError, ValueError):               # date corrompue → profondeur par défaut
+        period = None
+
+    try:
+        got = _download_prices(sorted(missing), FILTERS["rs_benchmark"], period=period)
+    except Exception as e:
+        print(f"[suivi] complément de prix indisponible ({len(missing)} titres) : {e}")
+        return []
+    got.pop(FILTERS["rs_benchmark"], None)        # le benchmark ne se suit pas
+    prices.update(got)
+    print(f"[suivi] titres hors univers du jour : {len(got)}/{len(missing)} récupérés")
+    return sorted(got)
+
+
 # ---------------------------------------------------------------------------
 # Passe A — filtres prix/volume (aucun réseau, pur calcul sur le DataFrame)
 # ---------------------------------------------------------------------------

@@ -253,3 +253,65 @@ def test_tracking_reads_pre_s1_snapshots(tmp_path):
         {"OLD": pd.DataFrame({"Close": pd.Series([10.0, 10.5, 11.0], index=idx)})}, tmp_path)
     assert len(rows) == 1
     assert rows[0]["ticker"] == "OLD" and rows[0]["phase"] == "open"
+
+
+# ---------------------------------------------------------------------------
+# Cohorte étanche (Epic 9 S1) — même défaut, mêmes conséquences que pour la
+# famille v4 : le dictionnaire de prix est celui de l'univers du jour.
+# ---------------------------------------------------------------------------
+
+def _v5_entry_snapshot(tmp_path, tickers, window="7"):
+    (tmp_path / "20250106_200000.json").write_text(json.dumps(
+        {"scanned_at": "2025-01-06T20:00:00+00:00",
+         "v5": {"windows": {window: {"cohort": [{"ticker": tk, "price": 10.0, "chg": -0.2}
+                                                for tk in tickers]}}}}))
+
+
+def _v5_flat(n, price=10.0):
+    return pd.DataFrame({"Close": pd.Series(
+        [price] * n, index=pd.bdate_range("2025-01-07", periods=n))})
+
+
+def test_tracking_backfills_ticker_out_of_universe(tmp_path, monkeypatch):
+    """Titre suivi absent du dictionnaire de prix : rendement calculé, phase
+    autre que « données absentes »."""
+    import screener_backend as sb
+    _v5_entry_snapshot(tmp_path, ["OUT"])
+    monkeypatch.setattr(sb, "_download_prices",
+                        lambda tks, bench, period=None: {"OUT": _v5_flat(10, price=25.0)})
+
+    row = build_tracking({}, tmp_path)[0]
+    assert row["phase"] == "open" and row["window"] == 7
+    assert row["ret"] == pytest.approx(1.5)
+
+
+def test_tracking_real_absence_stays_no_data(tmp_path, monkeypatch):
+    """Absence réelle : échec propre du complément, ligne conservée en « données
+    absentes », aucune exception."""
+    import screener_backend as sb
+    _v5_entry_snapshot(tmp_path, ["DEAD"])
+
+    def boom(*a, **k):
+        raise RuntimeError("réseau indispo")
+    monkeypatch.setattr(sb, "_download_prices", boom)
+    row = build_tracking({}, tmp_path)[0]
+    assert row["phase"] == "no_data" and row["status"] == {"code": "no_data"}
+
+
+def test_tracking_present_tickers_untouched_by_backfill(tmp_path, monkeypatch):
+    """Non-régression, tolérance zéro : lignes inchangées pour les titres déjà
+    présents, et aucun complément déclenché quand rien ne manque."""
+    import screener_backend as sb
+    horizon = v5.CFG["horizon"]
+    _v5_entry_snapshot(tmp_path, ["EXACT", "ONE_LESS"])
+    calls = []
+    monkeypatch.setattr(sb, "_download_prices", lambda *a, **k: calls.append(a) or {})
+
+    by = {r["ticker"]: r for r in build_tracking(
+        {"EXACT": _v5_flat(horizon), "ONE_LESS": _v5_flat(horizon - 1)}, tmp_path)}
+    assert calls == []
+    assert by["EXACT"]["phase"] == "closed" and by["EXACT"]["days_held"] == horizon
+    assert by["EXACT"]["ret"] == 0.0 and by["EXACT"]["ret_63"] == 0.0
+    assert by["EXACT"]["status"] == {"code": "closed"}
+    assert by["ONE_LESS"]["phase"] == "open" and by["ONE_LESS"]["days_left"] == 1
+    assert by["ONE_LESS"]["ret"] == 0.0 and by["ONE_LESS"]["status"] == {"code": "below"}

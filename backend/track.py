@@ -26,7 +26,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from screener_backend import FILTERS, HISTORY_DIR, _download_prices
+from screener_backend import (FILTERS, HISTORY_DIR, _download_prices, _period_for,
+                              backfill_tracked_prices)
 
 # Numérateurs forward du protocole v2 §1 : P(fwd ≥ +50 %) et P(fwd ≥ +100 %). FIGÉS par le
 # protocole pré-registré (pas des seuils réglables → hors FILTERS) — docs/backtest_protocol_v2.md.
@@ -61,17 +62,6 @@ def _value_on_or_after(close: pd.Series, target_date) -> float | None:
         if ts.date() >= target_date:
             return float(val)
     return None
-
-
-def _period_for(days: int) -> str:
-    """Profondeur de téléchargement yfinance couvrant l'ancienneté de la plus vieille sélection."""
-    if days <= 55:
-        return "3mo"
-    if days <= 120:
-        return "6mo"
-    if days <= 250:
-        return "1y"
-    return "2y"
 
 
 def _parse_date(value) -> datetime | None:
@@ -152,7 +142,11 @@ def run_tracker(history_dir: Path = HISTORY_DIR, high_score: int = 7,
             print(f"[track] données de marché indisponibles: {e}")
         return _empty_result(len(picks), high_score, now, f"Données de marché indisponibles: {e}")
 
+    # Un lot perdu ou un titre sorti de l'univers laisse un trou dans `prices` : sans
+    # ce complément la ligne était omise, et numérateur comme dénominateur bougeaient
+    # ensemble, sans trace (Epic 9 S1). Second appel isolé, jamais fatal.
     bench_df = prices.pop(FILTERS["rs_benchmark"], None)
+    backfill_tracked_prices(prices, ((tk, info.get("date")) for tk, info in picks.items()))
     bench_close = bench_df["Close"].dropna() if bench_df is not None and "Close" in bench_df else None
     bench_cur = float(bench_close.iloc[-1]) if bench_close is not None and len(bench_close) else None
 

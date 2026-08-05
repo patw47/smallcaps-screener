@@ -169,6 +169,7 @@ Every gate is a `make` target; `make test` is the offline suite.
 | `make check-criteria-coverage` | A rule or scoring key absent from the public criteria index. |
 | `make build-frontend` | JSX that no longer compiles (containerised `vite build`). |
 | `make check-runtime` | Python that compiles on the dev interpreter but not on the production 3.11 container. |
+| `make check-cohort` | A tracked stock still quoting but read as "no data" — replays the tracking on the live history from an *empty* universe (needs the running container and network). |
 | `make docs-build` | A broken public documentation build (strict MkDocs). |
 
 ## Configuration

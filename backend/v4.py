@@ -181,8 +181,16 @@ def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
     Le cycle de vie d'une ligne (phase, statut, point de contrôle) est calculé par
     `lifecycle.track_row`, partagé avec la Purge silencieuse — le calendrier
     d'observation est un protocole de mesure, chaque famille y passe SON cfg.
+
+    `prices` est celui du scan du jour, donc restreint à l'univers découvert : on le
+    complète AVANT tout calcul de cycle de vie pour les titres suivis qui en sont
+    sortis (Epic 9 S1). Complément EN PLACE : la famille suivante en profite.
     """
+    from screener_backend import backfill_tracked_prices
+
+    entries = _load_cohort_entries(history_dir)
+    backfill_tracked_prices(prices, ((tk, e["entry_date"]) for tk, e in entries.items()))
     out = [lifecycle.track_row({"ticker": tk}, ent, prices.get(tk), CFG)
-           for tk, ent in _load_cohort_entries(history_dir).items()]
+           for tk, ent in entries.items()]
     out.sort(key=lambda r: r["entry_date"], reverse=True)
     return out

@@ -12,6 +12,8 @@ import os
 
 os.environ.setdefault("DATA_DIR", "/tmp/screener_test")
 
+import pytest  # noqa: E402
+
 import screener_backend as sb  # noqa: E402
 import v4  # noqa: E402
 import v5  # noqa: E402
@@ -34,3 +36,13 @@ TEST_WEIGHTS = {"accumulation": 3, "insider": 2}  # non uniformes, ≠ valeurs r
 v4.CFG.update(TEST_V4)
 v5.CFG.update(TEST_V5)
 sb.FILTERS["score_weights"].update(TEST_WEIGHTS)
+
+
+@pytest.fixture(autouse=True)
+def offline_backfill(monkeypatch):
+    """
+    Suite OFFLINE : le complément de prix des titres suivis (Epic 9 S1) sort sur le
+    réseau. Par défaut il ne rend rien — le suivi retombe alors sur le comportement
+    « données absentes », déjà couvert. Les tests qui l'exercent le repatchent.
+    """
+    monkeypatch.setattr(sb, "_download_prices", lambda *a, **k: {})

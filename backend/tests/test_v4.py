@@ -336,3 +336,67 @@ def test_checkpoint_is_not_an_exit(tmp_path):
     row = build_tracking({"LATE": falling}, tmp_path)[0]
     assert row["status"] == {"code": "below"}
     assert row["phase"] == "open"
+
+
+# ---------------------------------------------------------------------------
+# Cohorte étanche (Epic 9 S1) — le dictionnaire de prix du scan ne porte que
+# l'univers découvert AUJOURD'HUI ; les titres suivis viennent de tout
+# l'historique. Un titre sorti de l'univers cote pourtant toujours.
+# ---------------------------------------------------------------------------
+
+def test_tracking_backfills_ticker_out_of_universe(tmp_path, monkeypatch):
+    """Titre suivi absent du dictionnaire de prix : sa ligne porte un rendement
+    calculé et une phase autre que « données absentes »."""
+    import screener_backend as sb
+    from v4 import build_tracking
+    _entry_snapshot(tmp_path, ["OUT"])
+    monkeypatch.setattr(sb, "_download_prices",
+                        lambda tks, bench, period=None: {"OUT": _flat(10, price=25.0)})
+
+    row = build_tracking({}, tmp_path)[0]          # univers du jour VIDE
+    assert row["phase"] == "open"                  # plus « données absentes »
+    assert row["ret"] == pytest.approx(1.5)        # 25 / 10 − 1, entrée à 10
+    assert row["days_held"] == 10
+
+
+def test_tracking_real_absence_stays_no_data(tmp_path, monkeypatch):
+    """Absence RÉELLE de cotation : le complément échoue proprement — la ligne
+    reste « données absentes » et rien ne lève."""
+    import screener_backend as sb
+    from v4 import build_tracking
+    _entry_snapshot(tmp_path, ["DEAD"])
+
+    monkeypatch.setattr(sb, "_download_prices", lambda *a, **k: {})   # marché muet
+    row = build_tracking({}, tmp_path)[0]
+    assert row["phase"] == "no_data" and row["status"] == {"code": "no_data"}
+
+    def boom(*a, **k):
+        raise RuntimeError("réseau indispo")
+    monkeypatch.setattr(sb, "_download_prices", boom)
+    row = build_tracking({}, tmp_path)[0]          # ne doit pas lever
+    assert row["phase"] == "no_data" and row["ret"] is None
+
+
+def test_tracking_present_tickers_untouched_by_backfill(tmp_path, monkeypatch):
+    """Non-régression, tolérance zéro : les lignes des titres DÉJÀ dans le
+    dictionnaire de prix sont identiques au calcul d'avant le sprint, et aucun
+    complément n'est déclenché quand rien ne manque."""
+    import screener_backend as sb
+    from v4 import build_tracking
+    horizon = v4.CFG["horizon"]
+    _entry_snapshot(tmp_path, ["OLD", "YOUNG"])
+    calls = []
+    monkeypatch.setattr(sb, "_download_prices", lambda *a, **k: calls.append(a) or {})
+
+    by = {r["ticker"]: r for r in
+          build_tracking({"OLD": _flat(horizon + 8), "YOUNG": _flat(horizon - 20)}, tmp_path)}
+    assert calls == []                                   # rien ne manquait : aucun appel
+    assert by["OLD"]["phase"] == "closed" and by["OLD"]["days_held"] == horizon + 8
+    assert by["OLD"]["ret"] == 0.0 and by["OLD"]["ret_63"] == 0.0
+    assert by["OLD"]["status"] == {"code": "closed"}
+    assert by["OLD"]["days_left"] == 0
+    assert by["YOUNG"]["phase"] == "open" and by["YOUNG"]["days_held"] == horizon - 20
+    assert by["YOUNG"]["ret"] == 0.0 and by["YOUNG"]["ret_5"] == 0.0
+    assert by["YOUNG"]["days_left"] == 20
+    assert by["YOUNG"]["status"] == {"code": "below"}     # 0 % < seuil de test
+    assert by["YOUNG"]["checkpoint"] == {"code": "week_one"}

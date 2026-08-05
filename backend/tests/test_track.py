@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 import screener_backend as sb
 import track
@@ -259,3 +260,54 @@ def test_empty_result_carries_sleeves(tmp_path):
         assert name in r["sleeves"]
         assert r["sleeves"][name]["n"] == 0
         assert r["sleeves"][name]["n_up50"] == 0 and r["sleeves"][name]["n_up100"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Cohorte étanche (Epic 9 S1) — le rapport de performance OMETTAIT la ligne d'un
+# titre absent du dictionnaire de prix : numérateur et dénominateur bougeaient
+# ensemble, sans trace. Il doit désormais produire une ligne par entrée suivie.
+# ---------------------------------------------------------------------------
+
+def _flat(price, n=10):
+    return pd.DataFrame({"Close": [price] * n},
+                        index=pd.date_range("2026-01-01", periods=n, freq="D"))
+
+
+def test_run_tracker_backfills_missing_price(tmp_path, monkeypatch):
+    """N entrées distinctes dont une absente du téléchargement : N lignes."""
+    hd = tmp_path / "h"
+    _write_snap(hd, "20260101_000000.json",
+                {"scanned_at": "2026-01-01T00:00:00+00:00",
+                 "picks": [{"ticker": "A", "price": 10.0, "score": 8},
+                           {"ticker": "B", "price": 10.0, "score": 6},
+                           {"ticker": "OUT", "price": 10.0, "score": 5}]})
+    bench = sb.FILTERS["rs_benchmark"]
+    monkeypatch.setattr(track, "_download_prices", lambda tks, b, period=None: {
+        "A": _flat(11.0), "B": _flat(9.0), bench: _flat(100.0)})     # OUT manquant
+    monkeypatch.setattr(sb, "_download_prices", lambda tks, b, period=None: {
+        "OUT": _flat(30.0)})                                          # complément isolé
+
+    r = run_tracker(hd, quiet=True)
+    assert r["n_picks"] == 3 and r["n_tracked"] == 3
+    assert {row["ticker"] for row in r["rows"]} == {"A", "B", "OUT"}
+    out = next(row for row in r["rows"] if row["ticker"] == "OUT")
+    assert out["ret"] == pytest.approx(2.0)      # 30 / 10 − 1 : l'explosion n'est plus effacée
+
+
+def test_run_tracker_backfill_failure_is_silent(tmp_path, monkeypatch):
+    """Complément indisponible : le rapport global tient, la ligne manque simplement."""
+    hd = tmp_path / "h"
+    _write_snap(hd, "20260101_000000.json",
+                {"scanned_at": "2026-01-01T00:00:00+00:00",
+                 "picks": [{"ticker": "A", "price": 10.0, "score": 8},
+                           {"ticker": "DEAD", "price": 10.0, "score": 5}]})
+    bench = sb.FILTERS["rs_benchmark"]
+    monkeypatch.setattr(track, "_download_prices",
+                        lambda tks, b, period=None: {"A": _flat(11.0), bench: _flat(100.0)})
+
+    def boom(*a, **k):
+        raise RuntimeError("réseau indispo")
+    monkeypatch.setattr(sb, "_download_prices", boom)
+
+    r = run_tracker(hd, quiet=True)              # ne doit pas lever
+    assert r["n_picks"] == 2 and r["n_tracked"] == 1
