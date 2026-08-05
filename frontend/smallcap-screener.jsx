@@ -998,6 +998,7 @@ export default function App() {
   const [scanning, setScanning] = useState(false);
   const [sector, setSector] = useState("All");
   const [profile, setProfile] = useState("all");
+  const [riskSort, setRiskSort] = useState("scan");   // scan (défaut) | most | least
   const [analyses, setAnalyses] = useState({});
   const [loadingTickers, setLoadingTickers] = useState({});
   const [lastScan, setLastScan] = useState(null);
@@ -1085,6 +1086,16 @@ export default function App() {
       if (profile === "phenix") return (b.phenixStrength ?? 0) - (a.phenixStrength ?? 0);
       return (b.profileStrength ?? 0) - (a.profileStrength ?? 0);
     });
+
+  // Tri par nombre de marqueurs — entièrement local, EN PLUS du tri ci-dessus, jamais
+  // à sa place : l'ordre du scan reste le défaut. Le tri de JS est stable depuis ES2019,
+  // donc à nombre égal l'ordre précédent est conservé. Il DÉPLACE, il ne masque rien :
+  // `filtered` garde exactement les mêmes éléments (masquer serait un filtre).
+  if (riskSort !== "scan") {
+    const dir = riskSort === "most" ? -1 : 1;
+    filtered.sort((a, b) => dir * (a.riskMarkers.length - b.riskMarkers.length));
+  }
+  const markedCount = filtered.filter(s => s.riskMarkers.length > 0).length;
 
   if (loading) {
     return (
@@ -1244,6 +1255,25 @@ export default function App() {
                   borderRadius: 20, color: sector === s ? "#aaaaff" : "#44446a",
                   fontSize: 12, fontFamily: "monospace", cursor: "pointer",
                 }}>{s}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Compteur et tri, en tête de liste. Les deux chiffres sont calculés sur ce
+              qui est affiché, jamais figés ; le tri ne voyage pas vers l'API. */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ color: "#8494a3", fontSize: 12.5, fontFamily: "monospace" }}>
+              {t("zones.count", { n: filtered.length, m: markedCount })}
+            </span>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginLeft: "auto" }}>
+              {["scan", "most", "least"].map(k => (
+                <button key={k} onClick={() => setRiskSort(k)} aria-pressed={riskSort === k} style={{
+                  padding: "6px 14px",
+                  background: riskSort === k ? "#2a2a6a" : "#0d0d1a",
+                  border: `1px solid ${riskSort === k ? "#4444aa" : "#ffffff0a"}`,
+                  borderRadius: 20, color: riskSort === k ? "#aaaaff" : "#44446a",
+                  fontSize: 12, fontFamily: "monospace", cursor: "pointer",
+                }}>{t(`zones.sort.${k}`)}</button>
               ))}
             </div>
           </div>
