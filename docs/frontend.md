@@ -9,13 +9,20 @@
 >
 > **Epic 3 — survival-conditioned score.** Each card now leads with an **`ExplodeScore`**
 > element: the model's **`P(+100 % / 63d)`** (`p_explode`) — the headline v3 signal — plus a
-> red **survival-risk flag** (`survival_risk`) when a distress signal is raised. `p_explode` is
+> red **survival-risk flag** (`survival_risk`) when a distress signal is raised — replaced at
+> the card level by the detailed risk file in Epic 10 S1, see below. `p_explode` is
 > **permanently `null`**: the v3 thesis failed, no model was ever trained, and the scoring
 > model was deleted in Epic 7 S2 → shown honestly as "modèle non entraîné", no invented
 > number. `survival_risk` still comes from the risk flags. The score carries a
 > **permanent "non validé" marker**:
 > on free survivor-only data the backtest can only refute (protocol v3 §2); only the live
 > tracker (Validation B) can validate it.
+>
+> **Epic 10 S1 — readable risk file.** The single amber "distress" badge is gone: each card
+> now renders `risk_markers` — the `high` level as a dedicated banner ABOVE the badge strip
+> (its own shape, not a pill), `medium`/`low` as pills. Two dedicated components
+> (`RiskAlert`, `RiskChip`), deliberately separate from the context-flag rendering.
+> `survival_risk` remains in the payload, unchanged.
 
 ## Files
 

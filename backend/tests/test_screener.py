@@ -16,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import scoring
 import screener_backend
 from scoring import score_candidates
 from screener_backend import (
@@ -298,7 +299,91 @@ def test_scoring_contract_p_explode_null_and_survival_risk_bool():
     score_candidates([risky, healthy])
     assert risky["p_explode"] is None and healthy["p_explode"] is None
     assert risky["survival_risk"] is True and healthy["survival_risk"] is False
-    assert set(risky) - before == {"p_explode", "survival_risk"}   # aucun autre champ touché
+    # Epic 10 S1 : le détail S'AJOUTE (risk_markers), le booléen garde nom et sémantique.
+    assert set(risky) - before == {"p_explode", "survival_risk", "risk_markers"}
+
+
+# ---------------------------------------------------------------------------
+# Epic 10 S1 — DÉTAIL des marqueurs à la place du badge unique
+#
+# Le booléen agrégé écrasait cinq faits hétérogènes : un doute sur la continuité
+# d'exploitation y pesait autant qu'un rapport déposé en retard. La liste détaillée
+# s'AJOUTE à côté, en codes + variables — jamais de texte d'affichage côté backend.
+# ---------------------------------------------------------------------------
+
+def test_risk_markers_empty_list_when_no_marker():
+    # Une sélection sans marqueur porte une LISTE VIDE, pas une absence de clé : le
+    # frontend n'a pas à distinguer « rien à signaler » de « champ oublié ».
+    sain = {"ticker": "SAIN"}
+    score_candidates([sain])
+    assert sain["risk_markers"] == []
+    assert sain["survival_risk"] is False
+
+
+def test_risk_markers_two_markers_produce_exactly_two_entries():
+    # Deux marqueurs levés → exactement deux entrées, chacune un code + ses variables.
+    s = {"ticker": "AAA", "going_concern_flag": True, "late_filing_flag": True,
+         "dilution_flag": False, "sub_dollar_flag": False, "reverse_split_flag": None}
+    score_candidates([s])
+    assert [m["code"] for m in s["risk_markers"]] == ["going_concern", "late_filing"]
+    for m in s["risk_markers"]:
+        # Codes et variables SEULEMENT : aucune chaîne destinée à l'affichage.
+        assert set(m) <= {"code", "level", "date", "days"}
+        assert m["code"] in scoring.MARKER_LEVELS
+
+
+def test_risk_markers_carry_dates_when_available_and_survive_without():
+    # Date disponible → portée telle quelle ; date absente → le marqueur reste dans la
+    # liste, sans clé `date` et sans exception.
+    date, sans_date = (
+        {"going_concern_flag": True, "going_concern_date": "2026-05-15",
+         "reverse_split_flag": True, "reverse_split_date": "2026-03-02"},
+        {"going_concern_flag": True, "reverse_split_flag": True, "dilution_flag": True},
+    )
+    score_candidates([date, sans_date])
+    assert {m["code"]: m.get("date") for m in date["risk_markers"]} == {
+        "going_concern": "2026-05-15", "reverse_split": "2026-03-02"}
+    assert [m["code"] for m in sans_date["risk_markers"]] == [
+        "going_concern", "reverse_split", "dilution"]
+    assert all("date" not in m for m in sans_date["risk_markers"])
+
+
+def test_risk_markers_carry_severity_level():
+    # Le niveau est une DONNÉE émise par le backend, pas du style : un marqueur sans
+    # niveau fait échouer ce test.
+    s = {f"{code}_flag": True for code in scoring.MARKER_LEVELS}
+    s["sub_dollar_days"] = 42
+    score_candidates([s])
+    niveaux = {m["code"]: m["level"] for m in s["risk_markers"]}
+    assert len(niveaux) == len(scoring.MARKER_LEVELS)
+    assert niveaux["going_concern"] == "high"      # continuité d'exploitation
+    assert niveaux["reverse_split"] == "high"      # regroupement d'actions
+    assert niveaux["dilution"] == "medium"         # émission d'actions à venir
+    assert niveaux["late_filing"] == "low"         # retard de dépôt
+    assert niveaux["sub_dollar"] == "low"          # cours sous le plancher
+    assert all(m.get("level") for m in s["risk_markers"])
+
+
+def test_sub_dollar_marker_carries_run_length_not_a_boolean():
+    # La gravité voyage en VALEUR : la longueur de série, pas un booléen de plus.
+    s = {"sub_dollar_flag": True, "sub_dollar_days": 37}
+    score_candidates([s])
+    marker = next(m for m in s["risk_markers"] if m["code"] == "sub_dollar")
+    assert marker["days"] == 37
+    assert not isinstance(marker["days"], bool)
+
+
+def test_reverse_split_marker_dates_the_operation():
+    # La date de l'opération sort de la série DÉJÀ parcourue — aucun appel réseau.
+    closes = [10.0 + i * 0.05 for i in range(200)]
+    df = _make_df(closes, [200_000] * 200)
+    df["Stock Splits"] = 0.0
+    df.iloc[-30, df.columns.get_loc("Stock Splits")] = 0.1
+    flag, date = screener_backend._reverse_split_marker(df)
+    assert flag is True
+    assert date == str(df.index[-30].date())
+    # Colonne absente → capteur muet, aucune date inventée.
+    assert screener_backend._reverse_split_marker(_make_df(closes, [200_000] * 200)) == (None, None)
 
 
 def test_scan_payload_keys_frozen():
@@ -541,8 +626,11 @@ def offline_scan(monkeypatch, tmp_path):
                         lambda tk: {"exchange": "NMS", "marketCap": 300e6, "shortName": tk,
                                     "sector": "Healthcare", "industry": "Biotechnology"})
     import edgar
+    # La date de dépôt accompagne le drapeau (Epic 10 S1) : c'est elle qui doit voyager
+    # jusqu'à la réponse servie, sans qu'aucun appel réseau supplémentaire soit fait.
     monkeypatch.setattr(edgar, "survival_signals", lambda tk, *a, **k: {
-        "dilution_flag": tk == "T1", "late_filing_flag": False, "going_concern_flag": False})
+        "dilution_flag": tk == "T1", "late_filing_flag": False, "going_concern_flag": False,
+        "dilution_date": "2026-07-14" if tk == "T1" else None})
     monkeypatch.setattr(edgar, "net_insider_buying", lambda *a, **k: None)
     monkeypatch.setattr(screener_backend, "HISTORY_DIR", tmp_path)
     # Entrée de cohorte HORS UNIVERS : c'est elle qui déclenche le complément de prix
@@ -613,3 +701,72 @@ def test_markers_never_enter_selection_or_ranking(offline_scan):
     assert marques <= set(SELECTION_FROZEN)
     assert [s["ticker"] for s in out["stocks"]] == SELECTION_FROZEN
     assert {s["ticker"] for s in out["stocks"] if s["survival_risk"]} == marques
+
+
+# ---------------------------------------------------------------------------
+# Epic 10 S1 — non-régression du CONTRAT SERVI, et détail transporté jusqu'à la réponse
+#
+# Artefact : le jeu de clés d'une sélection dans la réponse servie. Invariant : toutes
+# les clés antérieures restent présentes, `survival_risk` garde son nom ET sa valeur
+# (la disjonction des cinq marqueurs) ; le jeu ne fait que CROÎTRE. Remplacer le booléen
+# par le détail au lieu de l'accompagner fait échouer ce test.
+# ---------------------------------------------------------------------------
+
+# Jeu de clés d'une sélection AVANT ce sprint (gelé). Tolérance : aucune retirée, aucune
+# renommée. Les clés ajoutées, elles, sont libres — c'est le sens de « ne fait que croître ».
+STOCK_KEYS_BEFORE_EPIC10 = {
+    "accumulation", "atr_ratio", "binary_event", "cash_bin", "cash_positive",
+    "catalyst_date", "catalyst_type", "change_1d", "change_1m", "close_vs_sma20", "cmf",
+    "compressed", "compression_pct", "days_since_trigger", "days_to_earnings",
+    "dilution_flag", "dollar_volume", "exchange", "f_accum", "f_atr_ratio", "f_ext",
+    "f_pct_recent", "f_rs", "flags", "float_shares", "fusee_event", "fusee_strength",
+    "going_concern_flag", "industry", "insider_buying", "insider_net_buying",
+    "insider_net_buying_pos", "insider_pct", "ipo_year", "is_fusee", "is_phenix",
+    "late_filing_flag", "low_ext", "low_float", "ma50", "market_cap_m", "name",
+    "near_high", "near_pivot", "p_explode", "pct_52w_high", "pct_recent_high",
+    "phenix_strength", "pivot_level", "positives", "price", "price_above_ma50",
+    "profile", "profile_strength", "profiles", "revenue_growth", "reverse_split_flag",
+    "rs_line_rising", "rs_outperf", "rs_signal", "rs_strength", "rs_turning", "score",
+    "sector", "setup_score", "short_interest_pct", "sma20", "sub_dollar_days",
+    "sub_dollar_flag", "survival_risk", "ticker", "triggered", "updown_vol_ratio",
+    "vol_ratio",
+}
+
+
+def test_served_stock_keys_only_grow_and_boolean_is_kept(offline_scan):
+    out = screener_backend.run_scan(offline_scan)
+    assert out["stocks"], "aucune sélection : le verrou serait vrai par vacuité"
+    for s in out["stocks"]:
+        manquantes = STOCK_KEYS_BEFORE_EPIC10 - set(s)
+        assert not manquantes, f"{s['ticker']} : clé(s) servie(s) disparue(s) — {sorted(manquantes)}"
+        # Le booléen agrégé garde son nom ET sa sémantique : la disjonction des cinq
+        # marqueurs, indépendamment du détail qui l'accompagne.
+        assert s["survival_risk"] is any(bool(s.get(f)) for f in scoring.RISK_FLAGS)
+        assert isinstance(s["risk_markers"], list)   # le détail S'AJOUTE, il ne remplace pas
+    # Détail et booléen désignent exactement les mêmes titres.
+    assert ({s["ticker"] for s in out["stocks"] if s["risk_markers"]}
+            == {s["ticker"] for s in out["stocks"] if s["survival_risk"]})
+
+
+def test_marker_detail_travels_to_the_served_response(offline_scan):
+    # Bout en bout : la liste détaillée arrive dans la réponse servie avec ses variables —
+    # la longueur de série en VALEUR, la date du fait quand elle existe, le niveau toujours.
+    out = screener_backend.run_scan(offline_scan)
+    par_ticker = {s["ticker"]: s["risk_markers"] for s in out["stocks"]}
+
+    # Cours sous le plancher : la gravité voyage en longueur de série, pas en booléen.
+    sub = next(m for m in par_ticker["T7"] if m["code"] == "sub_dollar")
+    t7 = next(s for s in out["stocks"] if s["ticker"] == "T7")
+    assert sub["days"] == t7["sub_dollar_days"] > 1
+    assert sub["level"] == "low"
+
+    # Émission d'actions à venir : la date de dépôt est conservée telle quelle.
+    dil = next(m for m in par_ticker["T1"] if m["code"] == "dilution")
+    assert dil == {"code": "dilution", "level": "medium", "date": "2026-07-14"}
+
+    # Regroupement d'actions : niveau haut, daté depuis la série de prix déjà parcourue.
+    rev = next(m for m in par_ticker["T0"] if m["code"] == "reverse_split")
+    assert rev["level"] == "high" and rev["date"]
+
+    # Les sélections sans marqueur portent une liste vide, jamais une absence de clé.
+    assert all(par_ticker[tk] == [] for tk in par_ticker if tk not in {"T7", "T1", "T0"})

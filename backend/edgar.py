@@ -404,6 +404,9 @@ def survival_signals(ticker: str, now: datetime | None = None,
                              10-Q/10-K ≤ as_of → le signal de faillite le plus direct.
     - `cash_runway`        : mois de trésorerie restants (XBRL companyfacts, point-in-time).
 
+    Chaque drapeau levé porte sa DATE de dépôt (`*_date`, None quand le drapeau est bas) :
+    elle est déjà parcourue par la boucle, la conserver ne coûte aucune requête de plus.
+
     Booléens : filing absent → False (pas de mauvaise nouvelle), jamais None pour « donnée
     manquante ». None UNIQUEMENT si EDGAR est indisponible / désactivé / ticker inconnu
     (neutre, ne pénalise pas — même contrat que `net_insider_buying`).
@@ -429,6 +432,9 @@ def survival_signals(ticker: str, now: datetime | None = None,
     forms, accs, fdates, docs = rec
 
     dilution = late = False
+    # Dates de dépôt du fait (Epic 10 S1) : la boucle les parcourt déjà, on les CONSERVE —
+    # aucune requête supplémentaire. On garde la plus récente : c'est celle qui date le fait.
+    dilution_date = late_date = None
     gc = None  # (filingDate, accession, doc) du dernier 10-Q/10-K ≤ as_of
     for form, acc, fdate, doc in zip(forms, accs, fdates, docs):
         if fdate > as_of:
@@ -437,8 +443,10 @@ def survival_signals(ticker: str, now: datetime | None = None,
         if cutoff <= fdate <= as_of:
             if f.startswith(_DILUTION_PREFIXES):
                 dilution = True
+                dilution_date = max(dilution_date or "", fdate)
             if f in _LATE_FORMS:
                 late = True
+                late_date = max(late_date or "", fdate)
         if f in _PERIODIC_FORMS and (gc is None or fdate > gc[0]):
             gc = (fdate, acc, doc)
 
@@ -459,6 +467,10 @@ def survival_signals(ticker: str, now: datetime | None = None,
         "dilution_flag": dilution,
         "late_filing_flag": late,
         "going_concern_flag": going_concern,
+        # Date du fait quand le drapeau est levé (None sinon) — déjà sous la main ci-dessus.
+        "dilution_date": dilution_date if dilution else None,
+        "late_filing_date": late_date if late else None,
+        "going_concern_date": gc[0] if going_concern else None,
         "cash_runway": _cash_runway(cik10, as_of),   # mois de trésorerie restants (XBRL, point-in-time)
         "window_days": window_days, "cutoff": cutoff, "as_of": as_of,
     }

@@ -813,6 +813,64 @@ function ProfileBadge({ kind, strength, event }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Dossier de risque (Epic 10 S1) — composants DÉDIÉS, jamais partagés avec les
+// drapeaux de contexte : deux familles rendues par le même composant finissent
+// toujours par se ressembler à nouveau, à la première retouche de style.
+// Le backend sert un code, un niveau et des variables ; tout le texte vient d'ici.
+// ---------------------------------------------------------------------------
+const riskText = (m) => t(`risk.${m.code}`, { n: m.days });
+const riskDate = (m) => (m.date ? t("risk.since", { d: m.date }) : "");
+const riskTip = (m) => `${t(`risk.level.${m.level}`)} — ${t(`risk.tip.${m.code}`)}`;
+
+// Niveau haut : SORT du bandeau de pilules. Bande pleine largeur à angles vifs, barre
+// latérale, pictogramme — aucune autre forme de la carte ne lui ressemble. Une nuance
+// de couleur ne suffirait pas : tant que le risque reste une pilule parmi les pilules,
+// l'oeil le lit comme un paramètre de plus.
+function RiskAlert({ marker }) {
+  return (
+    <div style={{
+      display: "flex", gap: 10, alignItems: "flex-start",
+      background: "#ff2d2d1c", borderLeft: "4px solid #ff4d4d", borderRadius: "0 4px 4px 0",
+      padding: "10px 13px", marginBottom: 10,
+    }}>
+      <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1.2 }}>🛑</span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{
+          color: "#ff8f8f", fontSize: 10, fontWeight: 800,
+          textTransform: "uppercase", letterSpacing: 1,
+        }}>{t(`risk.level.${marker.level}`)}</div>
+        <Tip tip={t(`risk.tip.${marker.code}`)} down style={{ display: "block", borderBottom: "none" }}>
+          <span style={{ color: "#ffdcdc", fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+            {riskText(marker)}
+          </span>
+          {marker.date && (
+            <span style={{ color: "#e0a0a0", fontSize: 11, marginLeft: 6, fontFamily: "monospace" }}>
+              {riskDate(marker)}
+            </span>
+          )}
+        </Tip>
+      </div>
+    </div>
+  );
+}
+
+// Niveaux intermédiaire et faible : pilule — leur gravité est du même ordre que celle
+// des paramètres de contexte, la forme peut donc rester la même.
+function RiskChip({ marker }) {
+  const c = marker.level === "medium"
+    ? { fg: "#ffb347", bg: "#ffb34714", bd: "#ffb34733" }
+    : { fg: "#c9a227", bg: "#c9a22712", bd: "#c9a22730" };
+  return (
+    <Tip tip={riskTip(marker)} style={{
+      background: c.bg, color: c.fg, fontSize: 10, padding: "3px 8px",
+      borderRadius: 20, border: `1px solid ${c.bd}`,
+    }}>
+      {riskText(marker)}{marker.date ? ` · ${riskDate(marker)}` : ""}
+    </Tip>
+  );
+}
+
 function StockCard({ stock, onAnalyze, analysis, isLoading }) {
   const changeColor = (v) => v >= 0 ? "#00e096" : "#ff6b6b";
   const profileKind = stock.isPhenix ? "phenix" : stock.isFusee ? "fusee" : null;
@@ -835,6 +893,10 @@ function StockCard({ stock, onAnalyze, analysis, isLoading }) {
           <div style={{ fontSize: 12, color: changeColor(stock.change1d), fontFamily: "monospace" }}>{stock.change1d > 0 ? "+" : ""}{stock.change1d}{t("card.today")}</div>
         </div>
       </div>
+
+      {stock.riskMarkers.filter(m => m.level === "high").map(m => (
+        <RiskAlert key={m.code} marker={m} />
+      ))}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
         {stock.isFusee && <ProfileBadge kind="fusee" strength={stock.fuseeStrength} event={stock.fuseeEvent} />}
@@ -862,12 +924,9 @@ function StockCard({ stock, onAnalyze, analysis, isLoading }) {
 
       {/* Dossier de risque : faits tirés des dépôts officiels, sémantique mesurée */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 14 }}>
-        {stock.survivalRisk && (
-          <Tip tip={t("gloss.goingConcern")} style={{
-            background: "#f0c04012", color: "#f0c040", fontSize: 10, padding: "3px 8px",
-            borderRadius: 20, border: "1px solid #f0c04033",
-          }}>{t("card.distress")}</Tip>
-        )}
+        {stock.riskMarkers.filter(m => m.level !== "high").map(m => (
+          <RiskChip key={m.code} marker={m} />
+        ))}
         {stock.flags.map((f, i) => {
           const texte = flagText(f);
           return (
@@ -921,7 +980,7 @@ function normalizeStocks(raw) {
     isFusee: !!s.is_fusee, isPhenix: !!s.is_phenix, fuseeEvent: !!s.fusee_event,
     fuseeStrength: s.fusee_strength ?? null, phenixStrength: s.phenix_strength ?? null,
     profileStrength: s.profile_strength ?? 0,
-    survivalRisk: !!s.survival_risk,
+    riskMarkers: s.risk_markers ?? [],
   }));
 }
 

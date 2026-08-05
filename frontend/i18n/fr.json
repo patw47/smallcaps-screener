@@ -196,7 +196,6 @@
   "card.mktCap": "Mkt Cap",
   "card.volRatio": "Vol Ratio",
   "card.1m": "1 mois",
-  "card.distress": "⚠ détresse déclarée — volatilité extrême (les 2 queues)",
   "analyze.header": "⚡ Analyse Claude",
   "analyze.loading": "⟳ Analyse en cours...",
   "analyze.again": "↻ Ré-analyser",
@@ -214,5 +213,19 @@
   "footer.trace.body": " : chaque chiffre affiché est servi par l'API depuis des tables figées avant observation — rien d'inventé, rien de recalculé en direct. Tous les termes :",
   "footer.trace.gloss": "docs/glossaire.md",
   "flag.binary_event": "Biotech / pharma — évènements binaires : les signaux techniques y sont peu fiables",
-  "flag.earnings_soon": "Résultats dans {d} j — un mouvement peut venir de là, pas de la configuration"
+  "flag.earnings_soon": "Résultats dans {d} j — un mouvement peut venir de là, pas de la configuration",
+  "risk.level.high": "Gravité élevée",
+  "risk.level.medium": "Gravité intermédiaire",
+  "risk.level.low": "Gravité faible",
+  "risk.since": "constaté le {d}",
+  "risk.going_concern": "Doute officiel sur la capacité de la société à poursuivre son activité",
+  "risk.reverse_split": "Regroupement d'actions",
+  "risk.dilution": "Émission d'actions nouvelles en préparation",
+  "risk.late_filing": "Rapport périodique déposé en retard",
+  "risk.sub_dollar": "Cours sous le plancher de cotation, {n} séances de suite",
+  "risk.tip.going_concern": "Dans son rapport officiel, l'auditeur écrit douter que l'entreprise survive douze mois : c'est le signal comptable de détresse le plus direct qui soit.",
+  "risk.tip.reverse_split": "La société a réduit le nombre d'actions en circulation pour relever mécaniquement son cours — le plus souvent afin de rester cotée.",
+  "risk.tip.dilution": "Un document préparant l'émission de nouvelles actions a été déposé : ta part du capital sera réduite. À lire selon l'activité — une société encore sans chiffre d'affaires se finance ordinairement ainsi, le fait y est donc fréquent et ne dit pas la même chose qu'ailleurs.",
+  "risk.tip.late_filing": "Le rapport trimestriel ou annuel n'a pas été déposé dans les délais et la société l'a déclaré : désordre interne, ou désaccord avec l'auditeur.",
+  "risk.tip.sub_dollar": "Le cours est resté sous le plancher exigé par la place de cotation plusieurs séances d'affilée. Passé une certaine durée, la société reçoit un avis de non-conformité."
 }
