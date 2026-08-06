@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort flag-prevalence check-snapshot-keys
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort flag-prevalence check-snapshot-keys check-backup
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -69,6 +69,14 @@ flag-prevalence:
 # lui qui porte l'historique vivant.
 check-snapshot-keys:
 	docker compose exec -T backend python - < scripts/check_snapshot_keys.py
+
+# Double des instantanés hors du volume (Epic 11 S1) : chaque instantané de la source a sa
+# copie à destination (nom + taille), et aucune copie n'a disparu ni changé depuis le passage
+# précédent (inventaire d'empreintes écrit à destination — le répertoire n'étant pas versionné,
+# un différentiel de dépôt ne pourrait jamais rougir). Dans le conteneur : lui seul voit à la
+# fois le volume et le montage hôte ; script sur l'entrée standard (l'image ne porte pas scripts/).
+check-backup:
+	docker compose exec -T backend python - < scripts/check_backup.py
 
 build-frontend:
 	docker run --rm -v "$(CURDIR)/frontend":/app -w /app node:20-alpine \

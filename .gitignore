@@ -35,3 +35,6 @@ CLAUDE.md
 
 # Données runtime du tracker (snapshots extraits du volume docker pour le test d'invariance)
 data/
+
+# Double des instantanés hors du volume docker (Epic 11 S1) : des données, pas du code
+backups/
