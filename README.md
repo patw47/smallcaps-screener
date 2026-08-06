@@ -22,7 +22,11 @@ frequencies, each next to its own statistical weakness. What it surfaces:
   probability checkpoints (information, never an automatic sell rule).
 - **Extreme-zone watchlists** — the 🚀 **Fusée** / 🔥 **Phénix** profiles, labelled
   *research-only*, each with its two-sided measured stats (explosion lift *and* crash lift)
-  and a per-stock risk dossier.
+  and a per-stock risk dossier: each distress marker is shown individually (code, backend-set
+  severity level, date of the underlying fact when already available at zero network cost),
+  the high-severity ones as a dedicated alert band above the badges. A header counter says
+  how many displayed names carry at least one marker, and a client-side sort groups them —
+  reordering only, nothing is ever hidden and no sort/filter parameter enters the API.
 - Every displayed term has a tooltip and a glossary entry with its measured number and
   source.
 
