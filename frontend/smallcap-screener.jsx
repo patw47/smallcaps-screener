@@ -579,14 +579,29 @@ function Lifecycle({ row, cal }) {
 const CELL = { padding: "10px 14px", borderBottom: "1px solid #1e2a36" };
 const RIGHT = new Set(["entryPrice", "today"]);
 
+// Cellule de marqueurs : une pastille par marqueur, l'infobulle porte le fait.
+// Partagée par les deux colonnes de risque — les mêmes marqueurs s'y lisent
+// pareil, seule leur DATE de mesure diffère (entrée vs aujourd'hui).
+const riskCell = (markers) => (
+  <td style={CELL}>
+    {markers.length === 0 ? "—" : markers.map(m => (
+      <Tip key={m.code} tip={riskTip(m)} style={{ marginRight: 6 }}>
+        <span aria-hidden="true">{m.level === "high" ? "🛑" : "⚠"}</span>
+      </Tip>
+    ))}
+  </td>
+);
+
 function TrackingTable({ rows, dp, windowCol }) {
   const g = dp.gloss ?? {}, cal = dp.checkpoint ?? {};
-  // Colonne risque : seulement si au moins une ligne porte des marqueurs d'entrée —
-  // les entrées antérieures au dossier de risque n'en ont pas, la colonne reste absente.
+  // Colonnes de risque, indépendantes et conditionnelles : les entrées antérieures au
+  // dossier n'ont pas de marqueurs d'entrée, et un titre peut n'avoir que du risque
+  // actuel (déposé APRÈS son entrée). Chaque colonne n'apparaît que si elle a matière.
   const hasRisk = rows.some(r => (r.risk_markers ?? []).length > 0);
+  const hasRiskNow = rows.some(r => (r.risk_markers_now ?? []).length > 0);
   const headers = ["ticker", ...(windowCol ? ["window"] : []),
     "entryDate", "entryPrice", "today", "lifecycle", "position", "probs",
-    ...(hasRisk ? ["risk"] : [])];
+    ...(hasRisk ? ["risk"] : []), ...(hasRiskNow ? ["riskNow"] : [])];
   return (
     <div style={{ overflowX: "auto", border: "1px solid #1e2a36", borderRadius: 8, background: "#111820" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, fontFamily: "monospace" }}>
@@ -617,15 +632,8 @@ function TrackingTable({ rows, dp, windowCol }) {
               <td style={CELL}><Lifecycle row={r} cal={cal} /></td>
               <td style={CELL}>{statusChip(r)}</td>
               <td style={{ ...CELL, color: "#d7e0e8", fontFamily: "'Segoe UI', sans-serif", fontSize: 12.5 }}>{probText(r, g)}</td>
-              {hasRisk && (
-                <td style={CELL}>
-                  {(r.risk_markers ?? []).length === 0 ? "—" : (r.risk_markers ?? []).map(m => (
-                    <Tip key={m.code} tip={riskTip(m)} style={{ marginRight: 6 }}>
-                      <span aria-hidden="true">{m.level === "high" ? "🛑" : "⚠"}</span>
-                    </Tip>
-                  ))}
-                </td>
-              )}
+              {hasRisk && riskCell(r.risk_markers ?? [])}
+              {hasRiskNow && riskCell(r.risk_markers_now ?? [])}
             </tr>
           ))}
         </tbody>

@@ -138,6 +138,7 @@
   "tracking.h.position": "Position",
   "tracking.h.probs": "What past cases said",
   "tracking.h.risk": "Risk at entry",
+  "tracking.h.riskNow": "Current risk",
   "status.above": "above — on trajectory",
   "status.below": "below threshold",
   "status.explosion": "doubling (≥ +100%)",
