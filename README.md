@@ -104,6 +104,21 @@ forward record — never on the in-sample numbers.
   up on its own.
 - **Retention**: snapshots are tiny JSON files (a few KB each) — the policy is **keep
   everything**; a longer history only makes the tracker more meaningful.
+- **Snapshots survive the volume**: after every scan, each dated snapshot is copied to a host
+  mount (`./backups`, gitignored) — incrementally, never overwriting a name already there, and
+  never able to fail a scan. Without it a single `docker compose down -v` would erase the whole
+  history, and nothing can reconstruct after the fact which markers were raised on a past date.
+  `make check-backup` guards completeness *and* non-regression: it keeps a SHA-256 manifest at
+  the destination, because the directory is unversioned and a repo diff over it would be empty
+  by construction — incapable of ever turning red.
+- **Finished results are frozen, not recomputed**: once a tracked row reaches the end of its
+  observation window, it is written once to an external table and never touched again. Prices
+  are rewritten retroactively by the provider on corporate actions (reverse splits, delistings,
+  mergers) — exactly what distressed small caps go through — so a return recomputed months later
+  is not the one that was observed. Markers and profile are read from the **entry** snapshot,
+  never from the current scan. Deduplication queries the table itself rather than any local
+  state, so losing the volume cannot cause a duplicate re-export. Missing secret, unreachable
+  service or quota: the export disables itself silently and the scan still completes.
 - **Survivorship ceiling**: free data only contains companies that still exist, which
   flatters distressed-stock strategies. Every displayed number is an **optimistic ceiling**
   and every crash frequency a **floor**. These are descriptive historical frequencies, not
@@ -132,7 +147,8 @@ forward record — never on the in-sample numbers.
 
 - Backend: Python 3.11, FastAPI, yfinance, pandas, numpy (numpy-only models — no ML framework)
 - Frontend: React 18, Vite 5
-- Runtime: Docker Compose; scan cache and history on a Docker volume at `/app/data`
+- Runtime: Docker Compose; scan cache and history on a Docker volume at `/app/data`, doubled
+  onto a host mount at `/app/backup` (`./backups`) so the history outlives the volume
 
 ## Quick start
 
@@ -161,7 +177,8 @@ docker compose exec backend python screener_backend.py     # run a scan directly
 docker compose exec backend python backtest.py --n 200     # quick backtest
 docker compose logs -f backend                             # follow logs
 docker compose down                                        # stop
-docker compose down -v                                     # stop + wipe cache/history
+docker compose down -v                                     # stop + wipe cache/history (the
+                                                           # snapshot copies in ./backups survive)
 curl http://localhost:8000/api/performance                 # performance of past selections
 
 # Tests (offline, deterministic, no network)
@@ -184,12 +201,19 @@ Every gate is a `make` target; `make test` is the offline suite.
 | `make check-runtime` | Python that compiles on the dev interpreter but not on the production 3.11 container. |
 | `make check-cohort` | A tracked stock still quoting but read as "no data" — replays the tracking on the live history from an *empty* universe (needs the running container and network). |
 | `make check-snapshot-keys` | A selection key silently dropped or renamed in the dated snapshots — the history is read years later and never rewritten (needs the running container). |
+| `make check-backup` | A snapshot without its copy outside the volume, or a copy that vanished or was rewritten since the previous pass (needs the running container — only it sees both the volume and the host mount). |
+| `make check-secrets` | A secret value reaching a versioned file, or `.env.example` missing an export variable name — or carrying its value. Never prints what it finds: file, line and variable *name* only. |
 | `make docs-build` | A broken public documentation build (strict MkDocs). |
 
 `make flag-prevalence` is not a gate but a report: prevalence of the five distress markers,
 with the two denominators kept apart (price-derived markers over the whole universe,
 filing-derived markers over the funnel survivors) and a per-sector breakdown with
 biotechnology separated out. Descriptive only — no marker enters selection, ranking or score.
+
+`make proof-export` is not a gate either: it replays in the container the tests the host skips
+(FastAPI is not installed there, so they are silently *skipped* — and a skipped test proves
+nothing), then exercises the real network path end to end. It **writes a dummy-symbol row into
+the live table and archives it** — do not run it in a loop, and never mistake it for a gate.
 
 ## Configuration
 
@@ -230,7 +254,9 @@ it would mean showing nothing at all.
 | `SCAN_TRADING_DAYS_ONLY` | Backend | No (default `true`) | Skip weekend auto-scans. |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Backend | No | Enable cohort alerts. Absent → alerting silently disabled. |
 | `EDGAR_USER_AGENT` | Backend | No | SEC-compliant identifying UA (name + email) for filings data. Absent → EDGAR disabled (neutral). |
+| `NOTION_API_KEY` / `NOTION_RESULTS_DB_ID` | Backend | No | Enable the export of finished tracked rows. Absent → export silently disabled, the scan is unaffected. |
 | `DATA_DIR` | Backend | No (default `/app/data`) | Where the cache and history are written (used by tests). |
+| `BACKUP_DIR` | Backend | No (default `/app/backup`) | Where the snapshot copies are written — override to aim a throwaway destination when verifying. |
 
 ## API endpoints
 
@@ -257,12 +283,14 @@ backend/
 ├── edgar.py              # SEC/EDGAR point-in-time survival signals (dilution, runway…)
 ├── profiles.py           # Fusée/Phénix detectors
 ├── backtest.py           # quick control backtest (--n/--forward/--seed/--period)
-├── track.py              # live performance tracking of past selections
+├── track.py              # live performance tracking + snapshot copy outside the volume
+├── notion_export.py      # writes finished tracked rows to the external table, once and for all
 └── tests/                # offline deterministic unit tests
 frontend/
 ├── smallcap-screener.jsx # dashboard UI (washout cohorts, tracking, extreme zones, tooltips)
 └── src/main.jsx
 docs/                     # architecture, backend, api, frontend, glossary, methodology
+backups/                  # host-side copies of the dated snapshots (gitignored, never rewritten)
 ```
 
 ## Documentation
