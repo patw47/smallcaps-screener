@@ -192,12 +192,17 @@ def build_tracking(prices: dict, history_dir: Path) -> list[dict]:
     `prices` est celui du scan du jour, donc restreint à l'univers découvert : on le
     complète AVANT tout calcul de cycle de vie pour les titres suivis qui en sont
     sortis (Epic 9 S1). Complément EN PLACE : la famille suivante en profite.
+
+    Les dépôts officiels sont balayés en UNE passe avant les lignes (Epic 12 S2), au
+    plus une fois par jour et par titre — le mémo daté est partagé avec la Purge
+    silencieuse, qui n'en repaie donc aucun.
     """
     from screener_backend import backfill_tracked_prices
 
     entries = _load_cohort_entries(history_dir)
     backfill_tracked_prices(prices, ((tk, e["entry_date"]) for tk, e in entries.items()))
-    out = [lifecycle.track_row({"ticker": tk}, ent, prices.get(tk), CFG)
+    filings = lifecycle.scan_filings(entries.keys())
+    out = [lifecycle.track_row({"ticker": tk}, ent, prices.get(tk), CFG, filings.get(tk))
            for tk, ent in entries.items()]
     out.sort(key=lambda r: r["entry_date"], reverse=True)
     return out
