@@ -24,6 +24,30 @@ from __future__ import annotations
 import pandas as pd
 
 
+def price_risk_markers(df: pd.DataFrame | None) -> list[dict]:
+    """
+    Drapeaux prix ACTUELS d'un titre suivi, depuis sa série DÉJÀ en main (celle du
+    scan du jour ou du complément Epic 9 S1) : aucun appel réseau.
+
+    Mêmes capteurs que la Passe A du scan (source unique : `sub_dollar_marker`,
+    `_reverse_split_marker`), même composeur que les sélections (`scoring.risk_markers`)
+    — codes + niveaux + variables, jamais de texte d'affichage. Série absente ou
+    illisible ⇒ liste VIDE : un dossier de risque vide ne doit jamais faire tomber une
+    ligne de suivi.
+    """
+    if df is None or "Close" not in df:
+        return []
+    from screener_backend import sub_dollar_marker, _reverse_split_marker
+    from scoring import risk_markers
+    try:
+        days, sub_flag = sub_dollar_marker(df["Close"].dropna())
+        rs_flag, rs_date = _reverse_split_marker(df)
+    except Exception:
+        return []
+    return risk_markers({"sub_dollar_flag": sub_flag, "sub_dollar_days": days,
+                         "reverse_split_flag": rs_flag, "reverse_split_date": rs_date})
+
+
 def _after_entry(close: pd.Series, entry_date: str) -> pd.Series:
     """
     Séances postérieures à l'entrée. Comparaison robuste : Timestamp explicite aligné
@@ -52,7 +76,12 @@ def track_row(base: dict, entry: dict, df: pd.DataFrame | None, cfg: dict) -> di
     """
     cp_day, cp_thr, horizon = cfg["checkpoint_day"], cfg["checkpoint_thr"], cfg["horizon"]
     row = {**base, **entry, "days_held": None, "days_left": None, "ret": None,
-           "checkpoint": None, "phase": "no_data", "status": {"code": "no_data"}}
+           "checkpoint": None, "phase": "no_data", "status": {"code": "no_data"},
+           # Risque ACTUEL, distinct de `risk_markers` (figé à l'entrée, porté par
+           # `entry`) : recalculé à chaque construction depuis la série en main. Posé
+           # avant tout retour anticipé — une ligne sans prix porte une liste vide, pas
+           # une clé absente.
+           "risk_markers_now": price_risk_markers(df)}
     if df is None or "Close" not in df:
         return row
     after = _after_entry(df["Close"].dropna(), entry["entry_date"])
