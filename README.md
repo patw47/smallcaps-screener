@@ -99,6 +99,15 @@ forward record — never on the in-sample numbers.
 - **Snapshots keep the evidence**: each dated snapshot archives the five distress markers
   and the dollar volume alongside every pick, so a past day's state can be reconstructed
   instead of recomputed. `make check-snapshot-keys` guards against a key being dropped.
+- **Tracked rows carry today's risk**: every tracking row shows two risk files side by
+  side — the markers frozen on entry day, and the **current** ones recomputed at each
+  build. Price flags (sub-floor streak with its length, recent reverse split) are read
+  from prices already in hand — zero extra network; filing facts (going-concern doubt,
+  late filing, share issuance in preparation) are swept from EDGAR **at most once per
+  calendar day per ticker**, with a dated memo persisted in the data directory so a
+  container restart never re-pays the sweep. Information only: no marker closes an
+  observation window or triggers anything. EDGAR silent or failing → price flags still
+  served, and the scan always completes.
 - **Automatic scans**: the backend re-scans every `SCAN_EVERY_HOURS` (default 24), **only
   on trading days** (`SCAN_TRADING_DAYS_ONLY`, default on), so the snapshot history builds
   up on its own.
@@ -278,7 +287,7 @@ backend/
 ├── api.py                # FastAPI app (non-blocking scan, daily scheduler, endpoints)
 ├── v4.py                 # 21-day washout cohort, pre-list, tracking
 ├── v5.py                 # multi-window (7/14/21 d) washout cohorts
-├── lifecycle.py          # observation schedule shared by both families (phase, checkpoint)
+├── lifecycle.py          # observation schedule shared by both families + current risk file
 ├── alerts.py             # Telegram alerts (cohort entries, persistent dedup)
 ├── edgar.py              # SEC/EDGAR point-in-time survival signals (dilution, runway…)
 ├── profiles.py           # Fusée/Phénix detectors
