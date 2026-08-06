@@ -38,8 +38,12 @@ class FakeTable:
         self.query_status = query_status
         self.write_status = write_status
         self.writes = 0
+        self.calls = 0     # TOUT appel HTTP, lectures comprises — le compteur vit ici et
+                           # non dans un wrapper posé après coup : la bound method étant
+                           # déjà installée par la fixture, un wrapper serait mort-né.
 
     def post(self, url: str, headers=None, json=None, timeout=None) -> _Resp:
+        self.calls += 1
         if url.endswith("/query"):
             if self.query_status != 200:
                 return _Resp(self.query_status)
@@ -130,12 +134,8 @@ def test_both_families_are_exported(table, tmp_path):
 
 def test_no_closed_row_never_calls_the_service(table, tmp_path):
     """Aucune fenêtre échue : pas même une interrogation de la table."""
-    calls = []
-    original = table.post
-    table.post = lambda *a, **k: (calls.append(a), original(*a, **k))[1]
-
     assert nx.export_closed_rows(_result([_row(phase="open")]), _history(tmp_path, [])) == 0
-    assert calls == []
+    assert table.calls == 0
 
 
 # ---------------------------------------------------------------------------
