@@ -20,6 +20,8 @@ Usage : DATA_DIR=/app/data PYTHONPATH=backend python track.py
 import argparse
 import glob
 import json
+import os
+import shutil
 import statistics
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +34,11 @@ from screener_backend import (FILTERS, HISTORY_DIR, _download_prices, _period_fo
 # Numérateurs forward du protocole v2 §1 : P(fwd ≥ +50 %) et P(fwd ≥ +100 %). FIGÉS par le
 # protocole pré-registré (pas des seuils réglables → hors FILTERS) — docs/backtest_protocol_v2.md.
 TAIL_THRESHOLDS = (0.50, 1.00)
+
+# Double des instantanés hors du volume docker (Epic 11 S1) : montage hôte du service
+# backend. Sans ce montage le conteneur n'a nulle part où copier — la sauvegarde
+# retomberait dans sa propre couche éphémère, donc dans ce qu'on cherche à fuir.
+BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/app/backup"))
 
 
 def load_first_flagged(history_dir: Path = HISTORY_DIR) -> dict[str, dict]:
@@ -52,6 +59,33 @@ def load_first_flagged(history_dir: Path = HISTORY_DIR) -> dict[str, dict]:
                 picks[tk] = {"date": date, "price": p.get("price"), "score": p.get("score"),
                              "is_fusee": p.get("is_fusee"), "is_phenix": p.get("is_phenix")}
     return picks
+
+
+def backup_snapshots(history_dir: Path = HISTORY_DIR, dest_dir: Path = BACKUP_DIR) -> int:
+    """Copy to `dest_dir` every snapshot it does not already hold; return how many were written.
+
+    A snapshot is immutable once written, so a name already present is never rewritten:
+    the copy is an archive, not a mirror. First run therefore catches up on everything.
+    Written under a temporary name then renamed — an interrupted copy can never take the
+    place of a snapshot. Any failure (mount absent, disk full, permission denied) is
+    logged and swallowed: a scan must complete even when its backup cannot.
+    """
+    copied = 0
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for src in sorted(Path(history_dir).glob("*.json")):
+            target = dest_dir / src.name
+            if target.exists():
+                continue
+            part = dest_dir / f"{src.name}.part"
+            shutil.copy2(src, part)
+            part.replace(target)
+            copied += 1
+        if copied:
+            print(f"[backup] {copied} instantané(s) copié(s) → {dest_dir}")
+    except Exception as e:
+        print(f"[backup] copie impossible (ignorée): {e}")
+    return copied
 
 
 def _value_on_or_after(close: pd.Series, target_date) -> float | None:

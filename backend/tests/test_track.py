@@ -311,3 +311,88 @@ def test_run_tracker_backfill_failure_is_silent(tmp_path, monkeypatch):
 
     r = run_tracker(hd, quiet=True)              # ne doit pas lever
     assert r["n_picks"] == 2 and r["n_tracked"] == 1
+
+
+# --------------------------------------------------------------------------
+# Double des instantanés hors du volume (Epic 11 S1)
+# --------------------------------------------------------------------------
+
+def _history_with(tmp_path, names_and_bodies):
+    hd = tmp_path / "history"
+    hd.mkdir()
+    for name, body in names_and_bodies:
+        (hd / name).write_text(body)
+    return hd
+
+
+def test_backup_is_incremental_and_never_rewrites(tmp_path):
+    """Trois instantanés dont un déjà à destination : deux écritures, le tiers intact."""
+    src = _history_with(tmp_path, [("20260101_000000.json", '{"a": 1}'),
+                                   ("20260102_000000.json", '{"b": 2}'),
+                                   ("20260103_000000.json", '{"c": 3}')])
+    dest = tmp_path / "backup"
+    dest.mkdir()
+    already = dest / "20260102_000000.json"
+    already.write_text("COPIE D'ORIGINE, NE DOIT PAS BOUGER")   # contenu volontairement ≠ source
+    before = already.read_bytes()
+
+    assert track.backup_snapshots(src, dest) == 2
+
+    assert sorted(p.name for p in dest.glob("*.json")) == [
+        "20260101_000000.json", "20260102_000000.json", "20260103_000000.json"]
+    assert already.read_bytes() == before                       # octet pour octet
+    assert (dest / "20260101_000000.json").read_text() == '{"a": 1}'
+    assert (dest / "20260103_000000.json").read_text() == '{"c": 3}'
+    assert list(dest.glob("*.part")) == []                      # aucune copie tronquée laissée
+
+    assert track.backup_snapshots(src, dest) == 0               # rien de neuf → rien d'écrit
+
+
+def test_backup_creates_missing_destination(tmp_path):
+    """Premier passage : la destination n'existe pas encore, rattrapage complet."""
+    src = _history_with(tmp_path, [("20260101_000000.json", '{"a": 1}')])
+    dest = tmp_path / "pas" / "encore" / "la"
+
+    assert track.backup_snapshots(src, dest) == 1
+    assert (dest / "20260101_000000.json").read_text() == '{"a": 1}'
+
+
+def test_backup_failure_never_raises(tmp_path):
+    """Destination impossible à créer : aucune exception, retour à zéro copie."""
+    wall = tmp_path / "wall"
+    wall.write_text("un fichier, pas un répertoire")
+    src = _history_with(tmp_path, [("20260101_000000.json", '{"a": 1}')])
+
+    assert track.backup_snapshots(src, wall / "backup") == 0
+
+
+def test_backup_write_failure_never_raises(tmp_path, monkeypatch):
+    """Échec d'écriture en cours de copie (disque plein, permission) : avalé, pas propagé."""
+    src = _history_with(tmp_path, [("20260101_000000.json", '{"a": 1}')])
+    dest = tmp_path / "backup"
+
+    def boom(*a, **k):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(track.shutil, "copy2", boom)
+
+    assert track.backup_snapshots(src, dest) == 0
+
+
+def test_scan_completes_when_backup_fails(tmp_path, monkeypatch):
+    """Le traitement appelant (boucle de scan) aboutit malgré une sauvegarde en échec."""
+    fastapi = pytest.importorskip("fastapi")                    # noqa: F841
+    import api
+
+    src = _history_with(tmp_path, [("20260101_000000.json", '{"a": 1}')])
+    wall = tmp_path / "wall"
+    wall.write_text("un fichier, pas un répertoire")
+
+    monkeypatch.setattr(api, "run_scan", lambda wl: {"scanned_at": "2026-01-01T00:00:00+00:00"})
+    # la VRAIE fonction de copie, dirigée vers une destination impossible
+    monkeypatch.setattr(api, "backup_snapshots",
+                        lambda: track.backup_snapshots(src, wall / "backup"))
+
+    api._run_scan_sync()                                        # ne doit pas lever
+
+    assert api._cached_data == {"scanned_at": "2026-01-01T00:00:00+00:00"}
+    assert api._last_scan_time is not None

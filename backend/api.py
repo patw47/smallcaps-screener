@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from screener_backend import run_scan, scan_state, FILTERS, OUTPUT_FILE, _display_params
-from track import run_tracker, _empty_result
+from track import run_tracker, backup_snapshots, _empty_result
 
 # Scan automatique périodique (heures) — les snapshots s'accumulent pour le suivi de perf
 SCAN_EVERY_HOURS = float(os.environ.get("SCAN_EVERY_HOURS", "24"))
@@ -65,6 +65,10 @@ def _run_scan_sync():
     result = run_scan(_custom_watchlist)  # None → découverte dynamique
     _cached_data = result
     _last_scan_time = datetime.now(tz=timezone.utc)
+    # Le scan vient d'écrire un instantané : on le double hors du volume (Epic 11 S1).
+    # Greffé ici plutôt que dans un ordonnanceur séparé — la copie est idempotente,
+    # son rythme est donc indifférent, et elle ne peut pas faire échouer le scan.
+    backup_snapshots()
 
 
 async def _ensure_background_scan():

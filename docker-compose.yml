@@ -8,8 +8,12 @@ services:
     volumes:
       - data:/app/data
       - ./config:/app/config
+      # Double des instantanés sur le disque hôte (Epic 11 S1) : sans ce montage, les
+      # observations datées n'existent qu'en un exemplaire, dans le volume `data`.
+      - ./backups:/app/backup
     environment:
       - SCAN_EVERY_HOURS=${SCAN_EVERY_HOURS:-24}
+      - BACKUP_DIR=${BACKUP_DIR:-/app/backup}
       - SCAN_TRADING_DAYS_ONLY=${SCAN_TRADING_DAYS_ONLY:-true}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
