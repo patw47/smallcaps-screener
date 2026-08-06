@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 import lifecycle
+from scoring import risk_markers
 
 # Defaults NEUTRES — les valeurs gelées réelles arrivent de config/local.yml (v5:).
 # Les fenêtres restent lisibles ici (structure affichée par le sélecteur de l'UI) ;
@@ -121,17 +122,17 @@ def build_cohorts(tradables: list[tuple[str, dict]], prices: dict,
     out = {"windows": {}, "flash": bool(ret3 is not None and ret3 <= CFG["flash_thr"]),
            "flash_ret3": round(ret3, 4) if ret3 is not None else None}
 
-    dil_cache: dict[str, bool | None] = {}
+    sig_by = dict(tradables)                 # signaux Passe A par ticker (drapeaux prix)
+    surv_cache: dict[str, dict | None] = {}  # signaux de survie EDGAR, un appel par ticker
 
-    def _dilution(tk: str) -> bool | None:
-        if tk not in dil_cache:
+    def _survival(tk: str) -> dict | None:
+        if tk not in surv_cache:
             import edgar
             try:
-                surv = edgar.survival_signals(tk)
+                surv_cache[tk] = edgar.survival_signals(tk)
             except Exception:
-                surv = None
-            dil_cache[tk] = surv.get("dilution_flag") if surv else None
-        return dil_cache[tk]
+                surv_cache[tk] = None
+        return surv_cache[tk]
 
     for w in CFG["windows"]:
         mkt = _ret(bench, w)
@@ -156,9 +157,14 @@ def build_cohorts(tradables: list[tuple[str, dict]], prices: dict,
 
         cohort = []
         for e in entries:
-            if _dilution(e["ticker"]) is not False:  # §8.2 — EDGAR muet (None) ⇒ non qualifié
+            surv = _survival(e["ticker"])
+            if (surv or {}).get("dilution_flag") is not False:  # §8.2 — EDGAR muet (None) ⇒ non qualifié
                 continue
-            cohort.append({**e, "mkt": round(mkt, 4)})
+            # Dossier de risque À L'ENTRÉE — mêmes marqueurs que les sélections
+            # (scoring.risk_markers) : drapeaux prix de la Passe A + drapeaux EDGAR
+            # déjà payés par la règle dilution §8.2.
+            cohort.append({**e, "mkt": round(mkt, 4),
+                           "risk_markers": risk_markers({**sig_by[e["ticker"]], **surv})})
         out["windows"][str(w)] = {
             "mkt": round(mkt, 4), "cohort": cohort, "prelist": [],
             "note": {"code": "market_bearish", "w": w, "mkt": round(mkt, 4), "n": len(cohort)},
@@ -193,7 +199,9 @@ def _load_entries(history_dir: Path) -> dict[tuple[int, str], dict]:
                 tk = e.get("ticker")
                 if tk and (w, tk) not in first and e.get("price"):
                     first[(w, tk)] = {"entry_date": day, "entry_price": e["price"],
-                                      "chg": e.get("chg")}
+                                      "chg": e.get("chg"),
+                                      # Entrées antérieures au dossier de risque → liste vide.
+                                      "risk_markers": e.get("risk_markers") or []}
     return first
 
 

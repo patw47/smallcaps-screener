@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 import lifecycle
+from scoring import risk_markers
 
 # Defaults NEUTRES — les valeurs gelées réelles arrivent de config/local.yml (v4:).
 # La structure des règles reste lisible ici (décision d'epic) ; seules les valeurs
@@ -140,6 +141,10 @@ def build_cohort(tradables: list[tuple[str, dict]], prices: dict,
             "resid": round(resid, 4) if resid is not None else None,
             # `margins` (distance au seuil) retirée : ajoutée à la valeur du titre, qui
             # reste affichée, elle redonnait le seuil exact. Elle n'était lue nulle part.
+            # Dossier de risque À L'ENTRÉE — mêmes marqueurs que les sélections
+            # (scoring.risk_markers) : sig porte les drapeaux prix de la Passe A,
+            # surv les drapeaux EDGAR déjà payés par la règle dilution §2.2.
+            "risk_markers": risk_markers({**sig, **surv}),
         })
 
     # Ordre indicatif : plus survendu d'abord (résidu le plus négatif) ; sans bêta → fin.
@@ -171,7 +176,9 @@ def _load_cohort_entries(history_dir: Path) -> dict[str, dict]:
             tk = e.get("ticker")
             if tk and tk not in first and e.get("price"):
                 first[tk] = {"entry_date": day, "entry_price": e["price"],
-                             "resid": e.get("resid"), "beta": e.get("beta")}
+                             "resid": e.get("resid"), "beta": e.get("beta"),
+                             # Entrées antérieures au dossier de risque → liste vide.
+                             "risk_markers": e.get("risk_markers") or []}
     return first
 
 

@@ -218,6 +218,10 @@ function MarketCard({ entry, rank, total, dp4 }) {
         )}
       </div>
 
+      {(entry.risk_markers ?? []).filter(m => m.level === "high").map(m => (
+        <RiskAlert key={m.code} marker={m} />
+      ))}
+
       {first && g.first_pick && (
         <div style={{ marginTop: 10, fontSize: 13, color: "#d7e0e8", borderLeft: "2px solid #00e096", paddingLeft: 10 }}>
           {fmt(g.first_pick, { total, resid: pctFmt(entry.resid) })}
@@ -250,6 +254,14 @@ function MarketCard({ entry, rank, total, dp4 }) {
           }}>{text}</span>
         ))}
       </div>
+
+      {(entry.risk_markers ?? []).some(m => m.level !== "high") && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 10 }}>
+          {(entry.risk_markers ?? []).filter(m => m.level !== "high").map(m => (
+            <RiskChip key={m.code} marker={m} />
+          ))}
+        </div>
+      )}
 
       {first && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #1e2a36", fontSize: 12, color: "#8494a3" }}>
@@ -374,6 +386,10 @@ function QuietCard({ entry, win, rank, total, dp5 }) {
         )}
       </div>
 
+      {(entry.risk_markers ?? []).filter(m => m.level === "high").map(m => (
+        <RiskAlert key={m.code} marker={m} />
+      ))}
+
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
         {[
           <>{t("chip.price")} <b style={{ color: "#d7e0e8" }}>{entry.price} $</b> {capped("chip.priceMax", rules.price_max, { x: rules.price_max })}</>,
@@ -389,6 +405,14 @@ function QuietCard({ entry, win, rank, total, dp5 }) {
           }}>{text}</span>
         ))}
       </div>
+
+      {(entry.risk_markers ?? []).some(m => m.level !== "high") && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 10 }}>
+          {(entry.risk_markers ?? []).filter(m => m.level !== "high").map(m => (
+            <RiskChip key={m.code} marker={m} />
+          ))}
+        </div>
+      )}
 
       {first && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #1e2a36", fontSize: 12, color: "#8494a3" }}>
@@ -557,8 +581,12 @@ const RIGHT = new Set(["entryPrice", "today"]);
 
 function TrackingTable({ rows, dp, windowCol }) {
   const g = dp.gloss ?? {}, cal = dp.checkpoint ?? {};
+  // Colonne risque : seulement si au moins une ligne porte des marqueurs d'entrée —
+  // les entrées antérieures au dossier de risque n'en ont pas, la colonne reste absente.
+  const hasRisk = rows.some(r => (r.risk_markers ?? []).length > 0);
   const headers = ["ticker", ...(windowCol ? ["window"] : []),
-    "entryDate", "entryPrice", "today", "lifecycle", "position", "probs"];
+    "entryDate", "entryPrice", "today", "lifecycle", "position", "probs",
+    ...(hasRisk ? ["risk"] : [])];
   return (
     <div style={{ overflowX: "auto", border: "1px solid #1e2a36", borderRadius: 8, background: "#111820" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, fontFamily: "monospace" }}>
@@ -589,6 +617,15 @@ function TrackingTable({ rows, dp, windowCol }) {
               <td style={CELL}><Lifecycle row={r} cal={cal} /></td>
               <td style={CELL}>{statusChip(r)}</td>
               <td style={{ ...CELL, color: "#d7e0e8", fontFamily: "'Segoe UI', sans-serif", fontSize: 12.5 }}>{probText(r, g)}</td>
+              {hasRisk && (
+                <td style={CELL}>
+                  {(r.risk_markers ?? []).length === 0 ? "—" : (r.risk_markers ?? []).map(m => (
+                    <Tip key={m.code} tip={riskTip(m)} style={{ marginRight: 6 }}>
+                      <span aria-hidden="true">{m.level === "high" ? "🛑" : "⚠"}</span>
+                    </Tip>
+                  ))}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -871,7 +908,24 @@ function RiskChip({ marker }) {
   );
 }
 
-function StockCard({ stock, onAnalyze, analysis, isLoading }) {
+// ---------------------------------------------------------------------------
+// Provenance d'une purge : le titre affiché figure aussi au suivi d'une liste de
+// purge (v4_tracking / v5.tracking, déjà dans le payload — aucune requête de plus).
+// Étiquette + date d'entrée : une information de contexte, jamais un signal.
+// ---------------------------------------------------------------------------
+function OriginChip({ kind, date }) {
+  const label = kind === "market" ? t("market.section.title") : t("quiet.name");
+  return (
+    <Tip tip={t(`origin.tip.${kind}`, { d: date })} style={{
+      background: "#00e0960d", color: "#00b87a", fontSize: 10, padding: "3px 8px",
+      borderRadius: 20, border: "1px solid #00e09622", fontFamily: "monospace",
+    }}>
+      {label} · {date}
+    </Tip>
+  );
+}
+
+function StockCard({ stock, origin, onAnalyze, analysis, isLoading }) {
   const changeColor = (v) => v >= 0 ? "#00e096" : "#ff6b6b";
   const profileKind = stock.isPhenix ? "phenix" : stock.isFusee ? "fusee" : null;
 
@@ -901,6 +955,8 @@ function StockCard({ stock, onAnalyze, analysis, isLoading }) {
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
         {stock.isFusee && <ProfileBadge kind="fusee" strength={stock.fuseeStrength} event={stock.fuseeEvent} />}
         {stock.isPhenix && <ProfileBadge kind="phenix" strength={stock.phenixStrength} />}
+        {origin?.market && <OriginChip kind="market" date={origin.market} />}
+        {origin?.quiet && <OriginChip kind="quiet" date={origin.quiet} />}
       </div>
 
       {profileKind && (
@@ -998,6 +1054,7 @@ export default function App() {
   const [scanning, setScanning] = useState(false);
   const [sector, setSector] = useState("All");
   const [profile, setProfile] = useState("all");
+  const [origin, setOrigin] = useState("all");   // all | market | quiet (provenance purge)
   const [riskSort, setRiskSort] = useState("scan");   // scan (défaut) | most | least
   const [analyses, setAnalyses] = useState({});
   const [loadingTickers, setLoadingTickers] = useState({});
@@ -1074,11 +1131,29 @@ export default function App() {
   const fuseeCount = stocks.filter(s => s.isFusee).length;
   const phenixCount = stocks.filter(s => s.isPhenix).length;
 
+  // Provenance : titres aussi consignés au suivi des purges (v4_tracking / v5.tracking,
+  // déjà dans le payload). Première date d'entrée par famille — l'étiquette la cite.
+  const originMap = {};
+  v4.tracking.forEach(r => {
+    if (!r.ticker) return;
+    const o = originMap[r.ticker] ?? (originMap[r.ticker] = {});
+    if (!o.market || (r.entry_date ?? "") < o.market) o.market = r.entry_date;
+  });
+  v5.tracking.forEach(r => {
+    if (!r.ticker) return;
+    const o = originMap[r.ticker] ?? (originMap[r.ticker] = {});
+    if (!o.quiet || (r.entry_date ?? "") < o.quiet) o.quiet = r.entry_date;
+  });
+  const originMarketCount = stocks.filter(s => originMap[s.ticker]?.market).length;
+  const originQuietCount = stocks.filter(s => originMap[s.ticker]?.quiet).length;
+
   const filtered = stocks
     .filter(s => {
       if (sector !== "All" && s.sector !== sector) return false;
       if (profile === "fusee" && !s.isFusee) return false;
       if (profile === "phenix" && !s.isPhenix) return false;
+      if (origin === "market" && !originMap[s.ticker]?.market) return false;
+      if (origin === "quiet" && !originMap[s.ticker]?.quiet) return false;
       return true;
     })
     .sort((a, b) => {
@@ -1246,6 +1321,19 @@ export default function App() {
                 fontSize: 12, fontWeight: 700, fontFamily: "monospace", cursor: "pointer",
               }}>{label}</button>
             ))}
+            {[
+              { key: "all", label: t("filters.originAll") },
+              { key: "market", label: t("filters.originMarket", { n: originMarketCount }) },
+              { key: "quiet", label: t("filters.originQuiet", { n: originQuietCount }) },
+            ].map(({ key, label }) => (
+              <button key={`origin-${key}`} onClick={() => setOrigin(key)} aria-pressed={origin === key} style={{
+                padding: "7px 16px",
+                background: origin === key ? "#0e2c22" : "#0d0d1a",
+                border: `1px solid ${origin === key ? "#1c4033" : "#ffffff0a"}`,
+                borderRadius: 20, color: origin === key ? "#00e096" : "#5a8a7a",
+                fontSize: 12, fontWeight: 700, fontFamily: "monospace", cursor: "pointer",
+              }}>{label}</button>
+            ))}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginLeft: "auto" }}>
               {INSTRUMENTS.map(s => (
                 <button key={s} onClick={() => setSector(s)} style={{
@@ -1280,7 +1368,7 @@ export default function App() {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 16 }}>
             {filtered.map(stock => (
-              <StockCard key={stock.ticker} stock={stock} onAnalyze={analyzeStock}
+              <StockCard key={stock.ticker} stock={stock} origin={originMap[stock.ticker]} onAnalyze={analyzeStock}
                          analysis={analyses[stock.ticker]} isLoading={loadingTickers[stock.ticker]} />
             ))}
           </div>
