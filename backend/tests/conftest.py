@@ -46,3 +46,18 @@ def offline_backfill(monkeypatch):
     « données absentes », déjà couvert. Les tests qui l'exercent le repatchent.
     """
     monkeypatch.setattr(sb, "_download_prices", lambda *a, **k: {})
+
+
+@pytest.fixture(autouse=True)
+def isolated_filing_memo(monkeypatch, tmp_path):
+    """
+    Répertoire de données propre par test : le mémo daté du balayage des dépôts
+    (Epic 12 S2) y vit et est PERSISTANT par construction. Partagé, il ferait hériter
+    un test de la cadence d'un autre — la suite deviendrait dépendante de son ordre.
+
+    Le chemin est redirigé par `screener_backend.DATA_DIR`, que `lifecycle._memo_path`
+    relit à chaque appel : un rechargement du module de suivi (test de redémarrage) ne
+    perd donc pas la redirection. SOUS-répertoire de `tmp_path` et non `tmp_path` même :
+    plusieurs tests y balaient déjà des `*.json` (snapshots) et compteraient le mémo.
+    """
+    monkeypatch.setattr(sb, "DATA_DIR", str(tmp_path / "data"))

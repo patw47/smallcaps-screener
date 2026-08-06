@@ -21,31 +21,102 @@ rendement mesuré du panier.
 """
 from __future__ import annotations
 
+import json
+from datetime import date
+from pathlib import Path
+
 import pandas as pd
 
+# Mémo daté du balayage des dépôts officiels (Epic 12 S2). Fichier du répertoire de
+# données, pas un mémo mémoire : le conteneur redémarre plusieurs fois par jour et un
+# mémo mémoire ferait re-balayer tout le suivi à chaque départ.
+_FILING_MEMO = "edgar_tracking_daily.json"
 
-def price_risk_markers(df: pd.DataFrame | None) -> list[dict]:
+
+def _today() -> str:
+    """Jour calendaire courant — seul point d'entrée de l'horloge (simulée en test)."""
+    return date.today().isoformat()
+
+
+def _memo_path() -> Path:
+    """Chemin du mémo, résolu à l'appel : le répertoire de données peut être redirigé."""
+    import screener_backend
+    return Path(screener_backend.DATA_DIR) / _FILING_MEMO
+
+
+def _price_flags(df: pd.DataFrame | None) -> dict:
     """
     Drapeaux prix ACTUELS d'un titre suivi, depuis sa série DÉJÀ en main (celle du
     scan du jour ou du complément Epic 9 S1) : aucun appel réseau.
 
     Mêmes capteurs que la Passe A du scan (source unique : `sub_dollar_marker`,
-    `_reverse_split_marker`), même composeur que les sélections (`scoring.risk_markers`)
-    — codes + niveaux + variables, jamais de texte d'affichage. Série absente ou
-    illisible ⇒ liste VIDE : un dossier de risque vide ne doit jamais faire tomber une
-    ligne de suivi.
+    `_reverse_split_marker`). Série absente ou illisible ⇒ AUCUN drapeau : un dossier
+    de risque ne doit jamais faire tomber une ligne de suivi.
     """
     if df is None or "Close" not in df:
-        return []
+        return {}
     from screener_backend import sub_dollar_marker, _reverse_split_marker
-    from scoring import risk_markers
     try:
         days, sub_flag = sub_dollar_marker(df["Close"].dropna())
         rs_flag, rs_date = _reverse_split_marker(df)
     except Exception:
-        return []
-    return risk_markers({"sub_dollar_flag": sub_flag, "sub_dollar_days": days,
-                         "reverse_split_flag": rs_flag, "reverse_split_date": rs_date})
+        return {}
+    return {"sub_dollar_flag": sub_flag, "sub_dollar_days": days,
+            "reverse_split_flag": rs_flag, "reverse_split_date": rs_date}
+
+
+def current_risk_markers(df: pd.DataFrame | None, filings: dict | None = None) -> list[dict]:
+    """
+    Dossier de risque ACTUEL : drapeaux prix et faits des dépôts officiels composés
+    ENSEMBLE par `scoring.risk_markers` — un seul appel, donc un seul ordre de gravité
+    décroissante. Codes + niveaux + variables, jamais de texte d'affichage.
+
+    `filings` est le dict de `edgar.survival_signals` (ou None quand EDGAR est muet) :
+    ses clés `*_flag` / `*_date` sont exactement celles que lit le composeur, aucune
+    traduction intermédiaire. Rien à signaler ⇒ liste VIDE, jamais de clé absente.
+    """
+    from scoring import risk_markers
+    return risk_markers({**_price_flags(df), **(filings or {})})
+
+
+def scan_filings(tickers) -> dict[str, dict | None]:
+    """
+    Signaux de dépôt des titres suivis, AU PLUS un balayage par jour calendaire et par
+    ticker — les dépôts sont datés au jour, un second appel le même jour ne rapporte
+    rien et coûte à la SEC. Le mémo est daté et écrit dans le répertoire de données :
+    il survit au redémarrage du conteneur.
+
+    EDGAR muet, désactivé, ticker inconnu ou capteur en erreur ⇒ `None` MÉMORISÉ comme
+    un résultat : la cadence tient aussi les jours où EDGAR ne répond pas. Jamais fatal
+    — le suivi complet doit être servi même sans un seul dépôt lu.
+    """
+    day, path = _today(), _memo_path()
+    memo: dict[str, dict | None] = {}
+    try:
+        saved = json.loads(path.read_text())
+        if saved.get("day") == day:          # mémo d'hier ⇒ balayage complet
+            memo = saved.get("tickers") or {}
+    except Exception:
+        pass                                 # mémo absent ou illisible ⇒ balayage complet
+
+    wanted = sorted({tk for tk in tickers if tk})
+    todo = [tk for tk in wanted if tk not in memo]
+    for tk in todo:
+        try:
+            import edgar
+            memo[tk] = edgar.survival_signals(tk)
+        except Exception:
+            memo[tk] = None
+    if todo:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"day": day, "tickers": memo}))
+        except Exception:
+            pass                             # mémo non écrit ⇒ on re-balaiera, jamais fatal
+    # Journal de console : le balayage ne se raconte JAMAIS dans le payload servi.
+    print(f"[suivi] dépôts officiels : {len(todo)} interrogé(s), "
+          f"{len(wanted) - len(todo)} depuis le mémo du jour")
+    return memo
 
 
 def _after_entry(close: pd.Series, entry_date: str) -> pd.Series:
@@ -64,7 +135,8 @@ def _after_entry(close: pd.Series, entry_date: str) -> pd.Series:
         return close.iloc[0:0]
 
 
-def track_row(base: dict, entry: dict, df: pd.DataFrame | None, cfg: dict) -> dict:
+def track_row(base: dict, entry: dict, df: pd.DataFrame | None, cfg: dict,
+              filings: dict | None = None) -> dict:
     """
     Une ligne de suivi : `base` (identité — ticker, et la fenêtre pour la Purge
     silencieuse) + `entry` (entry_date, entry_price…), enrichis de la trajectoire
@@ -78,10 +150,11 @@ def track_row(base: dict, entry: dict, df: pd.DataFrame | None, cfg: dict) -> di
     row = {**base, **entry, "days_held": None, "days_left": None, "ret": None,
            "checkpoint": None, "phase": "no_data", "status": {"code": "no_data"},
            # Risque ACTUEL, distinct de `risk_markers` (figé à l'entrée, porté par
-           # `entry`) : recalculé à chaque construction depuis la série en main. Posé
-           # avant tout retour anticipé — une ligne sans prix porte une liste vide, pas
-           # une clé absente.
-           "risk_markers_now": price_risk_markers(df)}
+           # `entry`) : recalculé à chaque construction depuis la série en main et les
+           # dépôts du balayage du jour. Posé avant tout retour anticipé — une ligne
+           # sans prix porte une liste vide, pas une clé absente ; elle peut même
+           # porter un fait de dépôt, seule information restante d'un titre radié.
+           "risk_markers_now": current_risk_markers(df, filings)}
     if df is None or "Close" not in df:
         return row
     after = _after_entry(df["Close"].dropna(), entry["entry_date"])
