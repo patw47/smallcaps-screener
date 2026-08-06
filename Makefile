@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort flag-prevalence check-snapshot-keys check-backup
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort flag-prevalence check-snapshot-keys check-backup check-secrets proof-export
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -77,6 +77,20 @@ check-snapshot-keys:
 # fois le volume et le montage hôte ; script sur l'entrée standard (l'image ne porte pas scripts/).
 check-backup:
 	docker compose exec -T backend python - < scripts/check_backup.py
+
+# Étanchéité des secrets (Epic 11 S2) : aucune valeur de secret dans les fichiers
+# versionnés (valeurs du .env local + motifs de jetons connus), et .env.example porte
+# les NOMS des variables d'export sans leurs valeurs. Tourne sur l'hôte : c'est le
+# DÉPÔT qui est jugé, pas l'exécution.
+check-secrets:
+	python3 scripts/check_secrets.py
+
+# Preuve de bout en bout de l'export (Epic 11 S2) — rapport, PAS un gate. Rejoue les deux
+# tests que l'hôte saute (fastapi absent) et exerce le chemin réseau réel : écriture d'une
+# ligne à symbole factice dans la table, déduplication par interrogation, puis archivage de
+# cette ligne. Dans le conteneur : lui seul porte les secrets ; script sur l'entrée standard.
+proof-export:
+	docker compose exec -T backend python - < scripts/proof_export.py
 
 build-frontend:
 	docker run --rm -v "$(CURDIR)/frontend":/app -w /app node:20-alpine \

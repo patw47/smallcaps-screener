@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from screener_backend import run_scan, scan_state, FILTERS, OUTPUT_FILE, _display_params
 from track import run_tracker, backup_snapshots, _empty_result
+from notion_export import export_closed_rows
 
 # Scan automatique périodique (heures) — les snapshots s'accumulent pour le suivi de perf
 SCAN_EVERY_HOURS = float(os.environ.get("SCAN_EVERY_HOURS", "24"))
@@ -69,6 +70,10 @@ def _run_scan_sync():
     # Greffé ici plutôt que dans un ordonnanceur séparé — la copie est idempotente,
     # son rythme est donc indifférent, et elle ne peut pas faire échouer le scan.
     backup_snapshots()
+    # Les lignes de suivi dont la fenêtre est échue sont figées dans la table de
+    # résultats (Epic 11 S2) — même greffon, même contrat : l'export est idempotent
+    # (déduplication par interrogation de la table) et ne peut pas faire échouer le scan.
+    export_closed_rows(result)
 
 
 async def _ensure_background_scan():

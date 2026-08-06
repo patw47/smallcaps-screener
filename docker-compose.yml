@@ -18,6 +18,10 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       - EDGAR_USER_AGENT=${EDGAR_USER_AGENT:-}
+      # Export des résultats terminés (Epic 11 S2) — vides = export désactivé
+      # silencieusement, le scan tourne normalement.
+      - NOTION_API_KEY=${NOTION_API_KEY:-}
+      - NOTION_RESULTS_DB_ID=${NOTION_RESULTS_DB_ID:-}
       - REQUIRE_LOCAL_CONFIG=${REQUIRE_LOCAL_CONFIG:-}
     restart: always
 
