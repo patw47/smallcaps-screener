@@ -173,7 +173,7 @@ function HowToRead() {
       <summary style={{ ...summaryStyle, fontSize: 14, fontWeight: 650, color: "#e8e8ff" }}>
         {t("panel.title")}
       </summary>
-      {["role", "frozen", "families", "survivors", "forward", "checkpoint"].map(k => (
+      {["families", "survivors", "forward", "checkpoint"].map(k => (
         <p key={k} style={proseStyle}>{t(`panel.p.${k}`)}</p>
       ))}
     </details>
@@ -840,7 +840,7 @@ function ProfileBadge({ kind, strength, event }) {
   const c = PROFILE_STYLE[kind];
   const pct = strength != null ? Math.round(strength * 100) : null;
   return (
-    <Tip tip={t(`gloss.${kind}`)} style={{
+    <Tip tip={pct != null ? `${t(`gloss.${kind}`)} ${t("gloss.rank", { n: pct })}` : t(`gloss.${kind}`)} style={{
       display: "inline-flex", alignItems: "center", gap: 5, flexWrap: "wrap",
       background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, borderBottom: `1px solid ${c.bd}`,
       borderRadius: 20, padding: "4px 11px", fontSize: 12, fontWeight: 700,
@@ -849,11 +849,6 @@ function ProfileBadge({ kind, strength, event }) {
       <span>{c.emoji} {t(`profile.${kind}.label`)}</span>
       {pct != null && <span style={{ opacity: 0.7, fontWeight: 600 }}>· {pct}</span>}
       {event && <span style={{ color: "#ffd24d" }}>⚡</span>}
-      <span style={{
-        background: "#ffcc6622", color: "#ffcc66", fontSize: 9, fontWeight: 700,
-        padding: "1px 6px", borderRadius: 10, marginLeft: 3,
-        textTransform: "uppercase", letterSpacing: 0.4,
-      }}>{t("badge.refuted")}</span>
     </Tip>
   );
 }
@@ -1192,7 +1187,7 @@ export default function App() {
 
   const glanceLine = v4.cohort.length > 0
     ? <>{t("glance.today")} <b style={{ color: "#00e096" }}>{v4.cohort.length > 1 ? t("glance.qualified.many", { n: v4.cohort.length }) : t("glance.qualified.one")}</b> {t("glance.startWith")} <b style={{ color: "#00e096" }}>{v4.cohort[0].ticker}</b> {t("glance.mostOversold")}</>
-    : <>{t("glance.today")} <b>{t("glance.noList")}</b> — {v4.mkt21 != null ? t("glance.bullish", { w: dp4.rules?.mkt_window ?? "—", pct: pctFmt(v4.mkt21) }) : t("glance.mktUnavailable")}{t("glance.paused")}</>;
+    : <>{t("glance.today")} {v4.mkt21 != null ? t("glance.bullish", { w: dp4.rules?.mkt_window ?? "—", pct: pctFmt(v4.mkt21) }) : t("glance.mktUnavailable")}{t("glance.paused")}</>;
 
   return (
     <div style={{ minHeight: "100vh", background: "#070714", fontFamily: "'Segoe UI', sans-serif", color: "#e8e8ff", padding: "0 0 60px" }}>
@@ -1203,6 +1198,11 @@ export default function App() {
         ::-webkit-scrollbar-track { background: #0a0a1a; }
         ::-webkit-scrollbar-thumb { background: #2a2a6a; border-radius: 2px; }
         summary::marker { color: #5a6a79; }
+        html { scroll-behavior: smooth; }
+        .anchor-nav a { color: #8494a3; text-decoration: none; }
+        .anchor-nav a:hover { color: #e8e8ff; }
+        /* ponytail: 140px ≈ hauteur du header sticky ; à recaler si le header change */
+        #marche, #silencieuse, #suivi, #resultats, #zones { scroll-margin-top: 140px; }
       `}</style>
 
       {/* Header */}
@@ -1277,6 +1277,11 @@ export default function App() {
             </button>
           </div>
         </div>
+        <nav className="anchor-nav" style={{ maxWidth: 1100, margin: "12px auto 0", display: "flex", gap: 18, flexWrap: "wrap", fontSize: 11, fontFamily: "monospace", letterSpacing: 1.5, textTransform: "uppercase" }}>
+          {[["marche", "nav.market"], ["silencieuse", "nav.quiet"], ["suivi", "nav.tracking"], ["resultats", "nav.perf"], ["zones", "nav.zones"]].map(([id, k]) => (
+            <a key={id} href={`#${id}`}>{t(k)}</a>
+          ))}
+        </nav>
       </div>
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 24px" }}>
@@ -1295,14 +1300,16 @@ export default function App() {
 
         <HowToRead />
 
-        <MarketSection cohort={v4.cohort} note={v4.note} mkt21={v4.mkt21} prelist={v4.prelist} dp4={dp4} />
-        <QuietSection v5={v5} win={mktWin} dp4={dp4} dp5={dp5} />
-        <TrackingSection tracking={v4.tracking} dp={dp4} family={t("market.section.title")} />
-        <TrackingSection tracking={v5.tracking} dp={dp5} family={t("quiet.name")} windowCol />
-        <PerfSection />
+        <div id="marche"><MarketSection cohort={v4.cohort} note={v4.note} mkt21={v4.mkt21} prelist={v4.prelist} dp4={dp4} /></div>
+        <div id="silencieuse"><QuietSection v5={v5} win={mktWin} dp4={dp4} dp5={dp5} /></div>
+        <div id="suivi">
+          <TrackingSection tracking={v4.tracking} dp={dp4} family={t("market.section.title")} />
+          <TrackingSection tracking={v5.tracking} dp={dp5} family={t("quiet.name")} windowCol />
+        </div>
+        <div id="resultats"><PerfSection /></div>
 
         {/* Zones extrêmes */}
-        <section style={{ marginTop: 34 }}>
+        <section id="zones" style={{ marginTop: 34 }}>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
             <h2 style={{ fontSize: 15, margin: 0, fontWeight: 650, textTransform: "uppercase", letterSpacing: 1.2, color: "#e8e8ff" }}>
               {t("zones.title")}

@@ -2,10 +2,11 @@
 
 > **Epic 2 — the freeze is lifted.** `frontend/smallcap-screener.jsx` was frozen through
 > Epic 1; since 2026-07-04 it is **editable**. It must display the **Fusée / Phénix profile
-> badges prominently on every stock**, each carrying a visible verdict marker. Since Epic 8
-> S3 that marker reads **"hypothèse testée et réfutée en juillet 2026"** (i18n key
-> `badge.refuted`) — it replaced "non validé", which suggested a test still pending when the
-> verdict is in. Keep edits focused (badges, filtering) — no redesign.
+> badges prominently on every stock**. The visible verdict marker ("hypothèse testée et
+> réfutée en juillet 2026", i18n key `badge.refuted`, Epic 8 S3 — it had replaced "non
+> validé") was **removed from the UI on 2026-08-07** (owner decision): the refuted verdict
+> stays documented here and in the post-mortems, not on screen. Keep edits focused
+> (badges, filtering) — no redesign.
 >
 > **Epic 3 — survival-conditioned score.** Each card now leads with an **`ExplodeScore`**
 > element: the model's **`P(+100 % / 63d)`** (`p_explode`) — the headline v3 signal — plus a
@@ -160,11 +161,12 @@ Security note: this exposes the key to browser code. Use a backend proxy before 
 
 `ProfileBadge` renders one coloured chip per profile: **🚀 Fusée** (green) and **🔥 Phénix**
 (orange), each with the member's strength (0–100). A Fusée chip shows a **⚡** when
-`fuseeEvent` is set (breakout that day). **Both chips carry the "hypothèse testée et réfutée
-en juillet 2026" tag** (`badge.refuted`, Epic 8 S3) since **Validation A failed for each**
-(Epic 2 Sprint 6, protocol v2 §6/§9): the tooltip carries that profile's Sprint 5 numbers —
-Fusée's dropped-momentum verdict, Phénix's barbell + money-gate. The profile-filter footnote
-mirrors it for whichever profile is selected. `ProfileBadges` renders every profile a stock
+`fuseeEvent` is set (breakout that day). The "hypothèse testée et réfutée en juillet 2026"
+tag (`badge.refuted`, Epic 8 S3) was **removed from the chips on 2026-08-07** (owner
+decision); the refuted verdict — **Validation A failed for each** (Epic 2 Sprint 6,
+protocol v2 §6/§9) — remains documented here only. The chip tooltip describes the
+profile's portrait and explains the strength number as a daily percentile rank
+(`gloss.rank`). `ProfileBadges` renders every profile a stock
 belongs to (both chips for dual-profile stocks); it returns nothing for a non-member. The
 badges sit prominently at the top of each `StockCard`. The stats header shows the
 **per-profile candidate counts**.
