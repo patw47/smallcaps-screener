@@ -138,7 +138,11 @@ FILTERS = {
     "score_vol_ratio_max": 2.5,
     "allowed_exchanges": {"NMS", "NYQ", "NGM", "NCM"},
     "rate_limit_s": 0.3,           # entre lots yf.download (Passe A)
-    "cache_minutes": 30,
+    # Fraîcheur du cache. 12 h et non 30 min : le scan est QUOTIDIEN, donc un seuil court
+    # ne rend pas les prix plus frais — il déclenche seulement un scan complet (jusqu'à
+    # `enrich_max` appels .info) à chaque redémarrage du service ou visite de page, par le
+    # stale-while-revalidate de /api/scan. L'écran date toujours le scan affiché.
+    "cache_minutes": 720,
     # --- Découverte de l'univers (Sprint 1 : univers COMPLET et stable) ---
     "discovery_exchanges": ("nasdaq", "nyse", "amex"),  # 3 places US via l'API NASDAQ screener
     "discovery_marketcaps": ("Small", "Micro"),          # catégories cap pré-filtrées côté API
@@ -594,9 +598,13 @@ def _is_binary_event_sector(info: dict) -> bool:
     return any(motif in champs for motif in FILTERS["binary_event_industries"])
 
 
-def _days_to_earnings(info: dict, now: datetime | None = None) -> int | None:
+def _days_to_earnings(info: dict, now: datetime | None = None) -> tuple[int | None, str | None]:
     """
-    Jours avant les prochains résultats, ou None si la date est absente ou passée.
+    Jours avant les prochains résultats ET date ISO de ceux-ci — `(None, None)` si la
+    date est absente ou passée. Les deux voyagent ensemble : le décompte se périme dès
+    le lendemain du scan, la date non ; l'écran a besoin des deux et ne doit pas
+    reconstruire l'une à partir de l'autre.
+
     **Best effort assumé** : yfinance ne sert cette date que pour une partie des
     micro-caps — une absence n'est jamais une erreur, juste un drapeau en moins.
     """
@@ -612,74 +620,83 @@ def _days_to_earnings(info: dict, now: datetime | None = None) -> int | None:
         # heures » s'affiche « dans 2 j ». Le drapeau parle en jours de calendrier.
         jours = (quand.date() - (now or datetime.now(tz=timezone.utc)).date()).days
         if jours >= 0:
-            return jours
-    return None
+            return jours, quand.date().isoformat()
+    return None, None
 
 
-def _build_positives_flags(stock: dict) -> tuple[list[str], list[str]]:
+def _build_positives_flags(stock: dict) -> tuple[list[dict], list[dict]]:
+    """Points positifs et drapeaux d'un titre, en CODES + variables.
+
+    Le backend ne fabrique plus AUCUNE phrase affichable : le frontend traduit
+    `pos.<code>` (pastille courte) et `pos.tip.<code>` (phrase complète en infobulle),
+    idem `flag.<code>` / `flag.tip.<code>`. Les nombres sont formatés ici pour que les
+    deux textes affichent la même valeur. Les snapshots d'historique antérieurs portent
+    encore des phrases françaises : le JSX garde une branche pour ces chaînes.
+    """
     positives, flags = [], []
 
-    # Contexte (Epic 1 S7) — CODES + variables traduits par le frontend, comme les notes
-    # et statuts depuis l'Epic 8 S1. Les drapeaux hérités sont encore des phrases
-    # françaises fabriquées ici ; le JSX accepte les deux formes le temps de la bascule.
+    # Contexte (Epic 1 S7)
     if stock.get("binary_event"):
         flags.append({"code": "binary_event"})
     jours = stock.get("days_to_earnings")
     if jours is not None and jours <= FILTERS["earnings_soon_days"]:
-        flags.append({"code": "earnings_soon", "d": jours})
+        flags.append({"code": "earnings_soon", "d": jours,
+                      "date": stock.get("earnings_date")})
 
     vr = stock.get("vol_ratio")
     if vr and FILTERS["score_vol_ratio_min"] <= vr <= FILTERS["score_vol_ratio_max"]:
-        positives.append(f"Volume en hausse x{vr:.1f} (zone idéale)")
+        positives.append({"code": "vol_ratio", "x": f"{vr:.1f}"})
     elif vr and vr > FILTERS["score_vol_ratio_max"]:
-        flags.append(f"Volume très élevé x{vr:.1f} (possible spike)")
+        flags.append({"code": "vol_spike", "x": f"{vr:.1f}"})
 
     if stock.get("accumulation"):
-        positives.append("OBV en hausse : accumulation (acheteurs > vendeurs)")
+        positives.append({"code": "accumulation"})
 
     if stock.get("compressed"):
-        positives.append("Base serrée (compression ATR) — ressort armé")
+        positives.append({"code": "compressed"})
 
     if stock.get("near_pivot"):
-        pct = (stock.get("pct_recent_high") or 0) * 100
-        positives.append(f"Proche du pivot de sa base récente ({pct:.0f}%) — sur le point de casser")
+        positives.append({"code": "near_pivot",
+                          "pct": f"{(stock.get('pct_recent_high') or 0) * 100:.0f}"})
 
     if stock.get("low_ext"):
-        positives.append("Peu étiré (proche de la MA50) — début de mouvement, pas après")
+        positives.append({"code": "low_ext"})
 
     if stock.get("rs_turning"):
-        positives.append("Force relative qui repart à la hausse (retournement)")
+        positives.append({"code": "rs_turning"})
 
     if stock.get("price_above_ma50"):
-        positives.append("Cours au-dessus de la MA50")
+        positives.append({"code": "above_ma50"})
 
     if stock.get("change_1m") is not None and stock["change_1m"] * 100 < -15:
-        flags.append(f"Correction forte 1 mois ({stock['change_1m']*100:+.1f}%)")
+        flags.append({"code": "drawdown_1m", "pct": f"{stock['change_1m'] * 100:+.1f}"})
 
     if stock.get("insider_net_buying") and stock["insider_net_buying"] > 0:
-        positives.append(
-            f"Achats nets d'insiders +{stock['insider_net_buying']/1e3:.0f}k$ "
-            f"(Form 4, {FILTERS['insider_window_days']}j)")
+        positives.append({"code": "insider_buys",
+                          "k": f"{stock['insider_net_buying'] / 1e3:.0f}",
+                          "d": FILTERS["insider_window_days"]})
     if stock.get("insider_buying"):   # informatif : % de détention (n'est plus au scoring)
-        positives.append(f"Insiders détiennent {stock.get('insider_pct', 0):.1f}% du capital")
+        positives.append({"code": "insider_pct", "p": f"{stock.get('insider_pct', 0):.1f}"})
 
     if stock.get("low_float"):
-        positives.append(f"Petit float ({(stock.get('float_shares') or 0)/1e6:.0f}M actions) — mouvements amplifiés")
+        positives.append({"code": "low_float",
+                          "m": f"{(stock.get('float_shares') or 0) / 1e6:.0f}"})
 
     # cash_positive : None = donnée absente → ni positif ni flag (ne pas pénaliser)
     if stock.get("cash_positive") is True:
-        positives.append("Trésorerie > dette (bilan sain)")
+        positives.append({"code": "cash_positive"})
     elif stock.get("cash_positive") is False:
-        flags.append("Dette supérieure à la trésorerie")
+        flags.append({"code": "cash_negative"})
 
     if stock.get("revenue_growth") and stock["revenue_growth"] > FILTERS["revenue_growth_min"]:
-        positives.append(f"Croissance revenus +{stock['revenue_growth']*100:.0f}%")
+        positives.append({"code": "revenue_growth",
+                          "pct": f"{stock['revenue_growth'] * 100:.0f}"})
 
     if stock.get("short_interest_pct") and stock["short_interest_pct"] > FILTERS["short_interest_high"]:
-        positives.append(f"Short interest élevé {stock['short_interest_pct']:.1f}% → potentiel squeeze")
+        positives.append({"code": "short_squeeze", "s": f"{stock['short_interest_pct']:.1f}"})
 
     if stock.get("ipo_year") and stock["ipo_year"] >= FILTERS["ipo_year_min"]:
-        positives.append(f"IPO récente ({stock['ipo_year']})")
+        positives.append({"code": "ipo_recent", "y": stock["ipo_year"]})
 
     return positives, flags
 
@@ -1155,7 +1172,7 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
     # --- Contexte (Epic 1 S7) — lu dans le .info DÉJÀ récupéré : aucun appel réseau de
     # plus (Yahoo bannit l'IP sur les rafales, cf. enrich_workers=2).
     binary_event = _is_binary_event_sector(info)
-    days_to_earnings = _days_to_earnings(info)
+    days_to_earnings, earnings_date = _days_to_earnings(info)
 
     # --- Bilan : None si donnée absente (ne pas pénaliser l'absence) ---
     total_cash = _safe_float(info.get("totalCash"), None)
@@ -1234,6 +1251,7 @@ def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
         # de score. `days_to_earnings` reste None quand yfinance n'a pas la date.
         "binary_event": binary_event,
         "days_to_earnings": days_to_earnings,
+        "earnings_date": earnings_date,
         "catalyst_type": None,
         "catalyst_date": None,
         **signals,  # inclut les facteurs continus f_accum / f_atr_ratio / f_pct_recent / f_ext / f_rs

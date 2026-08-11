@@ -92,6 +92,9 @@ check-secrets:
 proof-export:
 	docker compose exec -T backend python - < scripts/proof_export.py
 
+# Le nettoyage final efface frontend/node_modules sur l'hôte, donc le point de montage
+# du volume anonyme du service frontend : après cette cible, `docker compose up -d
+# --force-recreate frontend` pour le remonter (sinon le prochain départ n'a plus de deps).
 build-frontend:
 	docker run --rm -v "$(CURDIR)/frontend":/app -w /app node:20-alpine \
 		sh -c "npm install --silent --no-audit --no-fund >/dev/null 2>&1 && npx vite build"

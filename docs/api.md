@@ -12,7 +12,7 @@ All application endpoints are prefixed with `/api`.
 
 **Non-blocking** (stale-while-revalidate). Never runs a scan synchronously in the request:
 
-- **Fresh cache** (< `cache_minutes`, default 30): returned directly.
+- **Fresh cache** (< `cache_minutes`, default 720 — 12 h): returned directly.
 - **Stale result** exists: returned immediately with `"stale": true` while a background refresh is kicked.
 - **No data yet** (cold start): returns an empty payload with `"scanning": true` and kicks a background scan.
 
