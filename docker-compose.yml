@@ -31,6 +31,13 @@ services:
       dockerfile: Dockerfile
     ports:
       - "5173:5173"
+    volumes:
+      # Le conteneur lance `vite dev` : en montant le source, une édition recharge le
+      # navigateur au lieu d'exiger un rebuild — lequel recréait aussi le backend et
+      # relançait donc un scan complet (cache périmé au bout de cache_minutes).
+      # Le volume anonyme garde le node_modules de l'image, que le montage masquerait.
+      - ./frontend:/app
+      - /app/node_modules
     environment:
       - VITE_ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     depends_on:

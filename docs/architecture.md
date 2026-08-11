@@ -108,7 +108,9 @@ volumes:
   data:
 ```
 
-The cache is valid for `FILTERS["cache_minutes"]`, currently 30 minutes.
+The cache is valid for `FILTERS["cache_minutes"]`, currently 12 hours. A shorter window would not
+make prices fresher (the scan is daily) — it would only make every restart or page visit kick a
+full background scan through the stale-while-revalidate path.
 
 ## Concurrency Model
 

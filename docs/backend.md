@@ -65,7 +65,7 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `history_period` | `1y` | OHLCV depth (needs 252 for 52w + ATR90). |
 | `enrich_max` | `150` | Cap on `.info` calls — the **top-scored** survivors are enriched. |
 | `enrich_workers` / `enrich_jitter_s` / `enrich_retries` / `enrich_backoff_s` | `2` / `0.5` / `4` / `3.0` | Pass B pool + anti-throttle backoff (Yahoo bans the IP if hammered). |
-| `cache_minutes` | `30` | Cache lifetime. |
+| `cache_minutes` | `720` | Cache lifetime (12 h). Shorter buys no freshness — the scan is daily — and costs a full rescan per restart/visit. |
 | `shuffle_seed` | `None` | `int` → reproducible **download order**; `None` → random order. Never changes universe membership. |
 | `pool_mode` | `tradability` | **Epic 2**: `tradability` (default) → hard path = price ≥ `price_min` + dollar-volume ≥ `dollar_vol_min`, selection by **profile detectors**; `legacy` → the v1 funnel (`price_max`, `perf_1m` band, MA50-slope gate) for backtest reproducibility. |
 | `profiles` | dict | Cross-sectional **percentile** thresholds for Fusée / Phénix, **verbatim** from protocol v2 §3: Fusée `rs63/perf_1m ≥ P80`; Phénix `pct_52w ≤ P20`, `atr_ratio ≤ P40`, `close ≥ SMA20` (`phenix_sma_window`). Single source of truth (prod ↔ study). |
@@ -276,7 +276,7 @@ Discover (full universe, no sampling) → `_download_prices` → **Pass A** (tra
 
 ## Output JSON
 
-Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter` (tradable pool), **`profile_members`**, **`pool_mode`**, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, the **profile fields `profile` / `is_fusee` / `is_phenix` / `fusee_event` / `fusee_strength` / `phenix_strength` / `profile_strength`**, the v2 sensor diagnostics **`compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`** (plus `sma20`), the insider fields **`insider_net_buying` / `insider_net_buying_pos`** (net Form 4 $, scored) and `insider_pct` / `insider_buying` (display only), `positives`, `flags`, the **context fields `binary_event` / `days_to_earnings`** (Epic 1 S7 — information only), and `catalyst_type`/`catalyst_date` (`null`). In `tradability` mode every stock is a **profile member**; non-members are absent. Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger` and the profile fields (for the Sprint 4 two-sleeve tracker).
+Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter` (tradable pool), **`profile_members`**, **`pool_mode`**, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, the **profile fields `profile` / `is_fusee` / `is_phenix` / `fusee_event` / `fusee_strength` / `phenix_strength` / `profile_strength`**, the v2 sensor diagnostics **`compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`** (plus `sma20`), the insider fields **`insider_net_buying` / `insider_net_buying_pos`** (net Form 4 $, scored) and `insider_pct` / `insider_buying` (display only), `positives`, `flags`, the **context fields `binary_event` / `days_to_earnings` / `earnings_date`** (Epic 1 S7 — information only), and `catalyst_type`/`catalyst_date` (`null`). In `tradability` mode every stock is a **profile member**; non-members are absent. Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger` and the profile fields (for the Sprint 4 two-sleeve tracker).
 
 ## Backtest harness — `backend/backtest.py`
 
@@ -315,7 +315,7 @@ network call** (Yahoo bans the IP on bursts — see `enrich_workers`).
 | Flag | Source | Meaning |
 | --- | --- | --- |
 | `binary_event` | `industry` then `sector` matched against `FILTERS["binary_event_industries"]` | Biotech / pharma: a regulatory decision or trial result moves the price tens of percent in one session, whatever the chart says. A stock-specific fall means something else here. |
-| `days_to_earnings` | `earningsTimestampStart`, then `earningsTimestamp` | Days until the next earnings date, `None` when absent or past. Flagged under `FILTERS["earnings_soon_days"]`. |
+| `days_to_earnings` / `earnings_date` | `earningsTimestampStart`, then `earningsTimestamp` | Days until the next earnings date **and that date (ISO)**, both `None` when absent or past. Flagged under `FILTERS["earnings_soon_days"]`; the flag carries both — the countdown goes stale the day after the scan, the date does not. |
 
 `days_to_earnings` is **best effort**: yfinance only carries the date for part of the
 micro-cap universe. A missing date is silent — never an error, just one flag fewer. The

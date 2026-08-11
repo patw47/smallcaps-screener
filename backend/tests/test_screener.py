@@ -9,6 +9,7 @@ Lancer : DATA_DIR=/tmp/screener_test pytest backend/tests/ -v
 import os
 os.environ.setdefault("DATA_DIR", "/tmp/screener_test")  # évite makedirs("/app/data")
 
+import re
 import ast
 import json
 from pathlib import Path
@@ -125,13 +126,13 @@ def test_cash_positive_none_no_debt_flag():
     """Donnée bilan absente → cash_positive None → PAS de faux flag dette."""
     stock = {"cash_positive": None}
     _, flags = _build_positives_flags(stock)
-    assert not any("Dette" in f for f in flags)
+    assert not any(f["code"] == "cash_negative" for f in flags)
 
 
 def test_cash_positive_false_emits_flag():
     stock = {"cash_positive": False}
     _, flags = _build_positives_flags(stock)
-    assert any("Dette" in f for f in flags)
+    assert any(f["code"] == "cash_negative" for f in flags)
 
 
 # ---------------------------------------------------------------------------
@@ -460,15 +461,29 @@ def test_days_to_earnings_best_effort():
     dans_5j = (maintenant + timedelta(days=5)).timestamp()
     passe = (maintenant - timedelta(days=3)).timestamp()
 
-    assert screener_backend._days_to_earnings({"earningsTimestamp": dans_5j}, maintenant) == 5
+    # Décompte ET date, ensemble : l'écran affiche les deux et ne reconstruit ni l'un ni l'autre
+    assert screener_backend._days_to_earnings(
+        {"earningsTimestamp": dans_5j}, maintenant) == (5, "2026-08-09")
     # `earningsTimestampStart` est prioritaire (yfinance le sert plus souvent)
     assert screener_backend._days_to_earnings(
-        {"earningsTimestampStart": dans_5j, "earningsTimestamp": passe}, maintenant) == 5
-    assert screener_backend._days_to_earnings({"earningsTimestamp": passe}, maintenant) is None
-    assert screener_backend._days_to_earnings({}, maintenant) is None
-    assert screener_backend._days_to_earnings({"earningsTimestamp": None}, maintenant) is None
+        {"earningsTimestampStart": dans_5j, "earningsTimestamp": passe}, maintenant) == (5, "2026-08-09")
+    assert screener_backend._days_to_earnings({"earningsTimestamp": passe}, maintenant) == (None, None)
+    assert screener_backend._days_to_earnings({}, maintenant) == (None, None)
+    assert screener_backend._days_to_earnings({"earningsTimestamp": None}, maintenant) == (None, None)
     # Valeur aberrante : ne doit pas remonter d'exception
-    assert screener_backend._days_to_earnings({"earningsTimestamp": 1e30}, maintenant) is None
+    assert screener_backend._days_to_earnings({"earningsTimestamp": 1e30}, maintenant) == (None, None)
+
+
+def test_earnings_flag_carries_the_date():
+    """Le drapeau porte la date en plus du décompte — sans date connue, la clé vaut None
+    et l'écran retombe sur le seul décompte (best effort de yfinance)."""
+    seuil = screener_backend.FILTERS["earnings_soon_days"]
+    _, flags = screener_backend._build_positives_flags(
+        {"days_to_earnings": 3, "earnings_date": "2026-08-14"})
+    assert {"code": "earnings_soon", "d": 3, "date": "2026-08-14"} in flags
+
+    _, sans_date = screener_backend._build_positives_flags({"days_to_earnings": seuil})
+    assert {"code": "earnings_soon", "d": seuil, "date": None} in sans_date
 
 
 def test_context_flags_are_codes_never_french_sentences():
@@ -478,7 +493,45 @@ def test_context_flags_are_codes_never_french_sentences():
         {"binary_event": True, "days_to_earnings": 3})
     codes = {f["code"]: f for f in flags if isinstance(f, dict)}
     assert codes["binary_event"] == {"code": "binary_event"}
-    assert codes["earnings_soon"] == {"code": "earnings_soon", "d": 3}
+    assert codes["earnings_soon"] == {"code": "earnings_soon", "d": 3, "date": None}
+
+
+def test_every_positive_and_flag_code_has_its_two_i18n_keys():
+    """Aucune phrase affichable côté backend, et chaque code émis est traduisible :
+    un code sans sa clé afficherait « pos.xxx » à l'écran, dans les deux langues."""
+    F = screener_backend.FILTERS
+    tout = {
+        "binary_event": True, "days_to_earnings": 0,
+        "vol_ratio": F["score_vol_ratio_max"] + 1,   # → drapeau spike
+        "accumulation": True, "compressed": True, "near_pivot": True,
+        "pct_recent_high": 0.98, "low_ext": True, "rs_turning": True,
+        "price_above_ma50": True, "change_1m": -0.30,
+        "insider_net_buying": 172_000, "insider_buying": True, "insider_pct": 12.5,
+        "low_float": True, "float_shares": 8e6, "cash_positive": False,
+        "revenue_growth": F["revenue_growth_min"] + 1,
+        "short_interest_pct": F["short_interest_high"] + 1,
+        "ipo_year": F["ipo_year_min"],
+    }
+    positives, flags = screener_backend._build_positives_flags(tout)
+    # La branche « zone idéale » du volume n'est pas atteignable en même temps que le spike
+    positives_bis, _ = screener_backend._build_positives_flags(
+        {**tout, "vol_ratio": F["score_vol_ratio_min"]})
+
+    i18n = Path(__file__).resolve().parents[2] / "frontend" / "i18n"
+    dicos = {lg: json.loads((i18n / f"{lg}.json").read_text(encoding="utf-8"))
+             for lg in ("fr", "en")}
+
+    attendus = [("pos", p) for p in positives + positives_bis] + [("flag", f) for f in flags]
+    assert len(attendus) >= 17, "règles perdues en route"
+    for ns, item in attendus:
+        assert isinstance(item, dict) and item.get("code"), f"phrase en dur : {item!r}"
+        for lg, dico in dicos.items():
+            cle = f"{ns}.{item['code']}"
+            assert cle in dico, f"{cle} absent de {lg}.json"
+            # Toute variable du gabarit doit être servie par le code, et inversement
+            for texte in (dico[cle], dico.get(f"{ns}.tip.{item['code']}", "")):
+                assert set(re.findall(r"\{(\w+)\}", texte)) <= set(item) - {"code"}, \
+                    f"{cle} ({lg}) attend une variable que le backend n'envoie pas"
 
 
 def test_context_flags_silent_when_data_missing_or_far():
@@ -494,7 +547,8 @@ def test_context_flags_silent_when_data_missing_or_far():
     # Frontière exacte : le jour du seuil est encore signalé
     _, flags = screener_backend._build_positives_flags(
         {"days_to_earnings": screener_backend.FILTERS["earnings_soon_days"]})
-    assert {"code": "earnings_soon", "d": screener_backend.FILTERS["earnings_soon_days"]} in flags
+    assert {"code": "earnings_soon", "d": screener_backend.FILTERS["earnings_soon_days"],
+            "date": None} in flags
 
 
 def test_context_flags_never_exclude_a_name():
@@ -509,7 +563,7 @@ def test_context_flags_never_exclude_a_name():
     assert pos_flague == pos_neutre
     # Et il n'ajoute que les deux drapeaux d'information
     ajoutes = [f for f in flags_flague if f not in flags_neutre]
-    assert ajoutes == [{"code": "binary_event"}, {"code": "earnings_soon", "d": 2}]
+    assert ajoutes == [{"code": "binary_event"}, {"code": "earnings_soon", "d": 2, "date": None}]
 
 
 # ---------------------------------------------------------------------------

@@ -79,10 +79,31 @@ const noteText = (note, ns) => note?.code
 
 const statusText = (s) => s?.code ? t(`status.${s.code}`, { d: s.d, cp: s.cp }) : "";
 
-// Drapeau d'un titre. Deux formes coexistent : les drapeaux hérités sont des phrases
-// fabriquées côté serveur, ceux de contexte (Epic 1 S7) sont des codes + variables
-// traduits ici — comme les notes et statuts depuis l'Epic 8 S1.
-const flagText = (f) => f?.code ? t(`flag.${f.code}`, { d: f.d }) : f;
+// Pastille d'un titre (`ns` = pos ou flag) : libellé court à l'écran, phrase complète
+// en infobulle. Sans clé `.tip`, l'infobulle reprend le libellé — la pastille se suffit.
+// Les snapshots d'historique antérieurs portent des phrases toutes faites : on les rend
+// telles quelles.
+// Date ISO servie par l'API → jour et mois dans la langue de l'écran. Découpée à la
+// main plutôt que `new Date(iso)` : ce dernier lit une date nue comme minuit UTC, et
+// l'affiche donc la veille pour tout lecteur à l'ouest de Greenwich.
+const dayMonth = (iso) => {
+  const [y, m, d] = String(iso ?? "").split("-").map(Number);
+  return y && m && d
+    ? new Date(y, m - 1, d).toLocaleDateString(t("locale"), { day: "numeric", month: "short" })
+    : null;
+};
+
+const chipText = (item, ns) => {
+  if (!item?.code) return { label: item, tip: item };
+  const tipKey = `${ns}.tip.${item.code}`;
+  // `date` arrive en ISO et repart lisible ; sans date connue le gabarit reçoit "—".
+  const vars = { ...item, date: dayMonth(item.date) };
+  const tip = t(tipKey, vars);
+  return { label: t(`${ns}.${item.code}`, vars), tip: tip === tipKey ? null : tip };
+};
+
+// Texte long d'une pastille, pour les sorties sans survol possible (brief d'analyse).
+const chipLine = (item, ns = "flag") => { const { label, tip } = chipText(item, ns); return tip ?? label; };
 
 const checkpointText = (c, thr) => c?.code
   ? t(`checkpoint.${c.code}${c.code === "week_one" && thr == null ? ".hidden" : ""}`,
@@ -218,7 +239,7 @@ function MarketCard({ entry, rank, total, dp4 }) {
         )}
       </div>
 
-      {(entry.risk_markers ?? []).filter(m => m.level === "high").map(m => (
+      {(entry.risk_markers ?? []).map(m => (
         <RiskAlert key={m.code} marker={m} />
       ))}
 
@@ -254,14 +275,6 @@ function MarketCard({ entry, rank, total, dp4 }) {
           }}>{text}</span>
         ))}
       </div>
-
-      {(entry.risk_markers ?? []).some(m => m.level !== "high") && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 10 }}>
-          {(entry.risk_markers ?? []).filter(m => m.level !== "high").map(m => (
-            <RiskChip key={m.code} marker={m} />
-          ))}
-        </div>
-      )}
 
       {first && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #1e2a36", fontSize: 12, color: "#8494a3" }}>
@@ -386,7 +399,7 @@ function QuietCard({ entry, win, rank, total, dp5 }) {
         )}
       </div>
 
-      {(entry.risk_markers ?? []).filter(m => m.level === "high").map(m => (
+      {(entry.risk_markers ?? []).map(m => (
         <RiskAlert key={m.code} marker={m} />
       ))}
 
@@ -405,14 +418,6 @@ function QuietCard({ entry, win, rank, total, dp5 }) {
           }}>{text}</span>
         ))}
       </div>
-
-      {(entry.risk_markers ?? []).some(m => m.level !== "high") && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 10 }}>
-          {(entry.risk_markers ?? []).filter(m => m.level !== "high").map(m => (
-            <RiskChip key={m.code} marker={m} />
-          ))}
-        </div>
-      )}
 
       {first && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #1e2a36", fontSize: 12, color: "#8494a3" }}>
@@ -579,14 +584,19 @@ function Lifecycle({ row, cal }) {
 const CELL = { padding: "10px 14px", borderBottom: "1px solid #1e2a36" };
 const RIGHT = new Set(["entryPrice", "today"]);
 
-// Cellule de marqueurs : une pastille par marqueur, l'infobulle porte le fait.
+// Cellule de marqueurs : une pastille colorée par marqueur, l'infobulle porte le fait.
+// Pastille et non encart — une ligne de tableau n'a pas la place d'une bande, et le
+// tableau se lit en balayant une colonne, où la teinte suffit à repérer.
 // Partagée par les deux colonnes de risque — les mêmes marqueurs s'y lisent
 // pareil, seule leur DATE de mesure diffère (entrée vs aujourd'hui).
 const riskCell = (markers) => (
   <td style={CELL}>
     {markers.length === 0 ? "—" : markers.map(m => (
-      <Tip key={m.code} tip={riskTip(m)} style={{ marginRight: 6 }}>
-        <span aria-hidden="true">{m.level === "high" ? "🛑" : "⚠"}</span>
+      <Tip key={m.code} tip={riskTip(m)} style={{
+        marginRight: 6, background: riskTone(m).chipBg, border: `1px solid ${riskTone(m).chipBd}`,
+        borderRadius: 20, padding: "2px 7px",
+      }}>
+        <span aria-hidden="true">{riskTone(m).icon}</span>
       </Tip>
     ))}
   </td>
@@ -863,29 +873,44 @@ const riskText = (m) => t(`risk.${m.code}`, { n: m.days });
 const riskDate = (m) => (m.date ? t("risk.since", { d: m.date }) : "");
 const riskTip = (m) => `${t(`risk.level.${m.level}`)} — ${t(`risk.tip.${m.code}`)}`;
 
-// Niveau haut : SORT du bandeau de pilules. Bande pleine largeur à angles vifs, barre
-// latérale, pictogramme — aucune autre forme de la carte ne lui ressemble. Une nuance
-// de couleur ne suffirait pas : tant que le risque reste une pilule parmi les pilules,
-// l'oeil le lit comme un paramètre de plus.
+// Une teinte par gravité, partagée par les deux formes ci-dessous : encart (cartes) et
+// pastille (tableau de suivi). Le pictogramme fait partie de la teinte — c'est lui qui
+// reste lisible en niveaux de gris, la couleur seule ne porte jamais l'information ; d'où
+// trois pictogrammes distincts et non trois nuances du même ⚠.
+const RISK_TONE = {
+  high: { icon: "🛑", bg: "#ff2d2d1c", bar: "#ff4d4d", label: "#ff8f8f", text: "#ffdcdc",
+    date: "#e0a0a0", fg: "#ff6b6b", chipBg: "#ff6b6b14", chipBd: "#ff6b6b33" },
+  medium: { icon: "⚠", bg: "#ffb3471c", bar: "#ffb347", label: "#ffcc85", text: "#ffe9cc",
+    date: "#d8b483", fg: "#ffb347", chipBg: "#ffb34714", chipBd: "#ffb34733" },
+  low: { icon: "ℹ", bg: "#4db8ff1a", bar: "#4db8ff", label: "#a8d8ff", text: "#dceeff",
+    date: "#93b6cc", fg: "#4db8ff", chipBg: "#4db8ff14", chipBd: "#4db8ff33" },
+};
+const riskTone = (m) => RISK_TONE[m.level] ?? RISK_TONE.low;
+
+// Sur une CARTE, toute gravité prend la bande — pleine largeur, angles vifs, barre
+// latérale, pictogramme. Aucune autre forme de la carte ne lui ressemble : tant que le
+// risque reste une pilule parmi les pilules, l'oeil le lit comme un paramètre de plus.
+// C'est la teinte, pas la forme, qui dit ensuite laquelle des trois gravités on lit.
 function RiskAlert({ marker }) {
+  const c = riskTone(marker);
   return (
     <div style={{
       display: "flex", gap: 10, alignItems: "flex-start",
-      background: "#ff2d2d1c", borderLeft: "4px solid #ff4d4d", borderRadius: "0 4px 4px 0",
+      background: c.bg, borderLeft: `4px solid ${c.bar}`, borderRadius: "0 4px 4px 0",
       padding: "10px 13px", marginBottom: 10,
     }}>
-      <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1.2 }}>🛑</span>
+      <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1.2 }}>{c.icon}</span>
       <div style={{ minWidth: 0 }}>
         <div style={{
-          color: "#ff8f8f", fontSize: 10, fontWeight: 800,
+          color: c.label, fontSize: 10, fontWeight: 800,
           textTransform: "uppercase", letterSpacing: 1,
         }}>{t(`risk.level.${marker.level}`)}</div>
         <Tip tip={t(`risk.tip.${marker.code}`)} down style={{ display: "block", borderBottom: "none" }}>
-          <span style={{ color: "#ffdcdc", fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+          <span style={{ color: c.text, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
             {riskText(marker)}
           </span>
           {marker.date && (
-            <span style={{ color: "#e0a0a0", fontSize: 11, marginLeft: 6, fontFamily: "monospace" }}>
+            <span style={{ color: c.date, fontSize: 11, marginLeft: 6, fontFamily: "monospace" }}>
               {riskDate(marker)}
             </span>
           )}
@@ -895,21 +920,6 @@ function RiskAlert({ marker }) {
   );
 }
 
-// Niveaux intermédiaire et faible : pilule — leur gravité est du même ordre que celle
-// des paramètres de contexte, la forme peut donc rester la même.
-function RiskChip({ marker }) {
-  const c = marker.level === "medium"
-    ? { fg: "#ffb347", bg: "#ffb34714", bd: "#ffb34733" }
-    : { fg: "#c9a227", bg: "#c9a22712", bd: "#c9a22730" };
-  return (
-    <Tip tip={riskTip(marker)} style={{
-      background: c.bg, color: c.fg, fontSize: 10, padding: "3px 8px",
-      borderRadius: 20, border: `1px solid ${c.bd}`,
-    }}>
-      {riskText(marker)}{marker.date ? ` · ${riskDate(marker)}` : ""}
-    </Tip>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Provenance d'une purge : le titre affiché figure aussi au suivi d'une liste de
@@ -951,7 +961,9 @@ function StockCard({ stock, origin, onAnalyze, analysis, isLoading }) {
         </div>
       </div>
 
-      {stock.riskMarkers.filter(m => m.level === "high").map(m => (
+      {/* Encart dès la gravité intermédiaire : sur ces cartes le risque est le sujet,
+          pas un paramètre — la pilule ne lui donnait pas de marqueur visuel immédiat. */}
+      {stock.riskMarkers.map(m => (
         <RiskAlert key={m.code} marker={m} />
       ))}
 
@@ -981,23 +993,27 @@ function StockCard({ stock, origin, onAnalyze, analysis, isLoading }) {
         ))}
       </div>
 
-      {/* Dossier de risque : faits tirés des dépôts officiels, sémantique mesurée */}
+      {/* Contexte et points positifs. Le dossier de risque n'est plus ici : quelle que
+          soit sa gravité il prend la bande, au-dessus, hors du bandeau de pilules. */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 14 }}>
-        {stock.riskMarkers.filter(m => m.level !== "high").map(m => (
-          <RiskChip key={m.code} marker={m} />
-        ))}
         {stock.flags.map((f, i) => {
-          const texte = flagText(f);
+          const { label, tip } = chipText(f, "flag");
           return (
-            <Tip key={f?.code ?? `${i}`} tip={/dilution/i.test(texte) ? t("gloss.dilution") : texte} style={{
+            <Tip key={f?.code ?? `${i}`} tip={tip ?? label} style={{
               background: "#ff6b6b0d", color: "#ff6b6b", fontSize: 10, padding: "3px 8px",
               borderRadius: 20, border: "1px solid #ff6b6b22",
-            }}>⚠ {texte}</Tip>
+            }}>⚠ {label}</Tip>
           );
         })}
-        {stock.positives.map(p => (
-          <span key={p} style={{ background: "#00ff9d0d", color: "#00cc7a", fontSize: 10, padding: "3px 8px", borderRadius: 20, border: "1px solid #00ff9d22" }}>✓ {p}</span>
-        ))}
+        {stock.positives.map((p, i) => {
+          const { label, tip } = chipText(p, "pos");
+          return (
+            <Tip key={p?.code ?? `${i}`} tip={tip ?? label} style={{
+              background: "#00ff9d0d", color: "#00cc7a", fontSize: 10, padding: "3px 8px",
+              borderRadius: 20, border: "1px solid #00ff9d22",
+            }}>✓ {label}</Tip>
+          );
+        })}
       </div>
 
       {analysis && (
@@ -1097,8 +1113,8 @@ export default function App() {
       ticker: stock.ticker, name: stock.name, sector: stock.sector, price: stock.price,
       marketCap: stock.marketCap, volumeRatio: stock.volumeRatio, change1m: stock.change1m,
       profile: t(`analyze.profile.${stock.isPhenix ? "phenix" : stock.isFusee ? "fusee" : "none"}`),
-      positives: stock.positives.join(", ") || "—",
-      flags: stock.flags.length > 0 ? stock.flags.map(flagText).join(", ") : t("analyze.none"),
+      positives: stock.positives.map(p => chipLine(p, "pos")).join(", ") || "—",
+      flags: stock.flags.length > 0 ? stock.flags.map(f => chipLine(f)).join(", ") : t("analyze.none"),
     });
 
     try {
