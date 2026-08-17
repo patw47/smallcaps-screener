@@ -602,14 +602,31 @@ const riskCell = (markers) => (
   </td>
 );
 
-function TrackingTable({ rows, dp, windowCol }) {
+// Provenance d'une ligne suivie : les deux familles sont rendues en sections séparées,
+// donc celle de la section est acquise — ce que la colonne apporte, c'est de voir qu'un
+// titre figure AUSSI dans l'autre liste. Lu depuis la même table que les étiquettes des
+// cartes (`originMap`), aucun calcul ni requête de plus.
+const originCell = (ticker, originMap) => {
+  const o = originMap?.[ticker] ?? {};
+  return (
+    <td style={CELL}>
+      <span style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        {o.market && <OriginChip kind="market" date={o.market} compact />}
+        {o.quiet && <OriginChip kind="quiet" date={o.quiet} compact />}
+        {!o.market && !o.quiet && "—"}
+      </span>
+    </td>
+  );
+};
+
+function TrackingTable({ rows, dp, windowCol, originMap }) {
   const g = dp.gloss ?? {}, cal = dp.checkpoint ?? {};
   // Colonnes de risque, indépendantes et conditionnelles : les entrées antérieures au
   // dossier n'ont pas de marqueurs d'entrée, et un titre peut n'avoir que du risque
   // actuel (déposé APRÈS son entrée). Chaque colonne n'apparaît que si elle a matière.
   const hasRisk = rows.some(r => (r.risk_markers ?? []).length > 0);
   const hasRiskNow = rows.some(r => (r.risk_markers_now ?? []).length > 0);
-  const headers = ["ticker", ...(windowCol ? ["window"] : []),
+  const headers = ["ticker", ...(windowCol ? ["window"] : []), "origins",
     "entryDate", "entryPrice", "today", "lifecycle", "position", "probs",
     ...(hasRisk ? ["risk"] : []), ...(hasRiskNow ? ["riskNow"] : [])];
   return (
@@ -634,6 +651,7 @@ function TrackingTable({ rows, dp, windowCol }) {
             <tr key={`${r.ticker}-${r.window ?? ""}-${r.entry_date}`}>
               <td style={{ ...CELL, fontWeight: 700, color: "#e8e8ff" }}>{r.ticker}</td>
               {windowCol && <td style={{ ...CELL, color: "#8494a3" }}>{t("chip.win", { w: r.window })}</td>}
+              {originCell(r.ticker, originMap)}
               <td style={{ ...CELL, color: "#8494a3" }}>{r.entry_date}</td>
               <td style={{ ...CELL, textAlign: "right", color: "#d7e0e8" }}>{r.entry_price} $</td>
               <td style={{ ...CELL, textAlign: "right", color: r.ret == null ? "#8494a3" : r.ret >= 0 ? "#00e096" : "#ff6b6b" }}>
@@ -654,10 +672,10 @@ function TrackingTable({ rows, dp, windowCol }) {
 
 // Un bloc par phase. « En observation » est toujours déployé — c'est le panier
 // vivant ; les deux autres sont repliés (élément natif, aucun script).
-function TrackingGroup({ phase, rows, dp, windowCol }) {
+function TrackingGroup({ phase, rows, dp, windowCol, originMap }) {
   if (rows.length === 0) return null;
   const head = t(`tracking.group.${phase}`, { n: rows.length });
-  const table = <TrackingTable rows={rows} dp={dp} windowCol={windowCol} />;
+  const table = <TrackingTable rows={rows} dp={dp} windowCol={windowCol} originMap={originMap} />;
   if (phase === "open") {
     return (
       <div style={{ marginTop: 14 }}>
@@ -678,7 +696,7 @@ function TrackingGroup({ phase, rows, dp, windowCol }) {
 
 const PHASES = ["open", "closed", "no_data"];
 
-function TrackingSection({ tracking, dp, family, windowCol }) {
+function TrackingSection({ tracking, dp, family, windowCol, originMap }) {
   const g = dp.gloss ?? {}, cal = dp.checkpoint ?? {};
   const groups = { open: [], closed: [], no_data: [] };
   // Phase inconnue (backend en avance sur l'écran) → rangée avec les lignes sans
@@ -709,7 +727,7 @@ function TrackingSection({ tracking, dp, family, windowCol }) {
             </div>
           )}
           {PHASES.map(p => (
-            <TrackingGroup key={p} phase={p} rows={groups[p]} dp={dp} windowCol={windowCol} />
+            <TrackingGroup key={p} phase={p} rows={groups[p]} dp={dp} windowCol={windowCol} originMap={originMap} />
           ))}
         </>
       )}
@@ -926,14 +944,16 @@ function RiskAlert({ marker }) {
 // purge (v4_tracking / v5.tracking, déjà dans le payload — aucune requête de plus).
 // Étiquette + date d'entrée : une information de contexte, jamais un signal.
 // ---------------------------------------------------------------------------
-function OriginChip({ kind, date }) {
+function OriginChip({ kind, date, compact }) {
   const label = kind === "market" ? t("market.section.title") : t("quiet.name");
   return (
     <Tip tip={t(`origin.tip.${kind}`, { d: date })} style={{
       background: "#00e0960d", color: "#00b87a", fontSize: 10, padding: "3px 8px",
       borderRadius: 20, border: "1px solid #00e09622", fontFamily: "monospace",
     }}>
-      {label} · {date}
+      {/* Au suivi la date a déjà sa colonne, et celle de l'AUTRE famille tient dans
+          l'infobulle : l'étiquette y reste nue pour ne pas élargir la ligne. */}
+      {label}{compact ? "" : ` · ${date}`}
     </Tip>
   );
 }
@@ -1319,8 +1339,8 @@ export default function App() {
         <div id="marche"><MarketSection cohort={v4.cohort} note={v4.note} mkt21={v4.mkt21} prelist={v4.prelist} dp4={dp4} /></div>
         <div id="silencieuse"><QuietSection v5={v5} win={mktWin} dp4={dp4} dp5={dp5} /></div>
         <div id="suivi">
-          <TrackingSection tracking={v4.tracking} dp={dp4} family={t("market.section.title")} />
-          <TrackingSection tracking={v5.tracking} dp={dp5} family={t("quiet.name")} windowCol />
+          <TrackingSection tracking={v4.tracking} dp={dp4} family={t("market.section.title")} originMap={originMap} />
+          <TrackingSection tracking={v5.tracking} dp={dp5} family={t("quiet.name")} windowCol originMap={originMap} />
         </div>
         <div id="resultats"><PerfSection /></div>
 

@@ -133,6 +133,7 @@
   "tracking.done": "window completed",
   "tracking.h.ticker": "Ticker",
   "tracking.h.window": "Window",
+  "tracking.h.origins": "Origin",
   "tracking.h.entryDate": "Entered",
   "tracking.h.entryPrice": "Entry price",
   "tracking.h.today": "Today",
