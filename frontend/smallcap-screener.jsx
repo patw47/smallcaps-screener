@@ -958,6 +958,139 @@ function OriginChip({ kind, date, compact }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Drapeaux de contexte (Epic 14 S3) — le bloc `context_flags` du payload, rendu TEL QUEL.
+// Aucune qualification ("découvert élevé", "grosse surprise"), aucune couleur de verdict :
+// tout seuil d'affichage vient du bloc `display` servi par l'API, et il n'en existe aucun
+// pour ces champs — la valeur brute formatée est donc la seule lecture honnête possible.
+// Un drapeau à None (repli Yahoo, colonne absente, cellule vide) ne rend RIEN : pas de
+// pastille vide, pas d'état d'erreur — le drapeau n'existe simplement pas pour ce titre.
+// ---------------------------------------------------------------------------
+
+// Part en pourcentage, NON signée — pctFmt force un « + » qui n'a aucun sens pour une
+// part détenue ou vendue à découvert.
+const share = (x, d = 1) => (x == null ? null : `${num(x * 100, d)} %`);
+
+// Horodatage de news : epoch en secondes, heure conservée par le backend (une parution
+// avant l'ouverture et une en clôture ne racontent pas la même séance).
+const stamp = (s) => (s == null ? null : new Date(s * 1000)
+  .toLocaleString(t("locale"), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }));
+
+// Une URL vient d'une source externe : elle n'entre dans un href que si elle est http(s).
+// Un « javascript: » y exécuterait du code au clic du lecteur.
+const safeUrl = (u) => (typeof u === "string" && /^https?:\/\//i.test(u) ? u : null);
+
+function ContextFlags({ flags }) {
+  const f = flags ?? {};
+  // Accès i18n en LITTÉRAUX : une clé construite par variable échappe aux gates de parité.
+  // `on` porte la présence — un drapeau absent retire sa pastille, il n'en vide pas une.
+  const chips = [
+    { on: f.short_float != null, label: t("ctx.shortFloat", { x: share(f.short_float) }), tip: t("ctx.tip.shortFloat") },
+    { on: f.short_ratio != null, label: t("ctx.shortRatio", { x: num(f.short_ratio, 1) }), tip: t("ctx.tip.shortRatio") },
+    { on: f.optionable === true, label: t("ctx.optionable"), tip: t("ctx.tip.optionable") },
+    { on: f.shortable === true, label: t("ctx.shortable"), tip: t("ctx.tip.shortable") },
+    { on: f.insider_transactions != null, label: t("ctx.insiders", { x: pctFmt(f.insider_transactions) }), tip: t("ctx.tip.insiders") },
+    { on: f.institutional_transactions != null, label: t("ctx.instTx", { x: pctFmt(f.institutional_transactions) }), tip: t("ctx.tip.instTx") },
+    { on: f.institutional_ownership != null, label: t("ctx.instOwn", { x: share(f.institutional_ownership) }), tip: t("ctx.tip.instOwn") },
+    { on: f.eps_surprise != null, label: t("ctx.eps", { x: pctFmt(f.eps_surprise) }), tip: t("ctx.tip.eps") },
+    { on: f.revenue_surprise != null, label: t("ctx.rev", { x: pctFmt(f.revenue_surprise) }), tip: t("ctx.tip.rev") },
+    // Un dépôt sans code d'événement reste un dépôt : la liste vide n'est pas une absence.
+    {
+      on: f.catalyst_8k_date != null, tip: t("ctx.tip.catalyst"),
+      label: t("ctx.catalyst", {
+        d: dayMonth(f.catalyst_8k_date),
+        items: (f.catalyst_8k_items ?? []).join(", ") || t("ctx.noItem"),
+      }),
+    },
+  ].filter(c => c.on);
+
+  // Un horodatage sans titre ne donne rien à lire : la news n'est rendue que par son titre.
+  const url = safeUrl(f.news_url), when = stamp(f.news_date);
+  const news = f.news_title || null;
+  if (chips.length === 0 && !news) return null;
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        {chips.map(({ label, tip }) => (
+          <Tip key={label} tip={tip} style={{
+            background: "#ffffff08", color: "#9aa8c0", fontSize: 10, padding: "3px 8px",
+            borderRadius: 20, border: "1px solid #ffffff14", fontFamily: "monospace",
+          }}>{label}</Tip>
+        ))}
+      </div>
+      {news && (
+        <div style={{ fontSize: 11.5, color: "#8888aa", marginTop: 6, lineHeight: 1.5 }}>
+          <span style={{ color: "#44446a", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 6 }}>{t("ctx.news")}</span>
+          {url
+            ? <a href={url} target="_blank" rel="noreferrer" style={{ color: "#8888ff" }}>{news}</a>
+            : <span style={{ color: "#9aa8c0" }}>{news}</span>}
+          {when && <span style={{ color: "#44446a", marginLeft: 6, fontFamily: "monospace" }}>{when}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Tri et filtre sur les drapeaux — PUREMENT client : aucun paramètre de requête, aucune
+// route ; la liste servie reste la même, l'écran la réordonne ou en masque des lignes.
+// Valeur numérique d'un titre pour chaque critère de tri, `null` quand le drapeau manque.
+const SORT_VALUE = {
+  short_float: (f) => f.short_float,
+  short_ratio: (f) => f.short_ratio,
+  insider_transactions: (f) => f.insider_transactions,
+  institutional_transactions: (f) => f.institutional_transactions,
+  institutional_ownership: (f) => f.institutional_ownership,
+  eps_surprise: (f) => f.eps_surprise,
+  revenue_surprise: (f) => f.revenue_surprise,
+  // Dates ramenées à un entier comparable : le jour ISO perd ses tirets, l'horodatage de
+  // news est déjà un nombre de secondes.
+  catalyst_8k_date: (f) => (f.catalyst_8k_date ? Number(f.catalyst_8k_date.replaceAll("-", "")) : null),
+  news_date: (f) => f.news_date,
+};
+
+// Filtres : « ce titre porte ce drapeau ». Le signe d'une transaction nette ou d'une
+// surprise est la frontière que porte la donnée elle-même, pas un seuil calibré — aucun
+// nombre de règle n'entre ici, ils vivent tous dans le bloc `display` servi par l'API.
+// Un drapeau absent vaut null : chaque comparaison le rend faux, il sort proprement.
+const FLAG_FILTER = {
+  insiders_buy: (f) => f.insider_transactions > 0,
+  inst_buy: (f) => f.institutional_transactions > 0,
+  eps_beat: (f) => f.eps_surprise > 0,
+  rev_beat: (f) => f.revenue_surprise > 0,
+  optionable: (f) => f.optionable === true,
+  shortable: (f) => f.shortable === true,
+  catalyst: (f) => f.catalyst_8k_date != null,
+  news: (f) => f.news_title != null,
+};
+
+// Libellés des deux listes déroulantes — littéraux, évalués au rendu (la langue peut
+// avoir changé depuis le dernier passage).
+const flagFilterOptions = () => [
+  ["all", t("ctx.filter.all")],
+  ["insiders_buy", t("ctx.filter.insidersBuy")],
+  ["inst_buy", t("ctx.filter.instBuy")],
+  ["eps_beat", t("ctx.filter.epsBeat")],
+  ["rev_beat", t("ctx.filter.revBeat")],
+  ["optionable", t("ctx.filter.optionable")],
+  ["shortable", t("ctx.filter.shortable")],
+  ["catalyst", t("ctx.filter.catalyst")],
+  ["news", t("ctx.filter.news")],
+];
+
+const flagSortOptions = () => [
+  ["scan", t("ctx.sort.none")],
+  ["short_float", t("ctx.sort.shortFloat")],
+  ["short_ratio", t("ctx.sort.shortRatio")],
+  ["insider_transactions", t("ctx.sort.insiders")],
+  ["institutional_transactions", t("ctx.sort.instTx")],
+  ["institutional_ownership", t("ctx.sort.instOwn")],
+  ["eps_surprise", t("ctx.sort.eps")],
+  ["revenue_surprise", t("ctx.sort.rev")],
+  ["catalyst_8k_date", t("ctx.sort.catalyst")],
+  ["news_date", t("ctx.sort.news")],
+];
+
 function StockCard({ stock, origin, onAnalyze, analysis, isLoading }) {
   const changeColor = (v) => v >= 0 ? "#00e096" : "#ff6b6b";
   const profileKind = stock.isPhenix ? "phenix" : stock.isFusee ? "fusee" : null;
@@ -1012,6 +1145,11 @@ function StockCard({ stock, origin, onAnalyze, analysis, isLoading }) {
           </div>
         ))}
       </div>
+
+      {/* Drapeaux de contexte (Epic 14 S3) — teinte neutre, sous les chiffres du titre et
+          au-dessus des pilules de jugement : ce sont des FAITS, ni un point positif ni un
+          motif d'alerte. Rien du tout quand le bloc est vide. */}
+      <ContextFlags flags={stock.context} />
 
       {/* Contexte et points positifs. Le dossier de risque n'est plus ici : quelle que
           soit sa gravité il prend la bande, au-dessus, hors du bandeau de pilules. */}
@@ -1076,6 +1214,9 @@ function normalizeStocks(raw) {
     fuseeStrength: s.fusee_strength ?? null, phenixStrength: s.phenix_strength ?? null,
     profileStrength: s.profile_strength ?? 0,
     riskMarkers: s.risk_markers ?? [],
+    // Bloc de contexte servi tel quel. Absent d'un résultat mis en cache avant l'arrivée
+    // du bloc : l'objet vide donne les mêmes None que le repli Yahoo, donc rien à l'écran.
+    context: s.context_flags ?? {},
   }));
 }
 
@@ -1095,6 +1236,9 @@ export default function App() {
   const [profile, setProfile] = useState("all");
   const [origin, setOrigin] = useState("all");   // all | market | quiet (provenance purge)
   const [riskSort, setRiskSort] = useState("scan");   // scan (défaut) | most | least
+  // Drapeaux de contexte (Epic 14 S3) — deux états LOCAUX, jamais un paramètre de requête.
+  const [flagFilter, setFlagFilter] = useState("all");   // all | clé de FLAG_FILTER
+  const [flagSort, setFlagSort] = useState("scan");      // scan (défaut) | clé de SORT_VALUE
   const [analyses, setAnalyses] = useState({});
   const [loadingTickers, setLoadingTickers] = useState({});
   const [lastScan, setLastScan] = useState(null);
@@ -1193,6 +1337,7 @@ export default function App() {
       if (profile === "phenix" && !s.isPhenix) return false;
       if (origin === "market" && !originMap[s.ticker]?.market) return false;
       if (origin === "quiet" && !originMap[s.ticker]?.quiet) return false;
+      if (flagFilter !== "all" && !FLAG_FILTER[flagFilter](s.context)) return false;
       return true;
     })
     .sort((a, b) => {
@@ -1208,6 +1353,19 @@ export default function App() {
   if (riskSort !== "scan") {
     const dir = riskSort === "most" ? -1 : 1;
     filtered.sort((a, b) => dir * (a.riskMarkers.length - b.riskMarkers.length));
+  }
+
+  // Tri sur un drapeau — même nature que celui ci-dessus : local, il DÉPLACE et ne masque
+  // rien. Les deux contrôles se remettent l'un l'autre au défaut : un seul ordre à
+  // l'écran, jamais deux tris empilés dont le lecteur ne saurait pas lequel a gagné.
+  // Valeur la plus forte d'abord ; drapeau absent en fin de liste, et à valeur égale
+  // l'ordre précédent tient (le tri de JS est stable depuis ES2019).
+  if (flagSort !== "scan") {
+    const val = SORT_VALUE[flagSort];
+    filtered.sort((a, b) => {
+      const x = val(a.context), y = val(b.context);
+      return (x == null) - (y == null) || (y ?? 0) - (x ?? 0);
+    });
   }
   const markedCount = filtered.filter(s => s.riskMarkers.length > 0).length;
 
@@ -1404,9 +1562,26 @@ export default function App() {
             <span style={{ color: "#8494a3", fontSize: 12.5, fontFamily: "monospace" }}>
               {t("zones.count", { n: filtered.length, m: markedCount })}
             </span>
+            {/* Listes déroulantes natives : dix critères de tri ne tiennent pas en
+                pastilles, et le contrôle natif reste utilisable au clavier sans script. */}
+            {[
+              { value: flagFilter, set: setFlagFilter, def: "all", options: flagFilterOptions(), label: t("ctx.filter.label"), sorts: false },
+              { value: flagSort, set: setFlagSort, def: "scan", options: flagSortOptions(), label: t("ctx.sort.label"), sorts: true },
+            ].map(({ value, set, def, options, label, sorts }) => (
+              <select key={label} value={value} aria-label={label} title={label}
+                onChange={e => { set(e.target.value); if (sorts) setRiskSort("scan"); }}
+                style={{
+                  padding: "6px 12px", background: value === def ? "#0d0d1a" : "#2a2a6a",
+                  border: `1px solid ${value === def ? "#ffffff0a" : "#4444aa"}`,
+                  borderRadius: 20, color: value === def ? "#6666aa" : "#aaaaff",
+                  fontSize: 12, fontFamily: "monospace", cursor: "pointer",
+                }}>
+                {options.map(([v, l]) => <option key={v} value={v} style={{ background: "#0d0d1a" }}>{l}</option>)}
+              </select>
+            ))}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginLeft: "auto" }}>
               {["scan", "most", "least"].map(k => (
-                <button key={k} onClick={() => setRiskSort(k)} aria-pressed={riskSort === k} style={{
+                <button key={k} onClick={() => { setRiskSort(k); setFlagSort("scan"); }} aria-pressed={riskSort === k} style={{
                   padding: "6px 14px",
                   background: riskSort === k ? "#2a2a6a" : "#0d0d1a",
                   border: `1px solid ${riskSort === k ? "#4444aa" : "#ffffff0a"}`,
