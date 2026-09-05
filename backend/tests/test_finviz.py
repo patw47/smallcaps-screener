@@ -100,7 +100,14 @@ CONTEXTE = {
     "insider_transactions", "institutional_ownership", "institutional_transactions",
     "short_float", "short_ratio", "eps_surprise", "revenue_surprise",
     "optionable", "shortable",
+    # News la plus récente (Epic 14 S2) — trois colonnes du même export.
+    "news_date", "news_title", "news_url",
 }
+
+# Clés que l'ENRICHISSEMENT ajoute au bloc servi (Epic 14 S2) : le catalyseur ne vient pas
+# de l'export mais des dépôts officiels, donc il n'est pas dans l'instantané et existe des
+# deux côtés. Énoncées ici, comme le reste — jamais dérivées du module surveillé.
+CATALYSEUR = {"catalyst_8k_items", "catalyst_8k_date"}
 
 
 # --- Parsing : N lignes → N dictionnaires portant tout le contrat ------------
@@ -233,9 +240,37 @@ def test_un_contexte_vide_ou_tiret_rend_none_sans_exception(reseau_interdit):
     assert all(vide[cle] is None for cle in
                ("insider_transactions", "institutional_ownership",
                 "institutional_transactions", "short_float", "short_ratio",
-                "eps_surprise", "revenue_surprise"))
+                "eps_surprise", "revenue_surprise",
+                "news_date", "news_title", "news_url"))
     # Une cellule RENSEIGNÉE de la même ligne garde sa valeur : l'absence n'est pas contagieuse.
     assert vide["optionable"] is False and vide["shortable"] is True
+    assert reseau_interdit == []
+
+
+# --- News la plus récente (Epic 14 S2) ---------------------------------------
+
+def test_les_colonnes_news_rendent_un_drapeau_date_avec_titre_et_url(reseau_interdit):
+    instantane = finviz._parse(FIXTURE.read_text())
+    plein = instantane["AAAA"]["context_flags"]
+
+    # Horodatage → epoch UTC, HEURE CONSERVÉE : une news avant l'ouverture et une news en
+    # clôture ne se lisent pas pareil (c'est ce qui distingue `_timestamp` de `_epoch`).
+    quand = datetime.fromtimestamp(plein["news_date"], tz=timezone.utc)
+    assert (quand.year, quand.month, quand.day) == (2026, 9, 4)
+    assert (quand.hour, quand.minute) == (9, 32)
+
+    assert plein["news_title"] == "Alpha Alloys wins a supply contract"
+    assert plein["news_url"] == "https://exemple.invalid/news/aaaa"
+
+    # Une date SANS heure reste lisible et retombe à minuit — pas d'exception, pas de None.
+    sans_heure = datetime.fromtimestamp(instantane["CCCC"]["context_flags"]["news_date"],
+                                        tz=timezone.utc)
+    assert (sans_heure.month, sans_heure.day, sans_heure.hour) == (9, 1, 0)
+
+    # « - » et cellule vide : None sans exception, sur les trois colonnes.
+    for ticker in ("BBBB", "DDDD"):
+        news = instantane[ticker]["context_flags"]
+        assert (news["news_date"], news["news_title"], news["news_url"]) == (None, None, None)
     assert reseau_interdit == []
 
 
@@ -325,8 +360,35 @@ def test_le_bloc_de_contexte_existe_aussi_sur_le_chemin_yahoo(monkeypatch, depot
     stock, motif = sb.enrich_ticker("ZZZZ", {})
 
     assert motif == "ok"
-    assert set(stock["context_flags"]) == CONTEXTE
+    assert set(stock["context_flags"]) == CONTEXTE | CATALYSEUR
     assert all(v is None for v in stock["context_flags"].values())
+    assert reseau_interdit == []
+
+
+def test_le_catalyseur_rejoint_le_bloc_par_les_deux_chemins(monkeypatch, depots_muets,
+                                                            reseau_interdit):
+    """
+    Le catalyseur vient des dépôts officiels, pas de l'export : il doit donc arriver au
+    bloc AUSSI sur le chemin Yahoo — c'est la seule information de contexte qui survive au
+    repli. Les clés de l'instantané, elles, restent servies telles quelles à côté.
+    """
+    import edgar
+    monkeypatch.setattr(edgar, "survival_signals", lambda *a, **k: {
+        "dilution_flag": False, "late_filing_flag": False, "going_concern_flag": False,
+        "catalyst_8k_items": ["1.01", "9.01"], "catalyst_8k_date": "2026-06-20"})
+    monkeypatch.setattr(sb, "_fetch_info",
+                        lambda tk: {"exchange": "NMS", "marketCap": 300e6, "shortName": tk})
+
+    par_yahoo, _ = sb.enrich_ticker("ZZZZ", {})
+    par_finviz, _ = sb.enrich_ticker("AAAA", {}, finviz._parse(FIXTURE.read_text())["AAAA"])
+
+    for stock in (par_yahoo, par_finviz):
+        assert stock["context_flags"]["catalyst_8k_date"] == "2026-06-20"
+        assert stock["context_flags"]["catalyst_8k_items"] == ["1.01", "9.01"]
+
+    # Sur le chemin de l'instantané, les colonnes de l'export tiennent leur place à côté.
+    assert par_finviz["context_flags"]["news_url"] == "https://exemple.invalid/news/aaaa"
+    assert par_yahoo["context_flags"]["news_url"] is None
     assert reseau_interdit == []
 
 

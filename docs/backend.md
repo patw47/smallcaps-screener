@@ -5,7 +5,7 @@
 - `backend/api.py`: FastAPI application and HTTP routes.
 - `backend/screener_backend.py`: market data discovery, two-pass filtering, scoring, and JSON output.
 - `backend/profiles.py`: tail-hunting profile detectors (Fusée / Phénix) — the single source of truth for the protocol v2 §3 definitions, shared by production and the study.
-- `backend/finviz.py`: Finviz Elite CSV export client — optional fundamentals source, **not wired into the scan yet** (Epic 13 S1).
+- `backend/finviz.py`: Finviz Elite CSV export client — **optional Pass B source**, selected by `FILTERS["enrich_source"]` (Epic 13 S2; code default stays Yahoo, so a clone without an Elite account behaves exactly as before).
 - `backend/backtest.py`: forward-return validation harness (offline analysis, not part of the live API).
 - `backend/tests/`: offline deterministic unit tests (`test_screener.py`, `test_backtest.py`).
 - `requirements.txt`: Python runtime dependencies used by the backend image.
@@ -349,8 +349,10 @@ a spotlessly healthy balance sheet.
 Extra columns of the **same request** (zero new network call), parsed into a `context_flags` block
 kept **separate from the enrichment contract** because none of them enters the score, the served
 order or list membership — the descriptive-marker pattern. `enrich_ticker` copies the block onto
-every candidate; on the Yahoo path (or for a ticker missing from the snapshot) it is present with
-**all keys `None`**, so the UI reads one stable shape on both paths.
+every candidate; on the Yahoo path (or for a ticker missing from the snapshot) the export-sourced
+keys are present and **`None`**, so the UI reads one stable shape on both paths. Since Epic 14 S2
+the block also carries `catalyst_8k_items` / `catalyst_8k_date`, which come from the filings rather
+than the export and are therefore populated on both paths (see the 8-K section below).
 
 | Export column (first header present wins) | `context_flags` key | Normalisation |
 |---|---|---|
@@ -363,9 +365,17 @@ every candidate; on the Yahoo path (or for a ticker missing from the snapshot) i
 | `Revenue Surprise` \| `Sales Surprise` | `revenue_surprise` | signed `%` → fraction |
 | `Optionable` | `optionable` | `Yes`/`No` → bool |
 | `Shortable` | `shortable` | `Yes`/`No` → bool |
+| `Latest News Date` \| `News Date` | `news_date` | timestamp → epoch s UTC, **time kept** (Epic 14 S2) |
+| `Latest News Title` \| `News Title` \| `Headline` | `news_title` | text |
+| `Latest News URL` \| `News URL` \| `News Link` | `news_url` | text |
 
 An empty cell or `-` yields `None` everywhere, and `0` stays `0` — absence and zero are not the
 same answer.
+
+News is the one date that keeps its **time of day** (`_timestamp`, i.e. `_epoch(minuit=False)`):
+a headline before the open and one at the close do not describe the same session, whereas an
+earnings date is only ever dated to the day. The backend serves the timestamp raw — it does not
+decide what counts as "today's news"; that is a display call.
 
 > **Headers not yet verified against a live export.** The Epic 14 S1 columns were mapped without a
 > network call, using the long-name convention the Epic 13 fix established, with the screen name as
@@ -400,6 +410,25 @@ the Sprint 6 backtest). Award/option/tax codes (`A`/`M`/`F`/`G`…) are ignored.
   force (`enrich_max`, or `enrich_max_snapshot` on the snapshot path — where lifting the valve
   multiplies EDGAR lookups accordingly; the throttle and the 24 h cache are what bound them).
   Never fatal (wrapped in `enrich_ticker`).
+
+### 8-K catalysts, typed by item (Epic 14 S2)
+
+The **8-K** is the material-event form, due within four business days — the filing that carries
+the catalysts small caps move on. `survival_signals` now also reports the most recent one in the
+window, as `catalyst_8k_date` (its filing date) and `catalyst_8k_items` (the event types, e.g.
+`["1.01", "9.01"]`). Both reach the served candidate inside `context_flags`, and neither ever
+enters the score, the served order or list membership.
+
+**Zero new request.** The event type is already in the `items` column of the recent-submissions
+list the loop walks for dilution, late filings and going concern — reading it downloads nothing,
+not even the 8-K document itself. `_recent` therefore returns `items` alongside the existing four
+columns, padded if the SEC serves it shorter than `form` (an uneven `zip` would silently truncate
+the list and lose filings). `8-K/A` amendments count as the same event (prefix match). No 8-K in
+the window → both keys `None`; an 8-K with no items → an **empty list** with its date, since a
+dated catalyst is still a catalyst.
+
+This is the one context flag that survives the Yahoo fallback: it comes from the filings, not from
+the export, so `enrich_ticker` merges it into `context_flags` on **both** paths.
 
 ## Orchestration — `run_scan(tickers=None)`
 

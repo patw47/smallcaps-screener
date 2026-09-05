@@ -237,6 +237,11 @@ _DILUTION_PREFIXES = ("S-1", "S-3", "F-1", "F-3", "424B")
 _LATE_FORMS = ("NT 10-Q", "NT 10-K")
 # Rapports périodiques de base (texte scanné pour le going-concern).
 _PERIODIC_FORMS = ("10-Q", "10-K")
+# Événement matériel, à déposer sous 4 jours ouvrés — le formulaire qui porte les
+# catalyseurs (Epic 14 S2). Le TYPE d'événement est déjà dans le champ `items` de la liste
+# de soumissions (« 1.01,9.01 ») : lecture seule, AUCUN document téléchargé. Préfixe et
+# non égalité : « 8-K/A » (amendement) est le même événement.
+_CATALYST_PREFIX = "8-K"
 
 
 def _doc_text(cik: int, accession: str, doc: str) -> str | None:
@@ -259,7 +264,10 @@ def _doc_text(cik: int, accession: str, doc: str) -> str | None:
 
 
 def _recent(cik10: str) -> tuple | None:
-    """(forms, accs, fdates, docs) des soumissions récentes, MÉMOÏSÉ par cik10 (parse JSON 1×)."""
+    """(forms, accs, fdates, docs, items) des soumissions récentes, MÉMOÏSÉ par cik10
+    (parse JSON 1×). `items` porte le type d'événement des 8-K, vide pour les autres
+    formulaires ; il est complété si la SEC le sert plus court que `form` — un `zip` sur
+    des colonnes de longueurs inégales tronquerait la liste, donc perdrait des dépôts."""
     with _pit_lock:
         if cik10 in _subs_memo:
             return _subs_memo[cik10]
@@ -269,7 +277,9 @@ def _recent(cik10: str) -> tuple | None:
     if subs_text is not None:
         try:
             r = json.loads(subs_text)["filings"]["recent"]
-            out = (r["form"], r["accessionNumber"], r["filingDate"], r["primaryDocument"])
+            items = list(r.get("items") or [])
+            items += [""] * (len(r["form"]) - len(items))
+            out = (r["form"], r["accessionNumber"], r["filingDate"], r["primaryDocument"], items)
         except Exception:
             out = None
     with _pit_lock:
@@ -289,7 +299,7 @@ def _form4_transactions(cik: int, cik10: str) -> list[dict] | None:
     rec = _recent(cik10)
     txs: list[dict] | None = None
     if rec is not None:
-        forms, accs, fdates, docs = rec
+        forms, accs, fdates, docs, _ = rec
         txs = []
         parsed = 0
         for form, acc, fdate, doc in zip(forms, accs, fdates, docs):
@@ -403,6 +413,9 @@ def survival_signals(ticker: str, now: datetime | None = None,
     - `going_concern_flag` : « substantial doubt » (langage ASC 205-40) dans le dernier
                              10-Q/10-K ≤ as_of → le signal de faillite le plus direct.
     - `cash_runway`        : mois de trésorerie restants (XBRL companyfacts, point-in-time).
+    - `catalyst_8k_*`      : items et date du 8-K le plus récent de la fenêtre (Epic 14 S2)
+                             → l'événement matériel, typé par le champ `items` de la MÊME
+                             liste de soumissions. DESCRIPTIF : jamais au score.
 
     Chaque drapeau levé porte sa DATE de dépôt (`*_date`, None quand le drapeau est bas) :
     elle est déjà parcourue par la boucle, la conserver ne coûte aucune requête de plus.
@@ -429,14 +442,17 @@ def survival_signals(ticker: str, now: datetime | None = None,
     rec = _recent(cik10)
     if rec is None:
         return None
-    forms, accs, fdates, docs = rec
+    forms, accs, fdates, docs, items_col = rec
 
     dilution = late = False
     # Dates de dépôt du fait (Epic 10 S1) : la boucle les parcourt déjà, on les CONSERVE —
     # aucune requête supplémentaire. On garde la plus récente : c'est celle qui date le fait.
     dilution_date = late_date = None
+    # Catalyseur 8-K (Epic 14 S2) : items du plus récent de la fenêtre. Même boucle, même
+    # liste de soumissions — le type d'événement est déjà là, il ne coûte aucune requête.
+    catalyst_items = catalyst_date = None
     gc = None  # (filingDate, accession, doc) du dernier 10-Q/10-K ≤ as_of
-    for form, acc, fdate, doc in zip(forms, accs, fdates, docs):
+    for form, acc, fdate, doc, items in zip(forms, accs, fdates, docs, items_col):
         if fdate > as_of:
             continue  # POINT-IN-TIME : filing postérieur à la date de scan → invisible
         f = form.strip()
@@ -447,6 +463,10 @@ def survival_signals(ticker: str, now: datetime | None = None,
             if f in _LATE_FORMS:
                 late = True
                 late_date = max(late_date or "", fdate)
+            if f.startswith(_CATALYST_PREFIX) and fdate > (catalyst_date or ""):
+                catalyst_date = fdate
+                # Un 8-K sans items reste un catalyseur daté : liste vide, jamais None.
+                catalyst_items = [i.strip() for i in (items or "").split(",") if i.strip()]
         if f in _PERIODIC_FORMS and (gc is None or fdate > gc[0]):
             gc = (fdate, acc, doc)
 
@@ -471,6 +491,10 @@ def survival_signals(ticker: str, now: datetime | None = None,
         "dilution_date": dilution_date if dilution else None,
         "late_filing_date": late_date if late else None,
         "going_concern_date": gc[0] if going_concern else None,
+        # Catalyseur (Epic 14 S2) : items et date du 8-K le plus récent de la fenêtre.
+        # Aucun 8-K dans la fenêtre → les deux à None (rien à décrire).
+        "catalyst_8k_items": catalyst_items,
+        "catalyst_8k_date": catalyst_date,
         "cash_runway": _cash_runway(cik10, as_of),   # mois de trésorerie restants (XBRL, point-in-time)
         "window_days": window_days, "cutoff": cutoff, "as_of": as_of,
     }

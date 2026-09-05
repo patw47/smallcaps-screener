@@ -1230,6 +1230,7 @@ def enrich_ticker(ticker: str, signals: dict, info: dict | None = None) -> tuple
     # None = EDGAR muet (ticker inconnu, User-Agent absent) : neutre, ne pénalise pas.
     dilution_flag = late_filing_flag = going_concern_flag = None
     dilution_date = late_filing_date = going_concern_date = None
+    catalyst_8k_items = catalyst_8k_date = None
     try:
         from edgar import survival_signals
         surv = survival_signals(ticker)
@@ -1241,6 +1242,13 @@ def enrich_ticker(ticker: str, signals: dict, info: dict | None = None) -> tuple
             dilution_date = surv.get("dilution_date")
             late_filing_date = surv.get("late_filing_date")
             going_concern_date = surv.get("going_concern_date")
+            # Catalyseur 8-K (Epic 14 S2) : lu dans les MÊMES soumissions que les marqueurs
+            # ci-dessus, aucun document téléchargé — donc aucune requête de plus.
+            catalyst_8k_items = surv.get("catalyst_8k_items")
+            catalyst_8k_date = surv.get("catalyst_8k_date")
+            if catalyst_8k_date:
+                print(f"[edgar] {ticker} catalyseur {catalyst_8k_date} "
+                      f"({','.join(catalyst_8k_items) or 'sans item'})")
     except Exception as e:
         print(f"[edgar] {ticker} survie, erreur (ignorée) : {type(e).__name__}")
 
@@ -1249,8 +1257,12 @@ def enrich_ticker(ticker: str, signals: dict, info: dict | None = None) -> tuple
     # de tri. Ils viennent de colonnes SUPPLÉMENTAIRES du même instantané d'export : aucune
     # requête de plus. Sur le chemin Yahoo (et pour un titre absent de l'instantané) le bloc
     # existe avec toutes ses clés à None — l'UI a une forme stable à lire des deux côtés.
+    # Le catalyseur (Epic 14 S2) vient des dépôts officiels, pas de l'export : il rejoint le
+    # bloc des DEUX côtés — c'est la seule information de contexte qui survive au repli Yahoo.
     from finviz import CONTEXT_KEYS
-    context_flags = info.get("context_flags") or dict.fromkeys(CONTEXT_KEYS)
+    context_flags = {**(info.get("context_flags") or dict.fromkeys(CONTEXT_KEYS)),
+                     "catalyst_8k_items": catalyst_8k_items,
+                     "catalyst_8k_date": catalyst_8k_date}
 
     short_interest_pct = (_safe_float(info.get("shortPercentOfFloat"), 0) or 0) * 100
     revenue_growth = _safe_float(info.get("revenueGrowth"))
