@@ -27,6 +27,16 @@ frequencies, each next to its own statistical weakness. What it surfaces:
   the high-severity ones as a dedicated alert band above the badges. A header counter says
   how many displayed names carry at least one marker, and a client-side sort groups them —
   reordering only, nothing is ever hidden and no sort/filter parameter enters the API.
+- **Context flags on every extreme-zone name** — descriptive facts read from the *same*
+  requests the scan already makes, at zero extra network cost: insider and institutional net
+  transactions, short float and days-to-cover, options/borrow availability, earnings and
+  revenue surprises, the most recent 8-K (the SEC's material-event form, typed by its event
+  codes) and the latest headline. Values are shown **raw and unqualified** — no "high short
+  interest" verdict, because no threshold for these fields exists or is served. A missing flag
+  displays nothing, never an error state. Two native selects sort and filter on them, purely
+  client-side; the served list, its order and its scores are untouched — an invariant enforced
+  by test, not by convention. The one exception is the cash/debt reconstruction, which restores
+  a scoring criterion the Yahoo path already served (see `docs/backend.md`).
 - Every displayed term has a tooltip and a glossary entry with its measured number and
   source.
 
@@ -215,6 +225,7 @@ Every gate is a `make` target; `make test` is the offline suite.
 | `make i18n-parity` / `make check-i18n` | Missing translations; hard-coded UI strings in the JSX. |
 | `make check-criteria-coverage` | A rule or scoring key absent from the public criteria index. |
 | `make build-frontend` | JSX that no longer compiles (containerised `vite build`). |
+| `make test-frontend` | A broken flag sort or filter — the ordering of missing values, and the predicates behind the two selects (`node --test`, no dependency to install). Covers the logic, not the rendering. |
 | `make check-runtime` | Python that compiles on the dev interpreter but not on the production 3.11 container. |
 | `make check-cohort` | A tracked stock still quoting but read as "no data" — replays the tracking on the live history from an *empty* universe (needs the running container and network). |
 | `make check-snapshot-keys` | A selection key silently dropped or renamed in the dated snapshots — the history is read years later and never rewritten (needs the running container). |
@@ -297,7 +308,8 @@ backend/
 ├── v5.py                 # multi-window (7/14/21 d) washout cohorts
 ├── lifecycle.py          # observation schedule shared by both families + current risk file
 ├── alerts.py             # Telegram alerts (cohort entries, persistent dedup)
-├── edgar.py              # SEC/EDGAR point-in-time survival signals (dilution, runway…)
+├── edgar.py              # SEC/EDGAR point-in-time survival signals (dilution, runway, 8-K catalysts)
+├── finviz.py             # optional Pass B source: one CSV export for the whole universe (local config only)
 ├── profiles.py           # Fusée/Phénix detectors
 ├── backtest.py           # quick control backtest (--n/--forward/--seed/--period)
 ├── track.py              # live performance tracking + snapshot copy outside the volume
@@ -305,6 +317,8 @@ backend/
 └── tests/                # offline deterministic unit tests
 frontend/
 ├── smallcap-screener.jsx # dashboard UI (washout cohorts, tracking, extreme zones, tooltips)
+├── flags.js              # context-flag sort/filter tables — no React, so a test can exercise them
+├── flags.test.js         # `node --test` lock on that logic (make test-frontend)
 └── src/main.jsx
 docs/                     # architecture, backend, api, frontend, glossary, methodology
 backups/                  # host-side copies of the dated snapshots (gitignored, never rewritten)
