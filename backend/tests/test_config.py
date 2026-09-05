@@ -233,3 +233,27 @@ def v4_mod():
     return v4
 
 
+
+
+def test_la_section_de_la_source_optionnelle_ne_casse_pas_le_demarrage(tmp_path, monkeypatch):
+    """
+    Epic 13 S2 — l'activation de la source d'export ajoute une section à la config
+    locale. Non enregistrée, elle serait refusée comme inconnue et le backend ne
+    démarrerait PAS (c'était la dette bloquante du S1). Le module lit sa propre
+    section : une clé inconnue y est ignorée, une source optionnelle ne doit pas
+    empêcher un démarrage.
+    """
+    import finviz
+    monkeypatch.setitem(finviz.CFG, "export_url", "")
+    monkeypatch.setitem(finviz.CFG, "token", "")
+    f = tmp_path / "local.yml"
+    f.write_text('finviz:\n  export_url: "https://exemple.invalid/export"\n'
+                 '  token: "jeton-de-test-sans-valeur"\n  coquille: 1\n'
+                 'filters:\n  enrich_source: finviz\n  enrich_max_snapshot: null\n')
+    filters = _fresh_filters()
+
+    sb.load_local_config(path=f, filters=filters)     # ne lève pas
+
+    assert finviz.CFG["token"] and finviz.CFG["export_url"]      # la source est active
+    assert filters["enrich_source"] == "finviz"
+    assert filters["enrich_max_snapshot"] is None                # soupape levée

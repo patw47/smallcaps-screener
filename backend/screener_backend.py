@@ -103,6 +103,17 @@ FILTERS = {
     },
     # --- Filet de sécurité : échantillon NON biaisé des survivants si trop nombreux ---
     "enrich_max": 150,             # borne dure du nb d'appels .info (coût + throttle Yahoo)
+    # --- Source des fondamentaux de la Passe B (Epic 13) ---
+    # "yahoo"  : un appel .info par titre — DÉFAUT DU CODE, comportement historique, seul
+    #            chemin d'un clone du dépôt (aucun compte tiers requis) ;
+    # "finviz" : un appel d'export pour tout l'univers, activé en config locale seulement.
+    "enrich_source": "yahoo",
+    # Borne du chemin instantané. L'export ne coûtant qu'UNE requête, la borne y est une
+    # SOUPAPE (même pattern que `max_tickers`) : `None` en config locale = levée, tous les
+    # candidats au-dessus du cutoff sont examinés. Le default du code reste le garde-fou.
+    # Le repli Yahoo, lui, reprend `enrich_max` : une bascule ne doit jamais lâcher des
+    # centaines d'appels .info sur une source qui bannit l'IP.
+    "enrich_max_snapshot": 150,
     # Soft filters — scoring uniquement
     "vol_ratio_min": 1.2,
     "vol_ratio_max": 3.0,
@@ -224,9 +235,16 @@ def load_local_config(path: Path | None = None, filters: dict | None = None) -> 
             import importlib
             module = importlib.import_module(key)
             _deep_merge(module.CFG, value, f"{key}.")
+        elif key == "finviz":
+            # Source optionnelle de la Passe B (Epic 13) : le module lit lui-même sa
+            # section (une clé inconnue y est IGNORÉE — une source optionnelle ne doit
+            # pas empêcher le backend de démarrer). Elle est enregistrée ici parce que
+            # sans cela la section serait refusée comme inconnue.
+            import finviz
+            finviz.load_config(path)
         else:
             raise LocalConfigError(
-                f"config locale : section inconnue '{key}' (attendu : filters, v4, v5)"
+                f"config locale : section inconnue '{key}' (attendu : filters, v4, v5, finviz)"
             )
 
 
@@ -1142,15 +1160,24 @@ def _fetch_info(ticker: str) -> dict:
     raise last_exc
 
 
-def enrich_ticker(ticker: str, signals: dict) -> tuple[dict | None, str]:
-    """Fetch .info, filtres market cap / exchange, signaux fondamentaux, scoring."""
-    # Jitter aléatoire : désynchronise les threads pour éviter les rafales → throttle Yahoo
-    if FILTERS["enrich_jitter_s"]:
-        time.sleep(random.uniform(0, FILTERS["enrich_jitter_s"]))
-    try:
-        info = _fetch_info(ticker)
-    except Exception as e:
-        return None, f"exception:{type(e).__name__}"
+def enrich_ticker(ticker: str, signals: dict, info: dict | None = None) -> tuple[dict | None, str]:
+    """
+    Filtres market cap / exchange, signaux fondamentaux, scoring.
+
+    `info` fourni (Epic 13 S2) : les fondamentaux viennent d'un instantané déjà en main
+    — AUCUN appel Yahoo, pas même de jitter. Un dict VIDE est un candidat absent de
+    l'instantané : il suit le traitement d'absence de donnée existant (place de cotation
+    manquante → rejet), jamais une exception. `info` à None : chemin historique, un appel
+    `.info` par titre.
+    """
+    if info is None:
+        # Jitter aléatoire : désynchronise les threads pour éviter les rafales → throttle Yahoo
+        if FILTERS["enrich_jitter_s"]:
+            time.sleep(random.uniform(0, FILTERS["enrich_jitter_s"]))
+        try:
+            info = _fetch_info(ticker)
+        except Exception as e:
+            return None, f"exception:{type(e).__name__}"
 
     # --- Bourse autorisée ---
     exchange = info.get("exchange", "")
@@ -1348,7 +1375,21 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         rejection_counts["not_profiled"] = n_tradable - len(survivors)
 
     n_all = len(survivors)
-    capped = survivors[:FILTERS["enrich_max"]]
+
+    # --- Source des fondamentaux (Epic 13 S2) : instantané d'export si la config locale
+    # l'active, sinon un appel `.info` par titre. Clapet JAMAIS fatal : export muet ou
+    # instantané vide ⇒ repli journalisé sur le chemin Yahoo DANS LE MÊME SCAN, avec sa
+    # borne — c'est elle qui protège du bannissement d'IP, la soupape ne vaut que pour
+    # l'instantané (qui ne coûte qu'une requête).
+    snapshot = None
+    if FILTERS["enrich_source"] == "finviz":
+        import finviz
+        snapshot = finviz.snapshot() or None
+        print(f"[Passe B] instantané d'export : {len(snapshot)} titres" if snapshot else
+              "[Passe B] instantané indisponible → repli sur les appels titre par titre")
+
+    borne = FILTERS["enrich_max_snapshot"] if snapshot else FILTERS["enrich_max"]
+    capped = survivors if borne is None else survivors[:borne]
     if n_all > len(capped):
         rejection_counts["below_cutoff"] = n_all - len(capped)
     label = "top score technique" if FILTERS["pool_mode"] == "legacy" else "membres de profil"
@@ -1360,7 +1401,9 @@ def run_scan(tickers: list[str] | None = None) -> dict:
     candidates = []
     n_surv = len(capped)
     with ThreadPoolExecutor(max_workers=FILTERS["enrich_workers"]) as pool:
-        futures = {pool.submit(enrich_ticker, tk, sig): tk for tk, sig in capped}
+        futures = {pool.submit(enrich_ticker, tk, sig,
+                               snapshot.get(tk, {}) if snapshot else None): tk
+                   for tk, sig in capped}
         for i, fut in enumerate(as_completed(futures), 1):
             scan_state["progress"] = i
             bar_len = 40
