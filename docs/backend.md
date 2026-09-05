@@ -365,7 +365,7 @@ than the export and are therefore populated on both paths (see the 8-K section b
 | `Revenue Surprise` \| `Sales Surprise` | `revenue_surprise` | signed `%` → fraction |
 | `Optionable` | `optionable` | `Yes`/`No` → bool |
 | `Shortable` | `shortable` | `Yes`/`No` → bool |
-| `Latest News Date` \| `News Date` | `news_date` | timestamp → epoch s UTC, **time kept** (Epic 14 S2) |
+| `News Time` \| `Latest News Date` \| `News Date` | `news_date` | timestamp → epoch s UTC, **time kept** (Epic 14 S2) |
 | `Latest News Title` \| `News Title` \| `Headline` | `news_title` | text |
 | `Latest News URL` \| `News URL` \| `News Link` | `news_url` | text |
 
@@ -377,11 +377,21 @@ a headline before the open and one at the close do not describe the same session
 earnings date is only ever dated to the day. The backend serves the timestamp raw — it does not
 decide what counts as "today's news"; that is a display call.
 
-> **Headers not yet verified against a live export.** The Epic 14 S1 columns were mapped without a
-> network call, using the long-name convention the Epic 13 fix established, with the screen name as
-> a fallback candidate. A wrong header breaks nothing (the cell reads `None`) but **empties the
-> block silently**. Before trusting it, run the check command above with
-> `d['context_flags']` in place of `d['marketCap']` and confirm a real export fills the keys.
+> **Headers verified against a live export (2026-09-05, Epic 14 close).** Thirteen of the fifteen
+> headers added by the epic matched on the first or second candidate. Two did not, both on the same
+> column: the API serves **`News Time`**, never `Latest News Date`/`News Date`, and serves it as
+> `YYYY-MM-DD HH:MM:SS`, a shape `_DATE_FORMATS` did not accept — so `news_date` was `None` twice
+> over. Both are fixed and locked by `test_les_intitules_de_l_export_api_reel_sont_lus`, whose CSV
+> carries the **API's own headers and formats**, unlike the screen-named fixture.
+>
+> **A column absent from `c=` is not a wrong header.** The export only returns the columns the URL
+> asks for, so widening `FIELD_MAP`/`CONTEXT_MAP` does nothing until `export_url` in
+> `config/local.yml` asks for the matching column codes — until then every new key reads `None`
+> exactly as a typo would. The epic's columns are codes `24, 27, 28, 29, 31, 38, 73, 74, 80, 83,
+> 127, 128, 135, 136, 137` (on top of Epic 13's `1, 2, 3, 4, 6, 23, 25, 26, 30, 68, 70, 129`).
+> To re-derive them after a Finviz change, request a block of codes with a single-ticker filter
+> (`&t=`) and read the header row back: the export returns the requested codes **in ascending
+> order**, which is what pairs a code with its name.
 
 **Exchanges** are the one non-trivial translation: Finviz *names* markets, yfinance *codes* them and
 `FILTERS["allowed_exchanges"]` compares codes, so a raw string comparison would reject the whole

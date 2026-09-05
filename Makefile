@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort flag-prevalence check-snapshot-keys check-backup check-secrets proof-export
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort flag-prevalence check-snapshot-keys check-backup check-secrets proof-export test-frontend
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -100,6 +100,12 @@ build-frontend:
 		sh -c "npm install --silent --no-audit --no-fund >/dev/null 2>&1 && npx vite build"
 	docker run --rm -v "$(CURDIR)/frontend":/app -w /app node:20-alpine \
 		sh -c "rm -rf node_modules dist package-lock.json"
+
+# Tri et filtres de drapeaux (clôture Epic 14) : `node --test`, aucune dépendance à
+# installer — contrairement à build-frontend, qui a besoin de Vite. Couvre la logique,
+# pas le rendu de l'écran.
+test-frontend:
+	node --test frontend/flags.test.js
 
 # Invariance de l'extraction (S2) : nécessite la vraie config config/local.yml
 # et l'historique data/history/ — skip propre sans eux (donc skippé en CI).

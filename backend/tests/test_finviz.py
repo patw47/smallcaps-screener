@@ -483,3 +483,56 @@ def test_le_jeton_ne_fuit_ni_dans_le_journal_ni_dans_les_erreurs(monkeypatch, ac
     sortie = capsys.readouterr()
     assert TEST_TOKEN not in sortie.out + sortie.err
     assert "ConnectionError" in sortie.out
+
+
+# --- Intitulés de l'export API réel (clôture Epic 14) -------------------------
+#
+# La fixture ci-dessus porte les intitulés LONGS de l'écran Finviz. L'export API, lui,
+# nomme certaines colonnes autrement — c'est ce décalage qui avait invalidé trois
+# hypothèses à l'Epic 13, et qui a laissé `news_date` muet jusqu'à cette clôture :
+# l'API sert « News Time » horodaté, jamais « Latest News Date ». Ce CSV énonce les
+# intitulés ET les formats RELEVÉS SUR L'EXPORT RÉEL le 2026-09-05 ; il verrouille les
+# deux familles de colonnes ajoutées par l'epic (contexte + reconstruction du bilan).
+
+CSV_API_REEL = (
+    "Ticker,Company,Sector,Industry,Market Cap,Sales Growth Quarter Over Quarter,"
+    "Shares Outstanding,Shares Float,Insider Ownership,Insider Transactions,"
+    "Institutional Ownership,Institutional Transactions,Short Float,Short Ratio,"
+    "Total Debt/Equity,Earnings Date,IPO Date,Book/sh,Cash/sh,Optionable,Shortable,"
+    "EPS Surprise,Revenue Surprise,Exchange,News Time,News URL,News Title\n"
+    "EEEE,Echo Metals,Industrials,Steel,412.50,23.50%,"
+    "20.00,12.40,7.20%,12.50%,"
+    "41.30%,-3.10%,3.45%,2.60,"
+    "0.50,2026-02-25 16:30:00,2021-03-17,4.00,2.50,No,Yes,"
+    "8.40%,-1.90%,NASDAQ,2026-08-20 16:15:00,"
+    "https://exemple.invalid/news/eeee,Echo Metals wins a supply contract\n"
+)
+
+
+def test_les_intitules_de_l_export_api_reel_sont_lus(reseau_interdit):
+    ligne = finviz._parse(CSV_API_REEL)["EEEE"]
+    contexte = ligne["context_flags"]
+
+    # Horodatage « News Time » : heure CONSERVÉE (la colonne que le S2 nommait à tort).
+    quand = datetime.fromtimestamp(contexte["news_date"], tz=timezone.utc)
+    assert (quand.year, quand.month, quand.day, quand.hour, quand.minute) == (2026, 8, 20, 16, 15)
+    assert contexte["news_title"] == "Echo Metals wins a supply contract"
+    assert contexte["news_url"] == "https://exemple.invalid/news/eeee"
+
+    # Les huit autres colonnes de contexte, sous leurs intitulés d'API.
+    assert contexte["insider_transactions"] == pytest.approx(0.125)
+    assert contexte["institutional_ownership"] == pytest.approx(0.413)
+    assert contexte["institutional_transactions"] == pytest.approx(-0.031)
+    assert contexte["short_float"] == pytest.approx(0.0345)
+    assert contexte["short_ratio"] == pytest.approx(2.60)
+    assert contexte["eps_surprise"] == pytest.approx(0.084)
+    assert contexte["revenue_surprise"] == pytest.approx(-0.019)
+    assert (contexte["optionable"], contexte["shortable"]) == (False, True)
+
+    # Bilan reconstruit depuis « Cash/sh » / « Book/sh » / « Shares Outstanding »
+    # (millions sans suffixe, comme la capitalisation) — sans quoi le critère cash
+    # resterait muet sur ce chemin alors que le chemin Yahoo rend un verdict.
+    assert ligne["totalCash"] == pytest.approx(2.50 * 20e6)
+    assert ligne["totalDebt"] == pytest.approx(0.50 * 4.00 * 20e6)
+    assert ligne["marketCap"] == pytest.approx(412.5e6)
+    assert reseau_interdit == []

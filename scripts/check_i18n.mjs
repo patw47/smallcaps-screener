@@ -7,12 +7,16 @@ import { join } from "node:path";
 
 const SKIP = new Set(["i18n", "node_modules", "dist", "v", "cache"]);
 const EXT = /\.(jsx?|mjs|html|css)$/;
+// Un fichier de test ne rend rien à l'écran : ses libellés ne sont pas de l'interface
+// (et le bundle ne les embarque pas). Les scanner ferait de la gate un interdit de
+// nommer un test en français, ce qu'elle n'a jamais eu pour objet.
+const TESTS = /\.test\.(jsx?|mjs)$/;
 
 function* walk(dir) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
     if (statSync(p).isDirectory()) { if (!SKIP.has(name)) yield* walk(p); }
-    else if (EXT.test(name)) yield p;
+    else if (EXT.test(name) && !TESTS.test(name)) yield p;
   }
 }
 

@@ -59,7 +59,8 @@ _SUFFIXES = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}
 
 # Formats de date rencontrés dans l'export. L'API d'export horodate les dates de
 # résultats (« 3/25/2026 4:30:00 PM ») ; « Feb 25 » (sans année) est traité à part.
-_DATE_FORMATS = ("%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y", "%Y-%m-%d", "%b %d %Y", "%b %d, %Y")
+_DATE_FORMATS = ("%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+                 "%b %d %Y", "%b %d, %Y")
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +248,7 @@ CONTEXT_MAP = (
     # News la plus récente (Epic 14 S2) — trois colonnes du MÊME export, aucune requête de
     # plus. Servies telles quelles : le backend ne juge pas ce qui est « du jour », il sert
     # l'horodatage et laisse l'affichage en décider.
-    (("Latest News Date", "News Date"),                "news_date",                 _timestamp),
+    (("News Time", "Latest News Date", "News Date"),   "news_date",                 _timestamp),
     (("Latest News Title", "News Title", "Headline"),  "news_title",                _text),
     (("Latest News URL", "News URL", "News Link"),     "news_url",                  _text),
 )
