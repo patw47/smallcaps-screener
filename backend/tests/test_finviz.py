@@ -6,8 +6,8 @@ sortie réseau du module (`finviz._get`) est doublée sur une fixture CSV enregi
 Fixture (backend/tests/fixtures/finviz/export.csv) — 4 lignes :
   AAAA : NASDAQ, toutes les cellules renseignées
   BBBB : NYSE, cellules vides ou « - », date de résultats sans année
-  CCCC : AMEX — place HORS des places autorisées
-  DDDD : place absente de la table de correspondance, colonnes vides en fin de ligne
+  CCCC : AMEX — place HORS des places autorisées, capitaux propres NÉGATIFS (Epic 14 S1)
+  DDDD : place absente de la table de correspondance, colonnes de contexte vides
 
 Le jeton et le lien d'export utilisés ici sont FACTICES, distincts de toute valeur
 d'exploitation (même règle que les constantes de conftest.py).
@@ -88,6 +88,18 @@ CONTRAT = {
     "floatShares", "shortPercentOfFloat", "heldPercentInsiders", "revenueGrowth",
     "earningsTimestampStart", "earningsTimestamp", "firstTradeDateEpochUtc",
     "totalCash", "totalDebt",
+    # Bloc de contexte (Epic 14 S1) : seule clé de l'instantané qui ne soit pas un champ
+    # `.info` — l'enrichissement la lit comme les autres, donc le garde-fou de dérive la
+    # veut ici. Son CONTENU est verrouillé à part (CONTEXTE ci-dessous).
+    "context_flags",
+}
+
+# Clés du bloc de contexte, ÉNONCÉES ICI et pas dérivées de `finviz.CONTEXT_KEYS`, même
+# raison que ci-dessus : un verrou recopié sur le module qu'il surveille ne verrouille rien.
+CONTEXTE = {
+    "insider_transactions", "institutional_ownership", "institutional_transactions",
+    "short_float", "short_ratio", "eps_surprise", "revenue_surprise",
+    "optionable", "shortable",
 }
 
 
@@ -176,6 +188,145 @@ def test_une_date_de_resultats_sans_annee_reste_lisible(reseau_interdit):
 
     quand = datetime.fromtimestamp(epoch, tz=timezone.utc)
     assert (quand.month, quand.day) == (2, 25)
+    assert reseau_interdit == []
+
+
+# --- Bloc de contexte (Epic 14 S1) -------------------------------------------
+
+def test_chaque_ticker_porte_tout_le_bloc_de_contexte(reseau_interdit):
+    for ticker, champs in finviz._parse(FIXTURE.read_text()).items():
+        assert set(champs["context_flags"]) == CONTEXTE, f"{ticker} : bloc incomplet"
+    assert reseau_interdit == []
+
+
+def test_les_familles_de_format_du_contexte_arrivent_aux_bonnes_unites(reseau_interdit):
+    instantane = finviz._parse(FIXTURE.read_text())
+    plein = instantane["AAAA"]["context_flags"]
+    autre = instantane["CCCC"]["context_flags"]
+
+    # Pourcentage SIGNÉ → fraction, signe compris
+    assert plein["insider_transactions"] == pytest.approx(0.1250)
+    assert plein["institutional_transactions"] == pytest.approx(-0.0310)
+    assert autre["insider_transactions"] == pytest.approx(-0.0680)
+    # Un zéro n'est pas une absence : il traverse comme un nombre.
+    assert autre["institutional_transactions"] == 0.0
+
+    # Yes/No → BOOLÉEN, pas la chaîne — « No » est vrai tant qu'il reste du texte.
+    assert plein["optionable"] is True
+    assert autre["optionable"] is False
+
+    # Ratio décimal → nombre tel quel : ni division par cent, ni suffixe de magnitude.
+    assert plein["short_ratio"] == pytest.approx(2.60)
+
+    # Le short flottant du bloc est le MÊME que celui du contrat : le bloc se lit seul,
+    # sans que l'UI ait à croiser deux endroits pour décrire une mécanique de squeeze.
+    assert plein["short_float"] == instantane["AAAA"]["shortPercentOfFloat"]
+    assert reseau_interdit == []
+
+
+def test_un_contexte_vide_ou_tiret_rend_none_sans_exception(reseau_interdit):
+    instantane = finviz._parse(FIXTURE.read_text())
+
+    assert all(v is None for v in instantane["BBBB"]["context_flags"].values())   # « - »
+
+    vide = instantane["DDDD"]["context_flags"]                                    # cellules vides
+    assert all(vide[cle] is None for cle in
+               ("insider_transactions", "institutional_ownership",
+                "institutional_transactions", "short_float", "short_ratio",
+                "eps_surprise", "revenue_surprise"))
+    # Une cellule RENSEIGNÉE de la même ligne garde sa valeur : l'absence n'est pas contagieuse.
+    assert vide["optionable"] is False and vide["shortable"] is True
+    assert reseau_interdit == []
+
+
+# --- Reconstruction du bilan et parité du verdict cash (Epic 14 S1) ----------
+
+@pytest.fixture
+def depots_muets(monkeypatch):
+    """
+    Dépôts officiels muets, jitter nul : `enrich_ticker` interroge EDGAR (insiders, survie)
+    et attend avant un appel `.info`. Ni l'un ni l'autre n'est le sujet ici, et la suite
+    est HORS LIGNE.
+    """
+    import edgar
+    monkeypatch.setattr(edgar, "net_insider_buying", lambda *a, **k: None)
+    monkeypatch.setattr(edgar, "survival_signals", lambda *a, **k: None)
+    monkeypatch.setitem(sb.FILTERS, "enrich_jitter_s", 0)
+
+
+def test_la_tresorerie_et_la_dette_se_reconstruisent_par_action(reseau_interdit):
+    champs = finviz._parse(FIXTURE.read_text())["AAAA"]
+
+    # Attendus recalculés depuis les CELLULES de la fixture — jamais depuis le module.
+    actions = 20.00 * 1e6
+    assert champs["totalCash"] == pytest.approx(2.50 * actions)
+    assert champs["totalDebt"] == pytest.approx(0.50 * (4.00 * actions))
+    assert reseau_interdit == []
+
+
+def test_un_facteur_de_reconstruction_manquant_rend_none(reseau_interdit):
+    instantane = finviz._parse(FIXTURE.read_text())
+
+    # BBBB : toutes les colonnes par action valent « - ».
+    assert instantane["BBBB"]["totalCash"] is None
+    assert instantane["BBBB"]["totalDebt"] is None
+
+    # CCCC : capitaux propres NÉGATIFS. Multipliés, ils rendraient une dette négative,
+    # donc un bilan faussement sain — le cas le plus dangereux du lot. La trésorerie,
+    # elle, reste lisible : l'absence est ciblée, pas globale.
+    assert instantane["CCCC"]["totalCash"] == pytest.approx(0.30 * 30.00 * 1e6)
+    assert instantane["CCCC"]["totalDebt"] is None
+    assert reseau_interdit == []
+
+
+def test_le_verdict_cash_est_le_meme_par_les_deux_sources(monkeypatch, depots_muets,
+                                                          reseau_interdit):
+    """
+    Parité inter-sources : à valeurs sous-jacentes ÉGALES, le critère cash rend le même
+    verdict que les fondamentaux viennent de Yahoo ou de l'instantané d'export. C'était
+    faux avant ce sprint — l'export ne servant pas les valeurs absolues du bilan, la même
+    entreprise valait None par un chemin et True par l'autre.
+    """
+    actions = 20.00 * 1e6      # colonnes par action de la ligne AAAA de la fixture
+    yahoo = {"exchange": "NMS", "marketCap": 412.50e6, "shortName": "Alpha Alloys Inc",
+             "totalCash": 2.50 * actions, "totalDebt": 0.50 * (4.00 * actions)}
+    monkeypatch.setattr(sb, "_fetch_info", lambda tk: yahoo)
+
+    par_yahoo, motif_y = sb.enrich_ticker("AAAA", {})                     # chemin `.info`
+    par_finviz, motif_f = sb.enrich_ticker("AAAA", {},
+                                           finviz._parse(FIXTURE.read_text())["AAAA"])
+
+    assert (motif_y, motif_f) == ("ok", "ok")
+    assert par_yahoo["cash_positive"] is True      # sans quoi la parité serait vide de sens
+    assert par_finviz["cash_positive"] == par_yahoo["cash_positive"]
+    assert par_finviz["cash_bin"] == par_yahoo["cash_bin"]
+    assert reseau_interdit == []
+
+
+def test_un_bilan_illisible_rend_un_verdict_neutre_sans_exception(depots_muets,
+                                                                  reseau_interdit):
+    """Facteur manquant → None neutre jusque dans le candidat servi, jamais une exception."""
+    sans_bilan = dict(finviz._parse(FIXTURE.read_text())["AAAA"],
+                      totalCash=None, totalDebt=None)
+
+    stock, motif = sb.enrich_ticker("AAAA", {}, sans_bilan)
+
+    assert motif == "ok"
+    assert stock["cash_positive"] is None and stock["cash_bin"] is None
+    assert reseau_interdit == []
+
+
+def test_le_bloc_de_contexte_existe_aussi_sur_le_chemin_yahoo(monkeypatch, depots_muets,
+                                                              reseau_interdit):
+    """Forme stable des deux côtés : sur le chemin `.info`, le bloc est là, tout à None."""
+    monkeypatch.setattr(sb, "_fetch_info",
+                        lambda tk: {"exchange": "NMS", "marketCap": 300e6, "shortName": tk})
+
+    stock, motif = sb.enrich_ticker("ZZZZ", {})
+
+    assert motif == "ok"
+    assert set(stock["context_flags"]) == CONTEXTE
+    assert all(v is None for v in stock["context_flags"].values())
     assert reseau_interdit == []
 
 

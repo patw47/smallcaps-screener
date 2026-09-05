@@ -8,6 +8,14 @@ la Passe B lit donc un instantané au lieu d'appeler Yahoo titre par titre, sans
 seule ligne du corps de l'enrichissement change (branché au Sprint 2 —
 `FILTERS["enrich_source"]`, défaut du code : Yahoo).
 
+L'Epic 14 S1 élargit la lecture de la MÊME requête, sans en ajouter aucune :
+  - trésorerie et dette absolues RECONSTRUITES depuis les colonnes par action
+    (`_balance_sheet`) — l'export ne les sert pas telles quelles, et le critère cash
+    valait None ici alors que le chemin Yahoo le rendait : c'est un rattrapage de parité,
+    pas un critère neuf ;
+  - un bloc `context_flags` de colonnes DESCRIPTIVES (`CONTEXT_MAP`), servi à part du
+    contrat d'enrichissement parce qu'aucune n'entre au score, au tri ni à la sélection.
+
 Deux invariants tiennent tout le module :
 
   - **Jamais fatal.** Jeton absent, réseau muet, CSV illisible, cellule vide : `None`
@@ -139,6 +147,12 @@ def _exchange(raw) -> str | None:
     return None if txt is None else EXCHANGES.get(txt.upper())
 
 
+def _bool(raw) -> bool | None:
+    """« Yes » / « No » de l'export → booléen. Toute autre cellule → None."""
+    txt = _text(raw)
+    return None if txt is None else {"yes": True, "no": False}.get(txt.lower())
+
+
 # ---------------------------------------------------------------------------
 # Table de correspondance — SOURCE UNIQUE (documentée dans docs/backend.md)
 # ---------------------------------------------------------------------------
@@ -153,6 +167,24 @@ EXCHANGES = {
     "AMEX": "ASE",            # NYSE American — hors places autorisées, comme aujourd'hui
     "NYSE AMERICAN": "ASE",
 }
+
+def _cell(ligne: dict, colonne: str | tuple[str, ...]) -> str | None:
+    """
+    Valeur brute d'une colonne. Un tuple énumère des intitulés POSSIBLES : le premier
+    présent dans l'en-tête gagne.
+
+    L'export API et l'écran du screener ne nomment pas les mêmes colonnes pareil (l'API
+    est plus bavarde : « Sales Growth Quarter Over Quarter » pour « Sales Q/Q »), et seul
+    un export réel tranche — c'est exactement ce qui a dû être corrigé après le premier
+    appel réel de l'Epic 13. Un intitulé inconnu ne lève pas : la cellule vaut None.
+    """
+    if isinstance(colonne, str):
+        return ligne.get(colonne)
+    for nom in colonne:
+        if nom in ligne:
+            return ligne[nom]
+    return None
+
 
 # (colonne de l'export, clé du contrat d'enrichissement, normalisation)
 FIELD_MAP = (
@@ -172,11 +204,69 @@ FIELD_MAP = (
 )
 
 # Champs du contrat SANS équivalent dans l'export : présents et à None — neutres, donc
-# jamais pénalisants (`cash_positive` reste None, la date de repli n'est pas essayée).
+# jamais pénalisants (la date de repli n'est pas essayée).
 #   longName          : l'export n'a qu'une colonne de nom, servie en shortName
 #   earningsTimestamp : clé de repli du contrat, la principale suffit
-#   totalCash/Debt    : l'export donne des ratios, pas les valeurs absolues du bilan
-UNMAPPED = ("longName", "earningsTimestamp", "totalCash", "totalDebt")
+UNMAPPED = ("longName", "earningsTimestamp")
+
+
+# --- Drapeaux de contexte (Epic 14 S1) -------------------------------------
+# Colonnes du MÊME export (aucune requête de plus), servies dans un bloc à part du
+# contrat d'enrichissement : elles décrivent le titre, elles ne le notent pas. Aucune
+# n'entre au score, au tri ni à la sélection — le pattern des marqueurs descriptifs.
+#
+# ⚠️ Intitulés NON VÉRIFIÉS sur un export réel (aucun appel réseau pendant ce sprint) :
+# chaque entrée porte l'intitulé long attendu de l'API puis celui de l'écran en repli.
+# Un intitulé faux ne casse rien — la cellule vaut None — mais vide le bloc en silence :
+# protocole de vérification dans docs/backend.md.
+CONTEXT_MAP = (
+    (("Insider Transactions", "Insider Trans"),        "insider_transactions",      _fraction),
+    (("Institutional Ownership", "Inst Own"),          "institutional_ownership",   _fraction),
+    (("Institutional Transactions", "Inst Trans"),     "institutional_transactions", _fraction),
+    ("Short Float",                                    "short_float",               _fraction),
+    (("Short Ratio", "Short Interest Ratio"),          "short_ratio",               _number),
+    ("EPS Surprise",                                   "eps_surprise",              _fraction),
+    (("Revenue Surprise", "Sales Surprise"),           "revenue_surprise",          _fraction),
+    ("Optionable",                                     "optionable",                _bool),
+    ("Shortable",                                      "shortable",                 _bool),
+)
+CONTEXT_KEYS = tuple(cle for _, cle, _ in CONTEXT_MAP)
+
+
+# --- Reconstruction du bilan (Epic 14 S1) ----------------------------------
+# L'export ne sert pas les valeurs absolues du bilan, mais ses trois colonnes PAR ACTION
+# suffisent à les reconstruire — c'est ce qui rend au chemin Finviz le critère cash que
+# le chemin Yahoo servait déjà (parité inter-sources).
+_PER_SHARE = {
+    "cash_ps": (("Cash Per Share", "Cash/sh"), _number),
+    "book_ps": (("Book Value Per Share", "Book/sh"), _number),
+    "debt_eq": (("Total Debt/Equity", "Debt/Eq"), _number),
+    "shares": (("Shares Outstanding", "Outstanding"), _millions),
+}
+
+
+def _balance_sheet(ligne: dict) -> tuple[float | None, float | None]:
+    """
+    Trésorerie et dette ABSOLUES (dollars), reconstruites depuis les colonnes par action :
+
+        trésorerie = cash par action × actions en circulation
+        dette      = dette/capitaux propres × (valeur comptable par action × actions)
+
+    Tout facteur absent ou illisible → None, le pattern d'absence du module : `cash_positive`
+    reste neutre côté enrichissement, jamais pénalisant.
+
+    Capitaux propres NÉGATIFS (valeur comptable par action ≤ 0) : le produit rendrait une
+    dette négative, donc un bilan faussement sain — le cas le plus dangereux du lot. La
+    dette vaut None (neutre), le verdict cash n'est pas rendu.
+    """
+    v = {cle: norm(_cell(ligne, col)) for cle, (col, norm) in _PER_SHARE.items()}
+    actions = v["shares"]
+    if actions is None:
+        return None, None
+    cash = None if v["cash_ps"] is None else v["cash_ps"] * actions
+    capitaux = None if (v["book_ps"] is None or v["book_ps"] <= 0) else v["book_ps"] * actions
+    dette = None if (capitaux is None or v["debt_eq"] is None) else v["debt_eq"] * capitaux
+    return cash, dette
 
 
 # ---------------------------------------------------------------------------
@@ -244,9 +334,14 @@ def _parse(texte: str) -> dict[str, dict]:
         ticker = (ligne.get("Ticker") or "").strip().upper()
         if not ticker:
             continue
+        cash, dette = _balance_sheet(ligne)
         instantane[ticker] = {
             **dict.fromkeys(UNMAPPED),
-            **{cle: norm(ligne.get(colonne)) for colonne, cle, norm in FIELD_MAP},
+            **{cle: norm(_cell(ligne, colonne)) for colonne, cle, norm in FIELD_MAP},
+            "totalCash": cash,
+            "totalDebt": dette,
+            "context_flags": {cle: norm(_cell(ligne, colonne))
+                              for colonne, cle, norm in CONTEXT_MAP},
         }
     return instantane
 
