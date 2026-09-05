@@ -31,6 +31,20 @@
 > the scan order. It lives entirely in the browser (`riskSort` state) — no sort or filter
 > parameter is added to the API contract, and nothing is ever hidden: a sort moves rows, it
 > does not remove them.
+>
+> **Epic 14 S3 — context flags on screen, sorted and filtered browser-side.** Each candidate
+> card renders the payload's `context_flags` block (`ContextFlags`): short interest and days
+> to cover, optionable/borrowable, insider and institutional transactions, institutional
+> ownership, earnings and sales surprises, the typed 8-K event, and the latest news headline
+> as a link. Values are shown **raw and formatted, never qualified** — no "high short" label,
+> because no display threshold exists for these fields and thresholds may only come from the
+> API's `display` block. A `None` flag (Yahoo fallback, missing column) renders **nothing** —
+> not an empty pill, never an error state. Two native dropdowns filter and sort on those
+> flags, both purely local (`flagFilter` / `flagSort`): the served list is the single source,
+> the UI hides or reorders it, and no request parameter or route is added. Absent flags sort
+> last and equal values keep their previous order (JS sort is stable); a filter drops them
+> cleanly (`null > 0` is false). The flag sort and the marker sort reset each other — one
+> visible order at a time.
 
 ## Files
 
@@ -63,6 +77,8 @@ The main `App` component stores:
 | `scanning` | Force-scan button state. |
 | `sector` | Selected sector filter. |
 | `profile` | Selected profile filter (`All` / `Fusée` / `Phénix`, Epic 2). |
+| `flagFilter` | Context flag the list is restricted to (`all` by default, Epic 14 S3). |
+| `flagSort` | Context flag the list is ordered by (`scan` = untouched order, Epic 14 S3). |
 | `minScore` | Minimum local score filter. |
 | `analyses` | Claude analysis text by ticker. |
 | `loadingTickers` | Per-ticker analysis loading state. |
