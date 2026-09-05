@@ -17,6 +17,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import finviz
 import scoring
 import screener_backend
 from scoring import score_candidates
@@ -867,3 +868,158 @@ def test_scan_contract_carries_no_sort_or_filter_param():
     args = routes["/api/scan"]
     assert not (args.args or args.posonlyargs or args.kwonlyargs
                 or args.vararg or args.kwarg), "la route servant la liste a pris un paramètre"
+
+
+# ---------------------------------------------------------------------------
+# Epic 13 S2 — source de la Passe B : instantané d'export, ou appels titre par titre
+#
+# La Passe B était AMPUTÉE par son budget d'appels : au-delà de `enrich_max`, les
+# candidats étaient rejetés « below_cutoff » sans avoir été examinés — uniquement
+# parce qu'un appel `.info` par titre fait bannir l'IP. Un instantané d'export coûte
+# UNE requête pour tout l'univers : sur ce chemin, la borne devient une SOUPAPE.
+#
+# Les doublures descendent au plus bas niveau utile : le CSV brut (`finviz._get`) et
+# le `.info` (`screener_backend._fetch_info`). Le vrai parsing, la vraie table de
+# correspondance et le vrai clapet de repli sont donc exercés — doubler `snapshot()`
+# n'aurait prouvé que le câblage.
+# ---------------------------------------------------------------------------
+
+# Lien et jeton FACTICES, distincts de toute valeur d'exploitation (règle de conftest).
+FINVIZ_URL = "https://exemple.invalid/export.ashx?v=152"
+FINVIZ_TOKEN = "jeton-de-test-sans-valeur"
+
+# Borne de TEST, volontairement sous le nombre de membres de profil de la fixture :
+# sans elle la borne ne mordrait jamais et « aucun rejet par épuisement de budget »
+# serait vrai par vacuité.
+BORNE_DE_TEST = 2
+
+UNIVERS_EXPORT = [f"T{i}" for i in range(8)]
+
+
+def _csv_export(tickers) -> str:
+    """Export CSV minimal — en-têtes RÉELS de la table de correspondance."""
+    colonnes = ["Ticker"] + [col for col, _, _ in finviz.FIELD_MAP]
+    lignes = [",".join(colonnes)]
+    for tk in tickers:
+        lignes.append(",".join([
+            tk, f"{tk} Inc", "Healthcare", "Biotechnology", "NASDAQ",
+            "300.00M",    # capitalisation, dans la bande autorisée
+            "12.00M",     # flottant — sous le plafond : `low_float` devient VRAI, ce que
+                          # la doublure Yahoo ne produit jamais (preuve de provenance)
+            "3.45%", "6.20%", "8.10%", "2/25/2026", "3/17/2015",
+        ]))
+    return "\n".join(lignes) + "\n"
+
+
+@pytest.fixture
+def yahoo_log(monkeypatch):
+    """Journal des appels fondamentaux Yahoo — c'est LUI qui doit rester vide."""
+    journal = []
+
+    def faux_info(tk):
+        journal.append(tk)
+        return {"exchange": "NMS", "marketCap": 300e6, "shortName": tk,
+                "sector": "Healthcare", "industry": "Biotechnology"}
+
+    monkeypatch.setattr(screener_backend, "_fetch_info", faux_info)
+    return journal
+
+
+@pytest.fixture
+def export_log(monkeypatch):
+    """Journal de l'export ; sert un CSV couvrant TOUT l'univers scanné."""
+    journal = []
+
+    def faux_get(url):
+        journal.append(url)
+        return _csv_export(UNIVERS_EXPORT)
+
+    monkeypatch.setattr(finviz, "_get", faux_get)
+    return journal
+
+
+@pytest.fixture
+def finviz_actif(monkeypatch):
+    """Ce que fait la config locale en exploitation : source instantané, soupape levée."""
+    monkeypatch.setitem(finviz.CFG, "export_url", FINVIZ_URL)
+    monkeypatch.setitem(finviz.CFG, "token", FINVIZ_TOKEN)
+    monkeypatch.setattr(finviz, "_BACKOFF_S", 0.0)              # retries sans attente
+    monkeypatch.setitem(FILTERS, "enrich_source", "finviz")
+    monkeypatch.setitem(FILTERS, "enrich_max", BORNE_DE_TEST)   # la borne Yahoo MORD
+    monkeypatch.setitem(FILTERS, "enrich_max_snapshot", None)   # soupape LEVÉE
+
+
+def test_la_soupape_levee_supprime_le_rejet_par_epuisement_de_budget(
+        offline_scan, finviz_actif, export_log, yahoo_log):
+    out = screener_backend.run_scan(offline_scan)
+
+    # Non-vacuité : la borne du chemin Yahoo mordrait bel et bien sur cette fixture.
+    assert FILTERS["enrich_max"] < out["profile_members"]
+    assert "below_cutoff" not in out["rejection_stats"]
+    assert out["enriched"] == out["profile_members"]
+    assert [s["ticker"] for s in out["stocks"]] == SELECTION_FROZEN
+    assert len(export_log) == 1        # UN appel d'export pour tout le scan
+
+
+def test_un_scan_sur_instantane_ne_fait_aucun_appel_fondamental_yahoo(
+        offline_scan, finviz_actif, export_log, yahoo_log):
+    out = screener_backend.run_scan(offline_scan)
+    assert out["stocks"], "aucune sélection : le verrou serait vrai par vacuité"
+    assert yahoo_log == []
+
+
+def test_un_export_en_erreur_bascule_sur_le_chemin_yahoo(
+        offline_scan, finviz_actif, yahoo_log, monkeypatch, capsys):
+    def _get_en_erreur(url):
+        raise ConnectionError("export injoignable")
+
+    monkeypatch.setattr(finviz, "_get", _get_en_erreur)
+
+    out = screener_backend.run_scan(offline_scan)     # aucune exception ne remonte
+
+    assert yahoo_log, "le scan n'a pas repris le chemin des appels titre par titre"
+    # La borne du repli est celle du chemin Yahoo, JAMAIS la soupape levée : une bascule
+    # ne doit pas lâcher des centaines d'appels `.info` sur une source qui bannit l'IP.
+    assert len(yahoo_log) == FILTERS["enrich_max"] == out["enriched"]
+    assert out["rejection_stats"]["below_cutoff"] == out["profile_members"] - BORNE_DE_TEST
+    assert "repli" in capsys.readouterr().out
+
+
+def test_sans_section_finviz_les_defauts_du_code_restent_le_chemin_actuel(
+        offline_scan, yahoo_log, export_log):
+    # Défauts du CODE, ceux que porte un clone sans compte : source Yahoo, soupape FERMÉE.
+    assert FILTERS["enrich_source"] == "yahoo"
+    assert FILTERS["enrich_max_snapshot"] is not None
+
+    out = screener_backend.run_scan(offline_scan)
+
+    assert [s["ticker"] for s in out["stocks"]] == SELECTION_FROZEN
+    assert export_log == []            # l'export n'est même pas tenté
+    assert yahoo_log                   # les fondamentaux viennent du chemin actuel
+
+
+def test_le_contrat_servi_ne_perd_aucune_cle_sur_le_chemin_instantane(
+        offline_scan, finviz_actif, export_log, yahoo_log):
+    out = screener_backend.run_scan(offline_scan)
+    assert out["stocks"], "aucune sélection : le verrou serait vrai par vacuité"
+    for s in out["stocks"]:
+        manquantes = STOCK_KEYS_BEFORE_EPIC10 - set(s)
+        assert not manquantes, f"{s['ticker']} : clé(s) servie(s) disparue(s) — {sorted(manquantes)}"
+        # Provenance : ce flottant n'existe QUE dans l'instantané. Sans lui, le verrou
+        # passerait au vert sur un payload rempli par le chemin Yahoo.
+        assert s["float_shares"] == 12_000_000 and s["low_float"] is True
+
+
+def test_un_candidat_absent_de_l_instantane_suit_l_absence_de_donnee(
+        offline_scan, finviz_actif, yahoo_log, monkeypatch):
+    absent = SELECTION_FROZEN[0]
+    monkeypatch.setattr(finviz, "_get",
+                        lambda url: _csv_export([tk for tk in UNIVERS_EXPORT if tk != absent]))
+
+    out = screener_backend.run_scan(offline_scan)
+
+    servis = [s["ticker"] for s in out["stocks"]]
+    assert servis == [tk for tk in SELECTION_FROZEN if tk != absent]
+    # Traitement d'absence EXISTANT (place de cotation manquante), pas une exception.
+    assert out["rejection_stats"]["exchange"] >= 1
+    assert yahoo_log == []             # et aucun rattrapage par Yahoo

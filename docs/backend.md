@@ -64,7 +64,9 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `discovery_marketcaps` | `Small`,`Micro` | Market-cap buckets pulled per exchange. |
 | `max_tickers` | `None` | `None` → **full universe** (no sampling); `int` → optional safety cap (tests/debug). |
 | `history_period` | `1y` | OHLCV depth (needs 252 for 52w + ATR90). |
-| `enrich_max` | `150` | Cap on `.info` calls — the **top-scored** survivors are enriched. |
+| `enrich_max` | `150` | Cap on `.info` calls — the **top-scored** survivors are enriched. Also the bound the Finviz→Yahoo fallback reverts to. |
+| `enrich_source` | `yahoo` | Pass B fundamentals: `yahoo` (one `.info` per ticker — code default, the only path of a plain clone) or `finviz` (one export call for the whole universe, **local config only**). |
+| `enrich_max_snapshot` | `150` | Cap on the **snapshot** path. One request covers the universe, so this is a **valve** (`max_tickers` pattern): `null` in local config lifts it and every name above the cutoff is examined. The code default stays the guard. |
 | `enrich_workers` / `enrich_jitter_s` / `enrich_retries` / `enrich_backoff_s` | `2` / `0.5` / `4` / `3.0` | Pass B pool + anti-throttle backoff (Yahoo bans the IP if hammered). |
 | `cache_minutes` | `720` | Cache lifetime (12 h). Shorter buys no freshness — the scan is daily — and costs a full rescan per restart/visit. |
 | `shuffle_seed` | `None` | `int` → reproducible **download order**; `None` → random order. Never changes universe membership. |
@@ -250,14 +252,22 @@ from `_binary_score` (`_tech_rules` + `_fundamental_rules`, the boolean signals)
 
 ## Pass B — fundamentals (`enrich_ticker`)
 
-`.info` on the **top-scored** survivors only (bounded by `enrich_max`). `_fetch_info` wraps `.info` with retries + exponential backoff on `YFRateLimitError`; `enrich_workers` is small (Yahoo rate-limits `.info`). Hard filters: exchange, market-cap band. Fundamentals: `cash_positive` (`None` when missing — not penalized), insider net buying (see below), short interest, revenue growth, `float_shares`/`low_float`, `ipo_year`.
+Hard filters: exchange, market-cap band. Fundamentals: `cash_positive` (`None` when missing — not penalized), insider net buying (see below), short interest, revenue growth, `float_shares`/`low_float`, `ipo_year`. The EDGAR layer is unchanged whatever the source: same functions, same 24 h cache, same SEC throttle — it just now applies to every enriched candidate.
 
-## Finviz export client (`finviz.py`, Epic 13 S1) — not wired yet
+**Two sources, one switch (`enrich_source`, Epic 13 S2).** `enrich_ticker(ticker, signals, info=None)` does the same work either way — only where `info` comes from changes:
+
+- **`yahoo` (code default)** — `info=None` → `_fetch_info` per ticker: retries + exponential backoff on `YFRateLimitError`, small `enrich_workers` pool and per-call jitter (Yahoo rate-limits `.info` and **bans the IP** if hammered). That per-ticker cost is what `enrich_max` bounds, and what made the funnel drop everything past the cutoff as `below_cutoff` without examining it.
+- **`finviz` (local config)** — **one** export call at the start of Pass B (`finviz.snapshot()`), then each candidate reads its dict from the snapshot: **zero Yahoo fundamental call**, no jitter. Cost no longer scales with the number of candidates, so `enrich_max_snapshot` becomes a valve — `null` lifts it and `below_cutoff` disappears from this path.
+- **Fallback, never fatal** — export unreachable or snapshot empty ⇒ logged switch back to the Yahoo path **within the same scan**, back under `enrich_max` (the fallback must never fire hundreds of `.info` calls). A candidate **missing from the snapshot** gets an empty dict, i.e. the existing missing-data path (no exchange → rejected), never an exception.
+
+Logging is console-only (source, snapshot size, fallback) — none of it reaches the payload, and the served contract is identical on both paths.
+
+## Finviz export client (`finviz.py`, Epic 13)
 
 `snapshot()` fetches the Finviz Elite screener CSV export in **one authenticated request** and
 parses it into `{TICKER: {…}}` whose keys are **the yfinance `.info` keys `enrich_ticker` reads**.
-Pass B will therefore be able to read a snapshot instead of calling Yahoo per ticker without a
-single line of the enrichment changing (Sprint 2). **Nothing calls it yet** — the scan is untouched.
+Pass B therefore reads a snapshot instead of calling Yahoo per ticker without a single line of the
+enrichment body changing (Sprint 2 wired it — see the switch above).
 
 - **Never fatal**: missing token, dead network, unreadable CSV, empty cell → `None` (or a `None`
   field), never an exception. The Sprint 2 fallback to the Yahoo path leans on exactly that.
@@ -265,9 +275,22 @@ single line of the enrichment changing (Sprint 2). **Nothing calls it yet** — 
   Code defaults are neutral (`export_url: ""`, `token: ""`) → module inactive, no request attempted.
   The token is never printed: a network error logs the exception **type** only, because `requests`
   copies the whole URL — hence the token — into its own message.
-- **Prerequisite for enabling it**: `load_local_config` (in `screener_backend.py`) still rejects
-  unknown top-level sections, so `finviz:` must not be added to `config/local.yml` until Sprint 2
-  registers the section there.
+- **Enabling it** (Sprint 2 registered the section, so `load_local_config` no longer rejects it):
+  add `finviz: {export_url, token}` **and** `filters: {enrich_source: finviz, enrich_max_snapshot: null}`
+  to `config/local.yml`. **Verify one known market cap on the first real call before trusting the
+  switch**: `Market Cap` is assumed to carry a `K`/`M`/`B` suffix, and a cap served in millions
+  *without* one would be read as absolute dollars (412.5M$ → 412$), silently emptying the
+  market-cap band. Everything about the export is proven on a recorded fixture, never against a
+  live response. One command tells you, without printing the token:
+
+  ```bash
+  docker compose exec -T backend python -c "import finviz, statistics; s = finviz.snapshot(); \
+    caps = [d['marketCap'] for d in (s or {}).values() if d['marketCap']]; \
+    print(len(s or {}), 'rows · median cap', f'{statistics.median(caps):,.0f}')"
+  ```
+
+  A small/micro-cap universe must show a median in the **hundreds of millions**. A median in the
+  hundreds means the suffix is missing and the switch must not be enabled.
 
 ### Correspondence table — export column → enrichment contract
 
@@ -319,12 +342,14 @@ the Sprint 6 backtest). Award/option/tax codes (`A`/`M`/`F`/`G`…) are ignored.
   it EDGAR is **disabled → signal `None`** (neutral, non-penalizing, scan still completes).
   Global throttle ≤ 10 req/s. Local cache (`data/edgar_cache/`): submissions have a TTL,
   **filings are immutable and never re-downloaded** → a second scan makes no repeat EDGAR call.
-- Called only on the enriched Pass B survivors (≤ `enrich_max`), so cost stays bounded. Never
-  fatal (wrapped in `enrich_ticker`).
+- Called only on the enriched Pass B survivors, so cost stays bounded by the enrichment cap in
+  force (`enrich_max`, or `enrich_max_snapshot` on the snapshot path — where lifting the valve
+  multiplies EDGAR lookups accordingly; the throttle and the 24 h cache are what bound them).
+  Never fatal (wrapped in `enrich_ticker`).
 
 ## Orchestration — `run_scan(tickers=None)`
 
-Discover (full universe, no sampling) → `_download_prices` → **Pass A** (tradability hard path + signals + trigger) → **`detect_profiles` over the whole tradable pool → keep profile members only, ranked by `profile_strength`** (in `legacy`: rank the whole pool by technical composite instead) → keep top `enrich_max` → **Pass B** (`.info`) → **`_score_candidates` (decile 0–10)** → set `setup_score` alias (kept for continuity, no longer drives selection) → sort by profile strength → write `/app/data/screener_data.json` → **`notify_new_v4_entries` / `notify_new_v5_entries`** (Telegram, best-effort). `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
+Discover (full universe, no sampling) → `_download_prices` → **Pass A** (tradability hard path + signals + trigger) → **`detect_profiles` over the whole tradable pool → keep profile members only, ranked by `profile_strength`** (in `legacy`: rank the whole pool by technical composite instead) → keep top `enrich_max` (on the snapshot path: `enrich_max_snapshot`, `null` = all of them) → **Pass B** (`.info` per ticker, or one export snapshot) → **`_score_candidates` (decile 0–10)** → set `setup_score` alias (kept for continuity, no longer drives selection) → sort by profile strength → write `/app/data/screener_data.json` → **`notify_new_v4_entries` / `notify_new_v5_entries`** (Telegram, best-effort). `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
 
 ## Output JSON
 

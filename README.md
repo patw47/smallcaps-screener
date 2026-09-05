@@ -50,7 +50,7 @@ NASDAQ + NYSE + AMEX (NASDAQ screener API)  →  dedupe  →  full universe (~2�
     │                            near recent-base pivot · low extension · RS turning
     │
     ▼  rank survivors by technical score  →  keep the top ~150
-    │     (bounds the expensive .info calls)
+    │     (bounds the expensive .info calls — lifted on the snapshot path below)
     │
     ▼  Pass B  (enrich_ticker) — yfinance .info on the top-scored names only
     │     hard filters:  market cap 50M–2B · exchange
@@ -58,6 +58,14 @@ NASDAQ + NYSE + AMEX (NASDAQ screener API)  →  dedupe  →  full universe (~2�
     │
     ▼  ranked list  →  data/screener_data.json
 ```
+
+**Optional fundamentals source.** Pass B costs one `.info` call per name, and Yahoo bans the
+IP if hammered — hence the cap, which drops the names past it unexamined. With a Finviz Elite
+account, `enrich_source: finviz` in the private config overlay swaps those per-ticker calls for
+**one** CSV export covering the whole universe, and the cap becomes a valve you can lift: every
+name above the cutoff gets examined. It is optional by construction — no account, no config: the
+clone you just checked out runs the Yahoo path exactly as before, and an unreachable export falls
+back to it mid-scan. Details in [docs/backend.md](docs/backend.md).
 
 **Why scoring instead of hard filters?** Requiring "already strong" signals (high relative
 strength, near the 52-week high) selects stocks that have *already moved* — you arrive

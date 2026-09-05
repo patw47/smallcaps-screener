@@ -42,6 +42,14 @@ for name, cfg, keys in (
 if len(set(sb.FILTERS["score_weights"].values())) != 1:
     errors.append(f"score_weights non uniformes dans le code : {sb.FILTERS['score_weights']}")
 
+# Source de la Passe B (Epic 13 S2) : le dépôt public ne porte NI l'activation de la
+# source optionnelle, NI la soupape levée (`enrich_max_snapshot: None`) — un clone doit
+# tourner exactement comme avant, et la borne du code reste le garde-fou anti-bannissement.
+if sb.FILTERS["enrich_source"] != "yahoo":
+    errors.append(f"FILTERS['enrich_source'] = {sb.FILTERS['enrich_source']!r} — default non neutre")
+if sb.FILTERS["enrich_max_snapshot"] is None:
+    errors.append("FILTERS['enrich_max_snapshot'] = None — soupape LEVÉE dans le code")
+
 if errors:
     print("check-neutral-defaults ÉCHEC :")
     print("\n".join(f"  - {e}" for e in errors))
