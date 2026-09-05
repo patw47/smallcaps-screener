@@ -1387,6 +1387,11 @@ def run_scan(tickers: list[str] | None = None) -> dict:
         snapshot = finviz.snapshot() or None
         print(f"[Passe B] instantané d'export : {len(snapshot)} titres" if snapshot else
               "[Passe B] instantané indisponible → repli sur les appels titre par titre")
+    elif FILTERS["enrich_source"] != "yahoo":
+        # Une faute de frappe en config locale ne doit pas désactiver l'instantané
+        # EN SILENCE : le chemin Yahoo reste le repli, mais il se dit.
+        print(f"[Passe B] source inconnue {FILTERS['enrich_source']!r} "
+              "→ chemin des appels titre par titre")
 
     borne = FILTERS["enrich_max_snapshot"] if snapshot else FILTERS["enrich_max"]
     capped = survivors if borne is None else survivors[:borne]

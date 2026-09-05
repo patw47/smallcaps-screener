@@ -95,7 +95,16 @@ CONTRAT = {
 
 def test_le_contrat_couvre_les_champs_lus_par_l_enrichissement():
     """Garde-fou de dérive : un champ `.info` ajouté à l'enrichissement doit être ici."""
-    lus = set(re.findall(r'\binfo\.get\(\s*"(\w+)"', inspect.getsource(sb)))
+    src = inspect.getsource(sb)
+    lus = set(re.findall(r'\binfo\.get\(\s*"(\w+)"', src))
+
+    # Angle mort comblé (dette Epic 13) : les accès par VARIABLE — `info.get(v)` nourri
+    # par une boucle `for v in ("a", "b")` — échappaient au motif littéral ci-dessus.
+    variables = set(re.findall(r'\binfo\.get\(\s*([a-z_]\w*)\s*[,)]', src))
+    assert variables, "aucun accès par variable trouvé — la branche serait morte"
+    for var in variables:
+        for tup in re.findall(rf'\bfor\s+{var}\s+in\s+\(([^)]*)\)', src):
+            lus |= set(re.findall(r'"(\w+)"', tup))
 
     assert lus, "aucun champ lu trouvé — le garde-fou serait vide, donc mort"
     assert lus <= CONTRAT, f"champs lus par l'enrichissement et hors du contrat : {lus - CONTRAT}"

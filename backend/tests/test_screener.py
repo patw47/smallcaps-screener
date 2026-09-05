@@ -998,6 +998,19 @@ def test_sans_section_finviz_les_defauts_du_code_restent_le_chemin_actuel(
     assert yahoo_log                   # les fondamentaux viennent du chemin actuel
 
 
+def test_une_source_inconnue_avertit_et_suit_le_chemin_yahoo(
+        offline_scan, yahoo_log, export_log, monkeypatch, capsys):
+    """Dette Epic 13 : une faute de frappe en config ne doit pas se taire."""
+    monkeypatch.setitem(FILTERS, "enrich_source", "finvis")   # faute de frappe
+
+    out = screener_backend.run_scan(offline_scan)
+
+    assert [s["ticker"] for s in out["stocks"]] == SELECTION_FROZEN
+    assert export_log == []            # l'export n'est pas tenté
+    assert yahoo_log                   # le chemin actuel prend le relais
+    assert "source inconnue" in capsys.readouterr().out
+
+
 def test_le_contrat_servi_ne_perd_aucune_cle_sur_le_chemin_instantane(
         offline_scan, finviz_actif, export_log, yahoo_log):
     out = screener_backend.run_scan(offline_scan)
