@@ -1,0 +1,5 @@
+No.,Ticker,Company,Sector,Industry,Country,Market Cap,P/E,Float,Insider Ownership,Float Short,Sales Q/Q,Earnings Date,IPO Date,Exchange
+1,AAAA,Alpha Alloys Inc,Industrials,Metal Fabrication,USA,412.50M,18.30,12.40M,7.20%,3.45%,23.50%,2/25/2026,3/17/2021,NASDAQ
+2,BBBB,Beta Biopharma Corp,Healthcare,Biotechnology,USA,-,-,-,-,-,-,Feb 25/a,-,NYSE
+3,CCCC,Cobalt Coast Mining,Basic Materials,Gold,Canada,150.00M,-,45.00M,1.10%,0.85%,-4.20%,11/6/2026,5/2/2019,AMEX
+4,DDDD,Delta Drilling Ltd,Energy,Oil & Gas,USA,1.05B,9.10,80.00M,2.00%,,12.00%,,,TSX

@@ -5,6 +5,7 @@
 - `backend/api.py`: FastAPI application and HTTP routes.
 - `backend/screener_backend.py`: market data discovery, two-pass filtering, scoring, and JSON output.
 - `backend/profiles.py`: tail-hunting profile detectors (Fusée / Phénix) — the single source of truth for the protocol v2 §3 definitions, shared by production and the study.
+- `backend/finviz.py`: Finviz Elite CSV export client — optional fundamentals source, **not wired into the scan yet** (Epic 13 S1).
 - `backend/backtest.py`: forward-return validation harness (offline analysis, not part of the live API).
 - `backend/tests/`: offline deterministic unit tests (`test_screener.py`, `test_backtest.py`).
 - `requirements.txt`: Python runtime dependencies used by the backend image.
@@ -250,6 +251,57 @@ from `_binary_score` (`_tech_rules` + `_fundamental_rules`, the boolean signals)
 ## Pass B — fundamentals (`enrich_ticker`)
 
 `.info` on the **top-scored** survivors only (bounded by `enrich_max`). `_fetch_info` wraps `.info` with retries + exponential backoff on `YFRateLimitError`; `enrich_workers` is small (Yahoo rate-limits `.info`). Hard filters: exchange, market-cap band. Fundamentals: `cash_positive` (`None` when missing — not penalized), insider net buying (see below), short interest, revenue growth, `float_shares`/`low_float`, `ipo_year`.
+
+## Finviz export client (`finviz.py`, Epic 13 S1) — not wired yet
+
+`snapshot()` fetches the Finviz Elite screener CSV export in **one authenticated request** and
+parses it into `{TICKER: {…}}` whose keys are **the yfinance `.info` keys `enrich_ticker` reads**.
+Pass B will therefore be able to read a snapshot instead of calling Yahoo per ticker without a
+single line of the enrichment changing (Sprint 2). **Nothing calls it yet** — the scan is untouched.
+
+- **Never fatal**: missing token, dead network, unreadable CSV, empty cell → `None` (or a `None`
+  field), never an exception. The Sprint 2 fallback to the Yahoo path leans on exactly that.
+- **Token**: `finviz:` section of `config/local.yml` (gitignored), read by the module itself.
+  Code defaults are neutral (`export_url: ""`, `token: ""`) → module inactive, no request attempted.
+  The token is never printed: a network error logs the exception **type** only, because `requests`
+  copies the whole URL — hence the token — into its own message.
+- **Prerequisite for enabling it**: `load_local_config` (in `screener_backend.py`) still rejects
+  unknown top-level sections, so `finviz:` must not be added to `config/local.yml` until Sprint 2
+  registers the section there.
+
+### Correspondence table — export column → enrichment contract
+
+Single source: `FIELD_MAP` in `backend/finviz.py`. Percentages arrive as text with a `%` sign and
+become **fractions** (the contract's unit); market caps and share counts carry `K`/`M`/`B`/`T`
+suffixes and become **absolute values**; dates become **epoch seconds UTC** (midnight). An empty
+cell or `-` yields `None`.
+
+| Finviz column | Contract key (`.info`) | Normalisation |
+|---|---|---|
+| `Company` | `shortName` | text |
+| `Sector` | `sector` | text |
+| `Industry` | `industry` | text |
+| `Exchange` | `exchange` | market name → yfinance code (see below) |
+| `Market Cap` | `marketCap` | suffix → absolute USD |
+| `Float` | `floatShares` | suffix → absolute share count |
+| `Float Short` | `shortPercentOfFloat` | `%` text → fraction |
+| `Insider Ownership` | `heldPercentInsiders` | `%` text → fraction |
+| `Sales Q/Q` | `revenueGrowth` | `%` text → fraction (quarterly YoY sales growth) |
+| `Earnings Date` | `earningsTimestampStart` | date → epoch s UTC |
+| `IPO Date` | `firstTradeDateEpochUtc` | date → epoch s UTC |
+
+Contract fields with **no direct equivalent** in the export are always present and `None` —
+neutral, never penalising (`UNMAPPED`): `longName` (the export has a single name column, served as
+`shortName`), `earningsTimestamp` (the contract's fallback key; the primary one is enough), and
+`totalCash` / `totalDebt` (the export carries ratios, not absolute balance-sheet values, so
+`cash_positive` stays `None` — the existing "missing data is not penalised" path).
+
+**Exchanges** are the one non-trivial translation: Finviz *names* markets, yfinance *codes* them and
+`FILTERS["allowed_exchanges"]` compares codes, so a raw string comparison would reject the whole
+universe. `EXCHANGES` maps `NASDAQ`/`NASD` → `NMS`, `NYSE` → `NYQ`, `AMEX`/`NYSE American` → `ASE`.
+The export does not distinguish the three NASDAQ tiers, so all of them map to the main-tier code,
+which is in the allowed set. An unknown market → `None` → rejected by the existing exchange filter,
+exactly like `AMEX` today.
 
 ## Insiders — net Form 4 purchases (`edgar.py`, Sprint 5)
 
