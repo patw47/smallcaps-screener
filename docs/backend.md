@@ -277,11 +277,12 @@ enrichment body changing (Sprint 2 wired it — see the switch above).
   copies the whole URL — hence the token — into its own message.
 - **Enabling it** (Sprint 2 registered the section, so `load_local_config` no longer rejects it):
   add `finviz: {export_url, token}` **and** `filters: {enrich_source: finviz, enrich_max_snapshot: null}`
-  to `config/local.yml`. **Verify one known market cap on the first real call before trusting the
-  switch**: `Market Cap` is assumed to carry a `K`/`M`/`B` suffix, and a cap served in millions
-  *without* one would be read as absolute dollars (412.5M$ → 412$), silently emptying the
-  market-cap band. Everything about the export is proven on a recorded fixture, never against a
-  live response. One command tells you, without printing the token:
+  to `config/local.yml`. **Verify one known market cap against any live export before trusting a
+  new export URL** — the suffix assumption was exactly what the first real call invalidated
+  (2026-09-05): the export **API** serves `Market Cap` and `Shares Float` **in millions, without
+  suffix**, and the pre-fix parser would have read 412.5M$ as 412$, silently emptying the
+  market-cap band. `_millions` now handles both shapes (bare value → ×1e6, explicit suffix wins).
+  The check command, which never prints the token:
 
   ```bash
   docker compose exec -T backend python -c "import finviz, statistics; s = finviz.snapshot(); \
@@ -294,10 +295,12 @@ enrichment body changing (Sprint 2 wired it — see the switch above).
 
 ### Correspondence table — export column → enrichment contract
 
-Single source: `FIELD_MAP` in `backend/finviz.py`. Percentages arrive as text with a `%` sign and
-become **fractions** (the contract's unit); market caps and share counts carry `K`/`M`/`B`/`T`
-suffixes and become **absolute values**; dates become **epoch seconds UTC** (midnight). An empty
-cell or `-` yields `None`.
+Single source: `FIELD_MAP` in `backend/finviz.py`. Column headers are the **export API's** (longer
+than the screener screen's — verified live 2026-09-05). Percentages arrive as text with a `%` sign
+and become **fractions** (the contract's unit); market caps and share counts arrive **in millions
+without suffix** and become **absolute values** (an explicit `K`/`M`/`B`/`T` suffix, if ever
+present, wins); dates — earnings dates carry a session time, dropped — become **epoch seconds
+UTC** (midnight). An empty cell or `-` yields `None`.
 
 | Finviz column | Contract key (`.info`) | Normalisation |
 |---|---|---|
@@ -305,11 +308,11 @@ cell or `-` yields `None`.
 | `Sector` | `sector` | text |
 | `Industry` | `industry` | text |
 | `Exchange` | `exchange` | market name → yfinance code (see below) |
-| `Market Cap` | `marketCap` | suffix → absolute USD |
-| `Float` | `floatShares` | suffix → absolute share count |
-| `Float Short` | `shortPercentOfFloat` | `%` text → fraction |
+| `Market Cap` | `marketCap` | millions (or suffix) → absolute USD |
+| `Shares Float` | `floatShares` | millions (or suffix) → absolute share count |
+| `Short Float` | `shortPercentOfFloat` | `%` text → fraction |
 | `Insider Ownership` | `heldPercentInsiders` | `%` text → fraction |
-| `Sales Q/Q` | `revenueGrowth` | `%` text → fraction (quarterly YoY sales growth) |
+| `Sales Growth Quarter Over Quarter` | `revenueGrowth` | `%` text → fraction (quarterly YoY sales growth) |
 | `Earnings Date` | `earningsTimestampStart` | date → epoch s UTC |
 | `IPO Date` | `firstTradeDateEpochUtc` | date → epoch s UTC |
 

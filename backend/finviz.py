@@ -49,8 +49,9 @@ _EMPTY = {"", "-", "N/A"}
 
 _SUFFIXES = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}
 
-# Formats de date rencontrés dans l'export. « Feb 25 » (sans année) est traité à part.
-_DATE_FORMATS = ("%m/%d/%Y", "%Y-%m-%d", "%b %d %Y", "%b %d, %Y")
+# Formats de date rencontrés dans l'export. L'API d'export horodate les dates de
+# résultats (« 3/25/2026 4:30:00 PM ») ; « Feb 25 » (sans année) est traité à part.
+_DATE_FORMATS = ("%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y", "%Y-%m-%d", "%b %d %Y", "%b %d, %Y")
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +79,21 @@ def _number(raw) -> float | None:
         return None
 
 
+def _millions(raw) -> float | None:
+    """
+    Capitalisation ou nombre d'actions de l'export API : servi EN MILLIONS, SANS
+    suffixe (vérifié sur l'export réel le 2026-09-05 — une capitalisation small cap
+    arrive comme « 233.06 »). Un suffixe explicite, s'il apparaît, garde le pas.
+    """
+    txt = _text(raw)
+    if txt is None:
+        return None
+    if txt[-1:].upper() in _SUFFIXES:
+        return _number(txt)
+    valeur = _number(txt)
+    return None if valeur is None else valeur * 1e6
+
+
 def _fraction(raw) -> float | None:
     """« 3.45% » → 0.0345 — les champs de pourcentage du contrat sont des FRACTIONS."""
     txt = _text(raw)
@@ -100,7 +116,10 @@ def _epoch(raw) -> float | None:
     txt = txt.strip()
     for fmt in _DATE_FORMATS:
         try:
-            return datetime.strptime(txt, fmt).replace(tzinfo=timezone.utc).timestamp()
+            quand = datetime.strptime(txt, fmt)
+            # L'heure de séance éventuelle ne fait pas partie de la date : minuit UTC.
+            return quand.replace(hour=0, minute=0, second=0,
+                                 tzinfo=timezone.utc).timestamp()
         except ValueError:
             continue
     # ponytail: l'export affiche parfois la date de résultats sans année (« Feb 25 ») —
@@ -141,11 +160,13 @@ FIELD_MAP = (
     ("Sector",            "sector",                 _text),
     ("Industry",          "industry",               _text),
     ("Exchange",          "exchange",               _exchange),
-    ("Market Cap",        "marketCap",              _number),
-    ("Float",             "floatShares",            _number),
-    ("Float Short",       "shortPercentOfFloat",    _fraction),
+    # Intitulés VÉRIFIÉS sur l'export réel (2026-09-05) — l'API d'export nomme les
+    # colonnes plus longuement que l'écran du screener.
+    ("Market Cap",        "marketCap",              _millions),
+    ("Shares Float",      "floatShares",            _millions),
+    ("Short Float",       "shortPercentOfFloat",    _fraction),
     ("Insider Ownership", "heldPercentInsiders",    _fraction),
-    ("Sales Q/Q",         "revenueGrowth",          _fraction),
+    ("Sales Growth Quarter Over Quarter", "revenueGrowth", _fraction),
     ("Earnings Date",     "earningsTimestampStart", _epoch),
     ("IPO Date",          "firstTradeDateEpochUtc", _epoch),
 )
