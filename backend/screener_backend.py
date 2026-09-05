@@ -1244,6 +1244,14 @@ def enrich_ticker(ticker: str, signals: dict, info: dict | None = None) -> tuple
     except Exception as e:
         print(f"[edgar] {ticker} survie, erreur (ignorée) : {type(e).__name__}")
 
+    # --- Drapeaux de contexte (Epic 14 S1) — mêmes règles que les marqueurs ci-dessus :
+    # DESCRIPTIFS SEULS, jamais une exclusion, jamais un point de score, jamais un critère
+    # de tri. Ils viennent de colonnes SUPPLÉMENTAIRES du même instantané d'export : aucune
+    # requête de plus. Sur le chemin Yahoo (et pour un titre absent de l'instantané) le bloc
+    # existe avec toutes ses clés à None — l'UI a une forme stable à lire des deux côtés.
+    from finviz import CONTEXT_KEYS
+    context_flags = info.get("context_flags") or dict.fromkeys(CONTEXT_KEYS)
+
     short_interest_pct = (_safe_float(info.get("shortPercentOfFloat"), 0) or 0) * 100
     revenue_growth = _safe_float(info.get("revenueGrowth"))
     float_shares = _safe_float(info.get("floatShares"), None)
@@ -1271,6 +1279,8 @@ def enrich_ticker(ticker: str, signals: dict, info: dict | None = None) -> tuple
         "dilution_date": dilution_date,
         "late_filing_date": late_filing_date,
         "going_concern_date": going_concern_date,
+        # Bloc de contexte (Epic 14 S1) — à part des champs de scoring, par construction.
+        "context_flags": context_flags,
         "cash_positive": cash_positive,
         "cash_bin": (1.0 if cash_positive is True else (0.0 if cash_positive is False else None)),
         "ipo_year": ipo_year,

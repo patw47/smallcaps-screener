@@ -318,9 +318,60 @@ UTC** (midnight). An empty cell or `-` yields `None`.
 
 Contract fields with **no direct equivalent** in the export are always present and `None` —
 neutral, never penalising (`UNMAPPED`): `longName` (the export has a single name column, served as
-`shortName`), `earningsTimestamp` (the contract's fallback key; the primary one is enough), and
-`totalCash` / `totalDebt` (the export carries ratios, not absolute balance-sheet values, so
-`cash_positive` stays `None` — the existing "missing data is not penalised" path).
+`shortName`) and `earningsTimestamp` (the contract's fallback key; the primary one is enough).
+
+A column header may be given as a **tuple of candidates** (`_cell`): the first one present in the
+CSV header wins. The export API and the screener screen do not name columns alike — that mismatch
+is exactly what the first real call invalidated in Epic 13 — and an unknown header yields `None`,
+never an exception.
+
+### Balance-sheet reconstruction — cross-source cash parity (Epic 14 S1)
+
+The export carries no absolute balance-sheet values, so `totalCash` / `totalDebt` used to be
+`UNMAPPED`: `cash_positive` was `None` on the Finviz path while the Yahoo path served a verdict —
+the same company answered differently depending on the source. `_balance_sheet` rebuilds both from
+the per-share columns, restoring **parity**. This is not a flag: it can move scores, exactly as the
+Yahoo path would have.
+
+| Derived contract key | Formula | Export columns (first header present wins) |
+|---|---|---|
+| `totalCash` | cash per share × shares outstanding | `Cash Per Share` \| `Cash/sh`, `Shares Outstanding` \| `Outstanding` |
+| `totalDebt` | debt/equity × (book value per share × shares outstanding) | `Total Debt/Equity` \| `Debt/Eq`, `Book Value Per Share` \| `Book/sh`, plus the shares column |
+
+Share counts go through `_millions` (same family as `Market Cap`), the other three through
+`_number` (plain decimals). **Any missing or unreadable factor → `None`**, the module's existing
+absence pattern — `cash_positive` stays neutral, never penalising. One guard: a **negative book
+value per share** (≤ 0) yields `totalDebt = None` rather than a negative debt, which would read as
+a spotlessly healthy balance sheet.
+
+### Context flags — description only (Epic 14 S1)
+
+Extra columns of the **same request** (zero new network call), parsed into a `context_flags` block
+kept **separate from the enrichment contract** because none of them enters the score, the served
+order or list membership — the descriptive-marker pattern. `enrich_ticker` copies the block onto
+every candidate; on the Yahoo path (or for a ticker missing from the snapshot) it is present with
+**all keys `None`**, so the UI reads one stable shape on both paths.
+
+| Export column (first header present wins) | `context_flags` key | Normalisation |
+|---|---|---|
+| `Insider Transactions` \| `Insider Trans` | `insider_transactions` | signed `%` → fraction |
+| `Institutional Ownership` \| `Inst Own` | `institutional_ownership` | `%` → fraction |
+| `Institutional Transactions` \| `Inst Trans` | `institutional_transactions` | signed `%` → fraction |
+| `Short Float` | `short_float` | `%` → fraction (mirrors the contract's `shortPercentOfFloat`, so the squeeze picture reads from one block) |
+| `Short Ratio` \| `Short Interest Ratio` | `short_ratio` | decimal ratio, unchanged (days to cover) |
+| `EPS Surprise` | `eps_surprise` | signed `%` → fraction |
+| `Revenue Surprise` \| `Sales Surprise` | `revenue_surprise` | signed `%` → fraction |
+| `Optionable` | `optionable` | `Yes`/`No` → bool |
+| `Shortable` | `shortable` | `Yes`/`No` → bool |
+
+An empty cell or `-` yields `None` everywhere, and `0` stays `0` — absence and zero are not the
+same answer.
+
+> **Headers not yet verified against a live export.** The Epic 14 S1 columns were mapped without a
+> network call, using the long-name convention the Epic 13 fix established, with the screen name as
+> a fallback candidate. A wrong header breaks nothing (the cell reads `None`) but **empties the
+> block silently**. Before trusting it, run the check command above with
+> `d['context_flags']` in place of `d['marketCap']` and confirm a real export fills the keys.
 
 **Exchanges** are the one non-trivial translation: Finviz *names* markets, yfinance *codes* them and
 `FILTERS["allowed_exchanges"]` compares codes, so a raw string comparison would reject the whole

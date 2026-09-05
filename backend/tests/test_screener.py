@@ -759,6 +759,107 @@ def test_markers_never_enter_selection_or_ranking(offline_scan):
 
 
 # ---------------------------------------------------------------------------
+# Epic 14 S1 — drapeaux de contexte : information, jamais sélection
+# ---------------------------------------------------------------------------
+
+# Colonnes de contexte de l'export, RETIRABLES du CSV pour comparer deux scans par
+# ailleurs identiques. Valeurs synthétiques, sans rapport avec un quelconque seuil réel.
+_COLONNES_CONTEXTE = (
+    ("Insider Transactions", "4.50%"),
+    ("Institutional Ownership", "33.00%"),
+    ("Institutional Transactions", "-1.50%"),
+    ("Short Ratio", "2.60"),
+    ("EPS Surprise", "7.10%"),
+    ("Revenue Surprise", "-0.80%"),
+    ("Optionable", "Yes"),
+    ("Shortable", "No"),
+)
+# Colonnes servies dans les DEUX cas : contrat d'enrichissement et colonnes par action du
+# bilan. Sans elles, retirer le contexte changerait aussi les fondamentaux, et l'égalité
+# des scores ne prouverait plus rien.
+_COLONNES_BASE = (
+    ("Company", "Societe Test"), ("Exchange", "NASD"), ("Sector", "Healthcare"),
+    ("Industry", "Biotechnology"), ("Market Cap", "300.00"), ("Short Float", "3.10%"),
+    ("Cash Per Share", "2.50"), ("Book Value Per Share", "4.00"),
+    ("Total Debt/Equity", "0.50"), ("Shares Outstanding", "20.00"),
+)
+
+
+def _export_csv(tickers, avec_contexte: bool) -> str:
+    """Export Finviz synthétique pour l'univers hors ligne, contexte optionnel."""
+    colonnes = _COLONNES_BASE + (_COLONNES_CONTEXTE if avec_contexte else ())
+    lignes = [",".join(["Ticker"] + [nom for nom, _ in colonnes])]
+    lignes += [",".join([tk] + [val for _, val in colonnes]) for tk in tickers]
+    return "\n".join(lignes) + "\n"
+
+
+@pytest.fixture
+def scan_sur_instantane(offline_scan, monkeypatch):
+    """Scan complet sur le chemin de l'instantané d'export, hors ligne : `snapshot` est
+    doublé, mais le PARSEUR réel travaille — c'est la table de correspondance qui est
+    exercée, pas un dictionnaire écrit à la main."""
+    monkeypatch.setitem(FILTERS, "enrich_source", "finviz")
+
+    def servir(avec_contexte: bool) -> dict:
+        monkeypatch.setattr(
+            finviz, "snapshot",
+            lambda: finviz._parse(_export_csv(offline_scan, avec_contexte)))
+        return screener_backend.run_scan(offline_scan)
+
+    return servir
+
+
+def test_les_drapeaux_de_contexte_ne_touchent_ni_au_score_ni_a_l_ordre(scan_sur_instantane):
+    # Le critère central du sprint : les colonnes de contexte peuvent apparaître ou
+    # disparaître de l'export, la liste servie ne bouge pas d'une ligne — mêmes titres,
+    # même ordre, mêmes scores, et jusqu'aux mêmes valeurs sur tous les autres champs.
+    avec = scan_sur_instantane(True)
+    sans = scan_sur_instantane(False)
+
+    assert avec["stocks"], "liste vide : l'invariant serait trivialement vrai"
+    for a, s in zip(avec["stocks"], sans["stocks"], strict=True):
+        assert {k: v for k, v in a.items() if k != "context_flags"} == \
+               {k: v for k, v in s.items() if k != "context_flags"}
+
+    # Et le bloc a bien changé — sans quoi l'égalité ci-dessus ne prouverait rien.
+    assert avec["stocks"][0]["context_flags"] != sans["stocks"][0]["context_flags"]
+    assert any(v is not None for v in avec["stocks"][0]["context_flags"].values())
+
+
+# Clés d'un candidat servi AVANT ce sprint (relevé sur main). Le contrat ne fait que
+# croître : le frontend et les instantanés d'historique se relisent sur des années, une
+# clé perdue ou renommée les casserait en silence.
+CLES_CANDIDAT_ANTERIEURES = {
+    "accumulation", "atr_ratio", "binary_event", "cash_bin", "cash_positive",
+    "catalyst_date", "catalyst_type", "change_1d", "change_1m", "close_vs_sma20", "cmf",
+    "compressed", "compression_pct", "days_since_trigger", "days_to_earnings",
+    "dilution_date", "dilution_flag", "dollar_volume", "earnings_date", "exchange",
+    "f_accum", "f_atr_ratio", "f_ext", "f_pct_recent", "f_rs", "flags", "float_shares",
+    "fusee_event", "fusee_strength", "going_concern_date", "going_concern_flag",
+    "industry", "insider_buying", "insider_net_buying", "insider_net_buying_pos",
+    "insider_pct", "ipo_year", "is_fusee", "is_phenix", "late_filing_date",
+    "late_filing_flag", "low_ext", "low_float", "ma50", "market_cap_m", "name",
+    "near_high", "near_pivot", "p_explode", "pct_52w_high", "pct_recent_high",
+    "phenix_strength", "pivot_level", "positives", "price", "price_above_ma50",
+    "profile", "profile_strength", "profiles", "revenue_growth", "reverse_split_date",
+    "reverse_split_flag", "risk_markers", "rs_line_rising", "rs_outperf", "rs_signal",
+    "rs_strength", "rs_turning", "score", "sector", "setup_score", "short_interest_pct",
+    "sma20", "sub_dollar_days", "sub_dollar_flag", "survival_risk", "ticker",
+    "triggered", "updown_vol_ratio", "vol_ratio",
+}
+
+
+def test_le_contrat_du_candidat_ne_fait_que_croitre(scan_sur_instantane):
+    servis = scan_sur_instantane(True)["stocks"]
+
+    assert servis
+    for candidat in servis:
+        manquantes = CLES_CANDIDAT_ANTERIEURES - set(candidat)
+        assert not manquantes, f"clés retirées du contrat : {sorted(manquantes)}"
+    assert "context_flags" in servis[0]
+
+
+# ---------------------------------------------------------------------------
 # Epic 10 S1 — non-régression du CONTRAT SERVI, et détail transporté jusqu'à la réponse
 #
 # Artefact : le jeu de clés d'une sélection dans la réponse servie. Invariant : toutes
