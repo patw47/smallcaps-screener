@@ -773,6 +773,10 @@ _COLONNES_CONTEXTE = (
     ("Revenue Surprise", "-0.80%"),
     ("Optionable", "Yes"),
     ("Shortable", "No"),
+    # News la plus récente (Epic 14 S2) — trois colonnes du même export.
+    ("Latest News Date", "9/4/2026 9:32:00 AM"),
+    ("Latest News Title", "Societe Test signe un accord"),
+    ("Latest News URL", "https://exemple.invalid/news/test"),
 )
 # Colonnes servies dans les DEUX cas : contrat d'enrichissement et colonnes par action du
 # bilan. Sans elles, retirer le contexte changerait aussi les fondamentaux, et l'égalité
@@ -799,11 +803,21 @@ def scan_sur_instantane(offline_scan, monkeypatch):
     doublé, mais le PARSEUR réel travaille — c'est la table de correspondance qui est
     exercée, pas un dictionnaire écrit à la main."""
     monkeypatch.setitem(FILTERS, "enrich_source", "finviz")
+    import edgar
 
     def servir(avec_contexte: bool) -> dict:
         monkeypatch.setattr(
             finviz, "snapshot",
             lambda: finviz._parse(_export_csv(offline_scan, avec_contexte)))
+        # Le catalyseur 8-K (Epic 14 S2) apparaît et disparaît avec le reste du contexte :
+        # l'invariant hors-score doit tenir sur les DEUX sources de drapeaux, pas seulement
+        # sur les colonnes de l'export.
+        monkeypatch.setattr(edgar, "survival_signals", lambda tk, *a, **k: {
+            "dilution_flag": tk == "T1", "late_filing_flag": False,
+            "going_concern_flag": False,
+            "dilution_date": "2026-07-14" if tk == "T1" else None,
+            "catalyst_8k_items": ["1.01", "9.01"] if avec_contexte else None,
+            "catalyst_8k_date": "2026-06-20" if avec_contexte else None})
         return screener_backend.run_scan(offline_scan)
 
     return servir
@@ -824,6 +838,12 @@ def test_les_drapeaux_de_contexte_ne_touchent_ni_au_score_ni_a_l_ordre(scan_sur_
     # Et le bloc a bien changé — sans quoi l'égalité ci-dessus ne prouverait rien.
     assert avec["stocks"][0]["context_flags"] != sans["stocks"][0]["context_flags"]
     assert any(v is not None for v in avec["stocks"][0]["context_flags"].values())
+    # Les DEUX sources de drapeaux ont bien varié : colonnes de l'export ET catalyseur des
+    # dépôts officiels. Sans cette garde, l'invariant tiendrait sur la moitié du sprint.
+    drapeaux = avec["stocks"][0]["context_flags"]
+    assert drapeaux["news_url"] == "https://exemple.invalid/news/test"
+    assert drapeaux["catalyst_8k_items"] == ["1.01", "9.01"]
+    assert sans["stocks"][0]["context_flags"]["catalyst_8k_items"] is None
 
 
 # Clés d'un candidat servi AVANT ce sprint (relevé sur main). Le contrat ne fait que

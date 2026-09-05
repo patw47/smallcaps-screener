@@ -113,8 +113,13 @@ def _fraction(raw) -> float | None:
         return None
 
 
-def _epoch(raw) -> float | None:
-    """Date de l'export → secondes epoch UTC (minuit), l'unité des dates du contrat."""
+def _epoch(raw, minuit: bool = True) -> float | None:
+    """Date de l'export → secondes epoch UTC, l'unité des dates du contrat.
+
+    `minuit` (défaut) écrase l'heure : une date de résultats n'est datée qu'au jour, le
+    moment de séance étant servi à part (« AMC »/« BMO »). `minuit=False` la conserve —
+    voir `_timestamp`.
+    """
     txt = _text(raw)
     if txt is None:
         return None
@@ -125,9 +130,10 @@ def _epoch(raw) -> float | None:
     for fmt in _DATE_FORMATS:
         try:
             quand = datetime.strptime(txt, fmt)
-            # L'heure de séance éventuelle ne fait pas partie de la date : minuit UTC.
-            return quand.replace(hour=0, minute=0, second=0,
-                                 tzinfo=timezone.utc).timestamp()
+            if minuit:
+                # L'heure de séance éventuelle ne fait pas partie de la date : minuit UTC.
+                quand = quand.replace(hour=0, minute=0, second=0)
+            return quand.replace(tzinfo=timezone.utc).timestamp()
         except ValueError:
             continue
     # ponytail: l'export affiche parfois la date de résultats sans année (« Feb 25 ») —
@@ -139,6 +145,15 @@ def _epoch(raw) -> float | None:
     maintenant = datetime.now(tz=timezone.utc)
     an = maintenant.year + (1 if (jour.replace(year=maintenant.year) - maintenant).days < -182 else 0)
     return jour.replace(year=an).timestamp()
+
+
+def _timestamp(raw) -> float | None:
+    """
+    Horodatage de news → epoch UTC, HEURE CONSERVÉE (Epic 14 S2). Une parution avant
+    l'ouverture et une parution en clôture ne racontent pas la même journée : contrairement
+    à une date de résultats, l'heure EST l'information.
+    """
+    return _epoch(raw, minuit=False)
 
 
 def _exchange(raw) -> str | None:
@@ -229,6 +244,12 @@ CONTEXT_MAP = (
     (("Revenue Surprise", "Sales Surprise"),           "revenue_surprise",          _fraction),
     ("Optionable",                                     "optionable",                _bool),
     ("Shortable",                                      "shortable",                 _bool),
+    # News la plus récente (Epic 14 S2) — trois colonnes du MÊME export, aucune requête de
+    # plus. Servies telles quelles : le backend ne juge pas ce qui est « du jour », il sert
+    # l'horodatage et laisse l'affichage en décider.
+    (("Latest News Date", "News Date"),                "news_date",                 _timestamp),
+    (("Latest News Title", "News Title", "Headline"),  "news_title",                _text),
+    (("Latest News URL", "News URL", "News Link"),     "news_url",                  _text),
 )
 CONTEXT_KEYS = tuple(cle for _, cle, _ in CONTEXT_MAP)
 
