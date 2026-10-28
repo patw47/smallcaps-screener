@@ -1,0 +1,12 @@
+[Unit]
+Description=smallcaps-screener quintile bounds, each night (off the alert path)
+
+[Timer]
+# A new quarter costs 7 to 9 min (companyfacts.zip 1.4 GB + full-text search); the
+# cache is recomputed weekly until complete, so the 18:00 alert reads it.
+OnCalendar=*-*-* 03:00:00 America/New_York
+Persistent=true
+Unit=earnings-bounds.service
+
+[Install]
+WantedBy=timers.target

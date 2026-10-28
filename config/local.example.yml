@@ -27,3 +27,6 @@ study: {}
 # l'étude (nano refusé). Liste vide (défaut) : aucune publication n'entre dans l'univers.
 earnings: {}
 #   tiers: []
+#   net: {}              # rendement net mesuré par l'étude, en points de %, par horizon en
+#                        # séances ({5: x, 21: y, 63: z}) — affiché dans l'alerte Telegram
+#   notify_empty: false  # true : un message « aucune publication » les séances sans alerte

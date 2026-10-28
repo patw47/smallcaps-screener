@@ -412,7 +412,9 @@ tiers, so all of them map to the main-tier code. An unknown market → `None`.
 
 `detect(session)` returns the earnings releases whose entry is decided by that session, with
 their seasonal surprise, its quintile and the entry date. `make earnings [SESSION=YYYY-MM-DD]`
-prints them (default: the previous session) with the duration.
+prints them (default: the last session whose 16:00 New York close has passed, `last_session`)
+with the duration. The alert job that uses it on the VPS is described in `docs/deployment.md`
+(*Earnings alert on the VPS*).
 
 **Mechanism.** The market under-reacts to an earnings surprise and the price keeps drifting in
 the direction of the surprise for weeks (post-earnings announcement drift, Ball & Brown 1968,

@@ -1,6 +1,7 @@
 """
 Vérifie que les defaults du code versionné sont NEUTRES : aucun jeton ni lien d'export
-Finviz, aucun tier dans l'univers de l'alerte (verdict privé, config locale seulement).
+Finviz, aucun tier dans l'univers de l'alerte ni rendement mesuré (verdict privé, config
+locale seulement).
 Plus fort qu'un grep — on importe les modules sans config
 locale et on vérifie les valeurs effectives.
 
@@ -23,8 +24,8 @@ import screener_backend  # noqa: E402,F401  (la config du code s'importe sans ov
 
 errors = [f"finviz.CFG['{k}'] non vide — default non neutre"
           for k in ("export_url", "token") if finviz.CFG[k]]
-if earnings.CFG["tiers"]:
-    errors.append("earnings.CFG['tiers'] non vide — default non neutre")
+errors += [f"earnings.CFG['{k}'] non vide — default non neutre"
+           for k in ("tiers", "net") if earnings.CFG[k]]
 
 if errors:
     print("check-neutral-defaults ÉCHEC :")

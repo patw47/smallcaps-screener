@@ -16,7 +16,7 @@ set -u
 cd "$(dirname "$0")/.."
 
 ALL_TARGETS=(backend frontend docs README.md Makefile docker-compose.yml site)
-PROSE_TARGETS=(frontend docs README.md Makefile docker-compose.yml site)
+PROSE_TARGETS=(frontend docs README.md Makefile docker-compose.yml site scripts deploy)
 fail=0
 
 python3 scripts/check_neutral_defaults.py || fail=1
