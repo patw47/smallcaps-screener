@@ -1,0 +1,17 @@
+[Unit]
+Description=smallcaps-screener earnings alert (Q5 releases of the session -> Telegram, journal returns)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=screener
+Group=apps
+WorkingDirectory=/opt/apps/smallcaps-screener/backend
+# EDGAR_USER_AGENT, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (0600, owner screener, never in git)
+EnvironmentFile=/opt/apps/smallcaps-screener/.env
+Environment=CONFIG_FILE=/opt/apps/smallcaps-screener/config/local.yml
+Environment=DATA_DIR=/opt/apps/smallcaps-screener/data
+ExecStart=/opt/apps/smallcaps-screener/.venv/bin/python -u run_earnings.py
+# Bounds of a new quarter not yet cached (night timer missed): 7 to 9 min more.
+TimeoutStartSec=30min

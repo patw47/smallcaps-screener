@@ -79,7 +79,7 @@ study-earnings:
 study-earnings-verdict:
 	cd backend && $(PY) -B -u -m study.earnings --config ../config/local.yml --step verdict
 
-# Détection live (Epic 15 S3) : publications d'une séance (défaut : la précédente) avec SUE,
+# Détection live (Epic 15 S3) : publications d'une séance (défaut : la dernière close) avec SUE,
 # quintile et date d'entrée. SESSION=AAAA-MM-JJ pour une autre séance. Réseau EDGAR
 # (EDGAR_USER_AGENT lu dans .env) et export Finviz (config/local.yml).
 EDGAR_UA = $(shell sed -n 's/^EDGAR_USER_AGENT=//p' .env 2>/dev/null | tr -d '"')

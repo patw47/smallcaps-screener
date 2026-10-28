@@ -1,0 +1,15 @@
+[Unit]
+Description=smallcaps-screener quintile bounds of the current and previous quarter (cache)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=screener
+Group=apps
+WorkingDirectory=/opt/apps/smallcaps-screener/backend
+EnvironmentFile=/opt/apps/smallcaps-screener/.env
+Environment=CONFIG_FILE=/opt/apps/smallcaps-screener/config/local.yml
+Environment=DATA_DIR=/opt/apps/smallcaps-screener/data
+ExecStart=/opt/apps/smallcaps-screener/.venv/bin/python -u run_earnings.py --bounds
+TimeoutStartSec=45min

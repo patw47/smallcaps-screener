@@ -16,7 +16,7 @@ of the previous calendar quarter's releases (``quarter_bounds``).
 Universe: tiers of ``earnings.tiers`` in config/local.yml (default empty: nothing
 enters), market cap read in the Finviz export.
 
-Usage (from backend/): python earnings.py [--session YYYY-MM-DD]
+Usage (from backend/): python earnings.py [--session YYYY-MM-DD]  (default: last closed session)
 """
 from __future__ import annotations
 
@@ -49,9 +49,11 @@ from study.earnings import LINK_DAYS, YEAR_TOLERANCE, first_close, link_eps
 
 logger = logging.getLogger(__name__)
 
-# Défaut NEUTRE : aucun tier, donc aucune publication n'entre. La liste réelle (verdict
-# du Sprint 1) vit dans config/local.yml, section `earnings:`.
-CFG: dict = {"tiers": []}
+# Défauts NEUTRES : aucun tier, donc aucune publication n'entre ; aucun rendement mesuré
+# affiché ; pas de message « aucune publication ». Les valeurs réelles (verdict et
+# rendements nets du Sprint 1, en points de %, par horizon en séances) vivent dans
+# config/local.yml, section `earnings:`.
+CFG: dict = {"tiers": [], "net": {}, "notify_empty": False}
 
 # Finviz screener bounds, millions USD, lower bound inclusive (ta-patterns tools/lake/universe.py).
 TIER_BOUNDS: Final[dict[str, tuple[float, float]]] = {
@@ -100,6 +102,8 @@ def load_config(path: Path = CONFIG_FILE) -> None:
     if bad:
         raise LocalConfigError(f"config locale : tier refusé dans earnings.tiers : {bad[0]}")
     CFG["tiers"] = tiers
+    CFG["net"] = {int(h): float(v) for h, v in (section.get("net") or {}).items()}
+    CFG["notify_empty"] = bool(section.get("notify_empty", False))
 
 
 load_config()
@@ -257,6 +261,13 @@ def sessions(start: date, end: date) -> pd.DatetimeIndex:
     return pd.bdate_range(start, end, freq="C", holidays=_NYSE().holidays(start, end)).astype("datetime64[ns]")
 
 
+def last_session(now: datetime | None = None) -> date:
+    """Last NYSE session whose 16:00 New York close has passed at ``now`` (default: now)."""
+    now = (now or datetime.now(NY)).astimezone(NY)
+    d = now.date() if now.hour >= 16 else now.date() - timedelta(days=1)
+    return sessions(d - timedelta(days=10), d)[-1].date()
+
+
 def entry_dates(t: pd.Series) -> pd.DataFrame:
     """``first_close`` after ``t`` (New York) and ``entry``: the open of the next session."""
     t = t.astype("datetime64[ns]")
@@ -390,6 +401,8 @@ def quarter_bounds(quarter: pd.Period, facts_zip: Path | None = None) -> np.ndar
         age = (datetime.now() - datetime.fromisoformat(c["computed"])).days
         if c["complete"] or age < BOUNDS_REFRESH_DAYS:
             return None if c["bounds"] is None else np.array(c["bounds"])
+    # forms=8-K also returns the 8-K/A (EDGAR full-text search, checked 2025-05-06: 522
+    # 8-K + 6 8-K/A), as ta-patterns ``releases`` and ``_company`` count both.
     rel = filings("8-K", prev.start_time.date(), prev.end_time.date())
     rel = rel[rel["items"].str.contains(ITEM_202)].rename(columns={"filed": "t"})
     tmp = None if facts_zip else EARNINGS_DIR / "companyfacts.zip"
@@ -484,13 +497,12 @@ def detect(session: date) -> pd.DataFrame:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: print the releases of one session (default: the previous one) and the duration."""
+    """CLI: print the releases of one session (default: the last closed one) and the duration."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--session", type=date.fromisoformat)
     a = ap.parse_args(argv)
-    today = datetime.now(NY).date()
-    session = a.session or sessions(today - timedelta(days=10), today - timedelta(days=1))[-1].date()
+    session = a.session or last_session()
     t0 = time.time()
     ev = detect(session)
     with pd.option_context("display.width", 220, "display.max_columns", 20):

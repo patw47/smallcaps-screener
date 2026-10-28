@@ -1,0 +1,13 @@
+[Unit]
+Description=smallcaps-screener earnings alert, each weekday after the New York close
+
+[Timer]
+# 18:00 New York (DST handled by the zone): the 10-Q accepted before the 16:00 close
+# have 2 h to reach the EDGAR full-text search; entry is the next open (09:30).
+# A holiday run finds the previous session already journaled (dedup): no message.
+OnCalendar=Mon..Fri *-*-* 18:00:00 America/New_York
+Persistent=true
+Unit=earnings-alert.service
+
+[Install]
+WantedBy=timers.target

@@ -124,5 +124,6 @@ def test_la_config_locale_reelle_se_charge(monkeypatch):
         pytest.skip(f"{path} absent")
     sb.load_local_config(path=path, filters=_fresh_filters())
     import earnings
-    monkeypatch.setitem(earnings.CFG, "tiers", [])
+    for key in ("tiers", "net", "notify_empty"):
+        monkeypatch.setitem(earnings.CFG, key, earnings.CFG[key])
     earnings.load_config(path)          # section `earnings:` lue par son module (tiers connus)
