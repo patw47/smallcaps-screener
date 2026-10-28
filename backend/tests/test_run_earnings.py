@@ -82,3 +82,20 @@ def test_job_failure_sends_a_telegram_error(job, monkeypatch):
     monkeypatch.setattr(er, "detect", boom)
     assert rj.main(["--session", "2026-10-27"]) == 1
     assert len(job) == 1 and "EarningsError" in job[0]
+
+
+def test_crash_after_the_send_does_not_alert_twice(job, monkeypatch):
+    monkeypatch.setattr(er, "detect", lambda s: _event(5))
+    monkeypatch.setattr(rj, "update_returns", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        rj.run(SESSION)
+    monkeypatch.setattr(rj, "update_returns", lambda *a: 0)
+    rj.run(SESSION)
+    assert len(job) == 1
+
+
+def test_message_escapes_html(job, monkeypatch):
+    ev = _event(5).iloc[0].copy()
+    ev["form"] = "10-Q<&>"
+    text = rj.message(ev, [{"code": "a<b", "date": None}])
+    assert "10-Q&lt;&amp;&gt;" in text and "a&lt;b" in text

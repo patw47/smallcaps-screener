@@ -136,7 +136,7 @@ def message(ev: pd.Series, risk: list[dict]) -> str:
     net = er.CFG["net"]
     lines = [
         f"<b>{html.escape(ev['ticker'])}</b> — résultats publiés, surprise dans le quintile supérieur",
-        f"Communiqué : {ev['release_t']:%Y-%m-%d %H:%M} New York · rapport {ev['form']} : {ev['eps_t']:%Y-%m-%d %H:%M}",
+        f"Communiqué : {ev['release_t']:%Y-%m-%d %H:%M} New York · rapport {html.escape(ev['form'], quote=False)} : {ev['eps_t']:%Y-%m-%d %H:%M}",
         f"Surprise saisonnière (SUE) {ev['sue']:.2f} · quintile {int(ev['sue_q'])} · BPA {ev['eps']:g} $ "
         f"(trimestre clos le {ev['period_end']:%Y-%m-%d})",
         f"Entrée : ouverture du {ev['entry']:%Y-%m-%d}",
@@ -145,14 +145,14 @@ def message(ev: pd.Series, risk: list[dict]) -> str:
         lines.append("Rendement net moyen mesuré sur l'historique : " + " · ".join(
             f"{v:+.2f} % à {h} séances" for h, v in sorted(net.items())))
     lines.append("Drapeaux de risque (information, aucun filtre) : " + (", ".join(
-        labels.get(f"risk.{m['code']}", m["code"]) + (f" ({m['date']})" if m.get("date") else "")
+        html.escape(labels.get(f"risk.{m['code']}", m["code"]) + (f" ({m['date']})" if m.get("date") else ""), quote=False)
         for m in risk) or "aucun"))
     lines.append(f"https://finviz.com/quote.ashx?t={html.escape(ev['ticker'])}")
     return "\n".join(lines)
 
 
 def run(session: date) -> dict:
-    """Alerts of ``session`` then due returns; journal written once. Returns counts."""
+    """Alerts of ``session`` then due returns; journal written before each send and at the end. Returns counts."""
     lines = read_journal()
     seen = {(x["cik"], x["period_end"]) for x in lines}
     ev = er.detect(session)
@@ -163,19 +163,22 @@ def run(session: date) -> dict:
         if key in seen:
             continue
         risk = lifecycle.current_risk_markers(None, edgar.survival_signals(e["ticker"]))
-        ok = send_telegram(message(e, risk))
-        if not ok:
-            logger.warning("Telegram not sent for %s (secrets absent or API error)", e["ticker"])
-        sent += ok
         seen.add(key)
-        lines.append({
+        line = {
             "cik": key[0], "ticker": e["ticker"], "period_end": key[1], "form": e["form"],
             "release_t": e["release_t"].isoformat(), "eps_t": e["eps_t"].isoformat(),
             "session": f"{e['first_close']:%Y-%m-%d}", "entry": f"{e['entry']:%Y-%m-%d}",
             "eps": float(e["eps"]), "sue": float(e["sue"]), "sue_q": int(e["sue_q"]),
-            "risk": risk, "telegram": bool(ok), "alerted_at": datetime.now(er.NY).isoformat(timespec="seconds"),
+            "risk": risk, "telegram": False, "alerted_at": datetime.now(er.NY).isoformat(timespec="seconds"),
             **{f"{k}_{h}": None for h in HORIZONS for k in ("ret", "iwm")},
-        })
+        }
+        lines.append(line)
+        write_journal(lines)  # journal before send: a crash after the send never re-alerts
+        ok = send_telegram(message(e, risk))
+        if not ok:
+            logger.warning("Telegram not sent for %s (secrets absent or API error)", e["ticker"])
+        line["telegram"] = bool(ok)
+        sent += ok
     filled = update_returns(lines, session)
     write_journal(lines)
     if q5.empty and er.CFG["notify_empty"]:

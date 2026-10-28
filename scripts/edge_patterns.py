@@ -23,7 +23,7 @@ import yaml
 OPERATIONAL = {"filters", "finviz", "study"}
 GENERIC = {0.0, 1.0, -1.0}
 # Clés dont les valeurs sont des rendements en points de % (earnings.net, Epic 15 S4) : pas de
-# forme multiplicateur — « 1,8× » d'un post-mortem v2 public n'est pas une fuite de « 1.80 pt ».
+# forme multiplicateur — un « N× » d'un post-mortem public n'est pas la fuite d'un rendement en points.
 PERCENT_POINTS = {"net"}
 
 
@@ -41,6 +41,8 @@ def value_patterns(value: float, mult: bool = True) -> set[str]:
         pats.add(rf"(^|[^0-9,.]){comma}($|[^0-9])")
         if a > 1 and mult:
             pats.add(rf"{dec.replace('.', '[.,]')}\s*[x×]")
+        if not mult:  # rendement en points : « 1.2 pt » / « 1,20 % », point ou virgule
+            pats.add(rf"(^|[^0-9.,]){dec.replace('.', '[.,]')}0*\s*(pt|%)")
     if a < 1 and pct == int(pct):
         pats.add(rf"[−≥≤<>-]\s*{int(pct)}\s*%")
     num = comma if "." in dec else dec
