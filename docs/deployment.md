@@ -1,5 +1,73 @@
 # Deployment and Operations
 
+## Earnings alert on the VPS (Epic 15)
+
+The alert does not depend on the workstation: a Python job and two systemd timers run on
+the VPS (`ssh hetzner-vps`, UTC clock, schedules written in New York time).
+
+| Unit | When | What |
+| --- | --- | --- |
+| `earnings-alert.timer` → `.service` | Mon–Fri 18:00 New York | `run_earnings.py`: releases of the last closed session (`earnings.detect`); each top-quintile release not yet in the journal → one Telegram message + one line of `data/earnings/alerts.jsonl`; journal lines whose 5 / 21 / 63-session horizon has closed get their realized return and IWM's. |
+| `earnings-bounds.timer` → `.service` | every day 03:00 New York | `run_earnings.py --bounds`: quintile bounds of the current and previous quarter, cached in `data/earnings/` (a new quarter takes 7–9 min, kept off the evening run). |
+
+- **Why 18:00**: a 10-Q accepted before the 16:00 close has its first public close that
+  day and its entry at the next open; 2 h leave the EDGAR full-text search time to index
+  it. A 10-Q filed overnight has its first close the next day: the next evening run
+  catches it before its entry, so no morning run is needed.
+- `Persistent=true`: a run missed while the VPS was down starts at boot. A holiday run
+  finds the previous session already in the journal (dedup on CIK + quarter end): no message.
+- **Failure**: any exception sends one Telegram message and exits 1 (`systemctl --failed`).
+  A send that fails is logged and the journal line keeps `"telegram": false`.
+- **Prices of the realized returns**: Yahoo chart API (`query1.finance.yahoo.com/v8/finance/chart`,
+  no key), same source for the stock and IWM; open of the entry session to close of the
+  horizon session, both adjusted for splits and dividends (`adjclose / close` applied to
+  the open). A missing bar leaves the cell empty; it is retried at the next run.
+
+### Layout
+
+| Path | Owner / mode | Content |
+| --- | --- | --- |
+| `/opt/apps/smallcaps-screener/` | `queenp:apps`, `2770` | git clone (public HTTPS), `.venv/` (`requirements.txt`) |
+| `.env` | `screener`, `0600` | `EDGAR_USER_AGENT`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — never in git |
+| `config/local.yml` | `screener`, `0600` | sections `finviz` (export link + token) and `earnings` (`tiers`, `net`, `notify_empty`) of the workstation's file |
+| `data/` | `screener:apps`, `2770` | `earnings/alerts.jsonl` (journal), `earnings/bounds_<quarter>.json`, `edgar_cache/` |
+
+Service user `screener` (system, no login, groups `screener` + `apps`).
+
+### First install
+
+```bash
+ssh hetzner-vps
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin --groups apps screener
+cd /opt/apps && git clone https://github.com/patw47/smallcaps-screener.git && cd smallcaps-screener
+sudo chgrp -R apps . && chmod -R g+rwX,o-rwx . && find . -type d -exec chmod g+s {} +
+python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
+sudo install -d -o screener -g apps -m 2770 data
+# secrets, from the workstation (values never printed):
+#   grep -E '^(EDGAR_USER_AGENT|TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID)=' .env \
+#     | ssh hetzner-vps 'sudo install -o screener -g screener -m 0600 /dev/stdin /opt/apps/smallcaps-screener/.env'
+#   (same for config/local.yml, sections finviz + earnings only)
+sudo install -m 0644 deploy/earnings-*.service deploy/earnings-*.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now earnings-alert.timer earnings-bounds.timer
+```
+
+### Redeploy `main` (after each merge)
+
+```bash
+ssh hetzner-vps 'cd /opt/apps/smallcaps-screener && git fetch -q origin && git checkout -q main && git reset -q --hard origin/main && .venv/bin/pip install -q -r requirements.txt && sudo install -m 0644 deploy/earnings-*.service deploy/earnings-*.timer /etc/systemd/system/ && sudo systemctl daemon-reload && git log --oneline -1 && systemctl list-timers "earnings-*" --no-pager'
+```
+
+Nothing to restart: each timer starts a fresh process that reads the code on disk.
+
+### Checks
+
+```bash
+ssh hetzner-vps 'systemctl list-timers "earnings-*" --no-pager'                # next runs
+ssh hetzner-vps 'sudo journalctl -u earnings-alert -u earnings-bounds -n 50 --no-pager'
+ssh hetzner-vps 'sudo systemctl start earnings-alert.service'                   # run now (blocks until done)
+ssh hetzner-vps 'sudo tail -n 3 /opt/apps/smallcaps-screener/data/earnings/alerts.jsonl'
+```
+
 ## Local Docker Run
 
 ```bash
