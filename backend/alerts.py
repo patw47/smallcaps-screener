@@ -1,54 +1,17 @@
 """
-Alertes Telegram sur les nouvelles entrées en cohortes v4 et v5 (Epic 4 S3 / Epic 5).
-
-L'alerte cassure Fusée d'origine (Sprint 3) a été supprimée en Epic 7 S2 : son déclencheur
-est mesuré non prédictif (protocole v4 §A.1, lift 1,0×) et l'alerte cohorte v4 l'a remplacée.
-
-Anti-doublon : un même ticker n'est pas re-notifié avant `FILTERS["alert_dedup_days"]`
-jours (état persistant dans `data/alerts_state.json`).
+Envoi Telegram — seul reste des alertes du screener après la refonte de l'Epic 15
+(Sprint 2) ; l'alerte post-résultats (Sprint 4) l'appellera.
 
 Secrets via variables d'environnement UNIQUEMENT (jamais en dur) :
   - TELEGRAM_BOT_TOKEN
   - TELEGRAM_CHAT_ID
-Sans token/chat_id configurés, l'alerting est silencieusement désactivé : le scan
-fonctionne normalement.
+Sans token/chat_id configurés, l'envoi est silencieusement désactivé.
 """
 
 import os
-import json
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
 import requests
 
-from screener_backend import FILTERS, DATA_DIR
-
-ALERT_STATE_FILE = Path(DATA_DIR) / "alerts_state.json"
-
-
-# ---------------------------------------------------------------------------
-# État anti-doublon (persistant, tolérant aux corruptions)
-# ---------------------------------------------------------------------------
-
-def _load_state(path: Path) -> dict[str, str]:
-    """{ticker: ISO date de dernière alerte}. Fichier absent/corrompu → {} (jamais fatal)."""
-    try:
-        return json.loads(Path(path).read_text())
-    except Exception:
-        return {}
-
-
-def _save_state(path: Path, state: dict[str, str]) -> None:
-    try:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(json.dumps(state, indent=2, ensure_ascii=False))
-    except Exception as e:
-        print(f"[alert] écriture d'état impossible (ignorée) : {e}")
-
-
-# ---------------------------------------------------------------------------
-# Envoi Telegram
-# ---------------------------------------------------------------------------
 
 def send_telegram(text: str) -> bool:
     """
@@ -71,113 +34,3 @@ def send_telegram(text: str) -> bool:
         # Ne JAMAIS logger `e` : les exceptions requests contiennent l'URL avec le bot token.
         print(f"[alert] envoi Telegram échoué (ignoré) : {type(e).__name__}")
         return False
-
-
-# ---------------------------------------------------------------------------
-# Notification des nouvelles entrées en cohorte v4 (Epic 4 S3)
-# ---------------------------------------------------------------------------
-
-def notify_new_v4_entries(cohort: list[dict], *, state_path: Path = ALERT_STATE_FILE,
-                          dedup_days: int | None = None, now: datetime | None = None,
-                          send_fn=send_telegram) -> list[str]:
-    """
-    Notifie les tickers NOUVELLEMENT en cohorte v4 (protocole v4 §2 — la seule liste à
-    espérance historique positive). Même anti-doublon persistant que l'alerte cassure
-    (préfixe d'état « v4: » pour éviter toute collision avec elle). Le message rappelle
-    le statut : recherche statistique en validation forward, pas un conseil.
-    """
-    dedup_days = FILTERS["alert_dedup_days"] if dedup_days is None else dedup_days
-    now = now or datetime.now(tz=timezone.utc)
-
-    state = _load_state(state_path)
-    fresh: list[dict] = []
-    for e in cohort:
-        tk = e.get("ticker")
-        if not tk:
-            continue
-        last = state.get(f"v4:{tk}")
-        if last:
-            try:
-                if now - datetime.fromisoformat(last) < timedelta(days=dedup_days):
-                    continue
-            except (TypeError, ValueError):
-                pass
-        fresh.append(e)
-
-    if not fresh:
-        return []
-
-    def _line(e: dict) -> str:
-        resid = e.get("resid")
-        r = f" · résidu {resid:+.1%}" if resid is not None else ""
-        return f"• <b>{e.get('ticker')}</b> — {e.get('price')}$ · 1m {e.get('change_1m'):+.1%}{r}"
-
-    text = ("🧪 <b>Cohorte v4 — {} nouvelle(s) entrée(s)</b>\n".format(len(fresh))
-            + "\n".join(_line(e) for e in fresh)
-            + "\n<i>Recherche statistique en validation forward (t=0,47) — pas un conseil.</i>")
-    if not send_fn(text):
-        return []
-
-    for e in fresh:
-        state[f"v4:{e['ticker']}"] = now.isoformat()
-    _save_state(state_path, state)
-    return [e["ticker"] for e in fresh]
-
-
-# ---------------------------------------------------------------------------
-# Notification des nouvelles entrées en cohortes v5 (Epic 5, toutes fenêtres)
-# ---------------------------------------------------------------------------
-
-def notify_new_v5_entries(v5_windows: dict, *, state_path: Path = ALERT_STATE_FILE,
-                          dedup_days: int | None = None, now: datetime | None = None,
-                          send_fn=send_telegram) -> list[str]:
-    """
-    Notifie les tickers NOUVELLEMENT qualifiés dans une cohorte v5, toutes fenêtres
-    confondues (protocole v5 §8). Anti-doublon par ticker (préfixe « v5: ») : un titre
-    qualifié sur plusieurs fenêtres le même jour = UNE ligne listant ses fenêtres, et
-    pas de re-notification avant `dedup_days` même s'il gagne une fenêtre de plus.
-    """
-    dedup_days = FILTERS["alert_dedup_days"] if dedup_days is None else dedup_days
-    now = now or datetime.now(tz=timezone.utc)
-
-    # Agrège par ticker : {tk: {"windows": [7, 14], "entry": <première entrée vue>}}
-    merged: dict[str, dict] = {}
-    for w_str, block in sorted((v5_windows or {}).items(), key=lambda x: int(x[0])):
-        for e in block.get("cohort") or []:
-            tk = e.get("ticker")
-            if not tk:
-                continue
-            m = merged.setdefault(tk, {"windows": [], "entry": e})
-            m["windows"].append(w_str)
-
-    state = _load_state(state_path)
-    fresh: list[tuple[str, dict]] = []
-    for tk, m in merged.items():
-        last = state.get(f"v5:{tk}")
-        if last:
-            try:
-                if now - datetime.fromisoformat(last) < timedelta(days=dedup_days):
-                    continue
-            except (TypeError, ValueError):
-                pass
-        fresh.append((tk, m))
-
-    if not fresh:
-        return []
-
-    def _line(tk: str, m: dict) -> str:
-        e = m["entry"]
-        wins = "/".join(m["windows"])
-        return (f"• <b>{tk}</b> — {e.get('price')}$ · chute {e.get('chg'):+.1%}"
-                f" · vol {e.get('vol_calm')}× · fenêtre(s) {wins} j")
-
-    text = ("🧪 <b>Cohorte v5 — {} nouvelle(s) entrée(s)</b>\n".format(len(fresh))
-            + "\n".join(_line(tk, m) for tk, m in fresh)
-            + "\n<i>Recherche statistique en validation forward (t &lt; 0,5) — pas un conseil.</i>")
-    if not send_fn(text):
-        return []
-
-    for tk, _ in fresh:
-        state[f"v5:{tk}"] = now.isoformat()
-    _save_state(state_path, state)
-    return [tk for tk, _ in fresh]

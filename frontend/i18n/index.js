@@ -1,7 +1,8 @@
 // Helper i18n maison (Epic 6 S3) — aucune lib. Dictionnaires plats fr/en,
-// interpolation {placeholder} partagée avec les templates servis par l'API.
+// interpolation {placeholder}.
 import fr from "./fr.json";
 import en from "./en.json";
+import { fmt } from "./fmt.js";
 
 const DICTS = { fr, en };
 
@@ -12,8 +13,6 @@ export function setLang(l) {
   localStorage.setItem("lang", l);
 }
 
-// Interpolation {clé} — sert aussi aux templates du bloc `display` de l'API.
-export const fmt = (tpl, vars = {}) =>
-  tpl ? Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v ?? "—"), tpl) : "";
+export { fmt };
 
 export const t = (key, vars) => fmt(DICTS[lang][key] ?? key, vars);

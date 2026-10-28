@@ -1,12 +1,10 @@
 """
-Client d'export Finviz Elite (Epic 13) — source OPTIONNELLE de la Passe B.
+Client d'export Finviz Elite (Epic 13).
 
 Une requête HTTP authentifiée rend l'export CSV du screener (une ligne par titre de
 l'univers filtré, ~70 colonnes). `snapshot()` le parse en un dictionnaire par ticker
-dont les CLÉS SONT CELLES DU `.info` yfinance lues par `screener_backend.enrich_ticker` :
-la Passe B lit donc un instantané au lieu d'appeler Yahoo titre par titre, sans qu'une
-seule ligne du corps de l'enrichissement change (branché au Sprint 2 —
-`FILTERS["enrich_source"]`, défaut du code : Yahoo).
+dont les clés sont celles du `.info` yfinance (contrat hérité de la Passe B, supprimée
+par l'Epic 15 S2 ; le Sprint 3 y lira capitalisation et liquidité).
 
 L'Epic 14 S1 élargit la lecture de la MÊME requête, sans en ajouter aucune :
   - trésorerie et dette absolues RECONSTRUITES depuis les colonnes par action
@@ -19,8 +17,7 @@ L'Epic 14 S1 élargit la lecture de la MÊME requête, sans en ajouter aucune :
 Deux invariants tiennent tout le module :
 
   - **Jamais fatal.** Jeton absent, réseau muet, CSV illisible, cellule vide : `None`
-    (ou un champ à `None`), jamais une exception. Le clapet de la Passe B s'appuie
-    là-dessus pour retomber sur le chemin Yahoo dans le même scan.
+    (ou un champ à `None`), jamais une exception.
   - **Le jeton ne sort jamais.** Il vit dans `config/local.yml` (gitignoré), le code
     n'a pas de défaut, et aucun journal n'imprime l'URL ni le message d'une exception
     réseau — `requests` recopie l'URL complète dans le sien.

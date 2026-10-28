@@ -10,7 +10,7 @@ Deux vérifications, sur les fichiers VERSIONNÉS (`git ls-files`) :
      - passe par motifs (toujours) : formes reconnaissables des jetons utilisés par le
        projet. Elle tourne même sans `.env` — sur une machine tierce ou en intégration,
        où la passe locale n'a rien à comparer.
-  2. **`.env.example` documente les NOMS** des deux variables d'export, sans valeurs.
+  2. **`.env.example` documente les NOMS** des deux variables Telegram, sans valeurs.
 
 Ce script est lui-même versionné : il ne contient donc aucune valeur, il les lit à
 l'exécution. Il n'imprime JAMAIS ce qu'il trouve — seulement le fichier, la ligne et le
@@ -30,8 +30,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env"
 EXAMPLE_FILE = ROOT / ".env.example"
 
-# Variables dont le fichier d'exemple doit porter le nom, sans valeur (Epic 11 S2).
-REQUIRED_NAMES = ("NOTION_API_KEY", "NOTION_RESULTS_DB_ID")
+# Variables secrètes dont le fichier d'exemple doit porter le nom, sans valeur.
+REQUIRED_NAMES = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
 
 # Formes reconnaissables des jetons du projet — jamais une valeur, seulement une forme.
 TOKEN_PATTERNS = {
