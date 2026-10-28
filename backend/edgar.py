@@ -1,14 +1,14 @@
 """
 SEC EDGAR — dépôts officiels : dilution, retard de dépôt, continuité d'exploitation, cash
-runway, catalyseurs 8-K (`survival_signals`) et achats nets d'insiders (Form 4, Sprint 5).
+runway, catalyseurs 8-K (`survival_signals`). Le client (User-Agent, débit, cache) sert aussi
+la détection des publications de résultats (`earnings.py`, Epic 15 S3).
 
-Remplace le « % de détention d'insiders » (statique, non daté, non backtestable) par les
-« achats nets en marché ouvert sur les 3-6 derniers mois » (vrai signal « l'argent informé
-accumule » — gratuit, DATÉ, donc backtestable point-in-time au Sprint 6).
+Les achats nets d'insiders (Form 4) ont été retirés à l'Epic 15 S3 : sans avantage net hors
+nano sur le lac ta-patterns, plus aucun appelant.
 
 Conformité SEC stricte :
   - User-Agent identifiant (email réel) via env EDGAR_USER_AGENT — SINON désactivé (pas de 403).
-  - ≤ 10 requêtes/s (throttle global, verrou partagé entre threads de la Passe B).
+  - ≤ 10 requêtes/s (throttle global, verrou partagé entre threads).
   - Cache local (data/edgar_cache/) : une soumission a un TTL ; un FILING (immuable) n'est
     JAMAIS re-téléchargé.
 
@@ -22,7 +22,6 @@ import time
 import threading
 from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
-import xml.etree.ElementTree as ET
 
 import requests
 
@@ -55,10 +54,8 @@ _cik_map_lock = threading.Lock()
 
 # Mémos EN MÉMOIRE des ARTEFACTS PARSÉS par CIK — évitent de re-parser à chaque date de l'étude
 # walk-forward (60 dates × 2519 tickers). Le filtrage point-in-time se fait ensuite en mémoire.
-# CRUCIAL pour la perf : sans ça, l'étude re-parse ~40 Form 4 XML par (ticker × date) → des heures.
 _pit_lock = threading.Lock()
 _subs_memo: dict[str, tuple | None] = {}     # cik10 -> (forms, accs, fdates, docs)
-_tx_memo: dict[str, list[dict] | None] = {}  # cik10 -> transactions Form 4 P/S (datées + filed)
 _facts_memo: dict[str, dict] = {}            # cik10 -> facts us-gaap
 _gc_memo: dict[str, bool] = {}               # accession -> « substantial doubt » (doc parsé une fois)
 
@@ -67,7 +64,6 @@ def reset_pit_memos() -> None:
     """Vide les mémos point-in-time (isolation des tests ; sans effet en production)."""
     with _pit_lock:
         _subs_memo.clear()
-        _tx_memo.clear()
         _facts_memo.clear()
         _gc_memo.clear()
 
@@ -164,71 +160,6 @@ def _load_cik_map() -> dict[str, int] | None:
 
 
 # ---------------------------------------------------------------------------
-# Parsing Form 4
-# ---------------------------------------------------------------------------
-
-def _num(text: str | None) -> float | None:
-    if text is None:
-        return None
-    try:
-        return float(str(text).strip())
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_form4(xml_text: str) -> list[dict]:
-    """
-    Extrait les transactions NON dérivées en marché ouvert d'un Form 4 :
-      - code « P » = achat en marché ouvert, code « S » = vente en marché ouvert.
-    Ignore explicitement A (grant/award), M (exercice d'option), F (retenue fiscale), G (don)…
-    Retourne [{date, code, shares, price, value}].
-    """
-    out: list[dict] = []
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
-        return out
-    for tx in root.iterfind(".//nonDerivativeTransaction"):
-        code = (tx.findtext("./transactionCoding/transactionCode") or "").strip()
-        if code not in ("P", "S"):
-            continue
-        date = (tx.findtext("./transactionDate/value") or "").strip()
-        shares = _num(tx.findtext("./transactionAmounts/transactionShares/value"))
-        price = _num(tx.findtext("./transactionAmounts/transactionPricePerShare/value"))
-        if shares is None or price is None:
-            continue
-        out.append({"date": date, "code": code, "shares": shares,
-                    "price": price, "value": shares * price})
-    return out
-
-
-def _filing_xml(cik: int, accession: str, doc: str) -> str | None:
-    """XML d'un Form 4. Un filing est IMMUABLE → cache permanent (jamais re-téléchargé)."""
-    name = f"form4_{accession.replace('-', '')}.xml"
-    cached = _read_cache(name, None)  # TTL None = jamais périmé
-    if cached is not None:
-        return cached
-    # `primaryDocument` porte souvent le préfixe de RENDU XSL (ex. "xslF345X06/wk-form4_x.xml")
-    # qui pointe vers la version HTML humaine ; le XML BRUT est au nom nu (dernier segment).
-    raw_doc = doc.split("/")[-1]
-    url = _ARCHIVE_DOC.format(cik=cik, acc_nodash=accession.replace("-", ""), doc=raw_doc)
-    resp = _get(url)
-    if resp is None:
-        return None
-    text = resp.text
-    # Garde-fou : ne JAMAIS mettre en cache une page HTML rendue (empoisonnerait le cache
-    # permanent). On n'accepte qu'un vrai document ownership XML.
-    if "<ownershipDocument" not in text:
-        return None
-    _write_cache(name, text)
-    return text
-
-
-# ---------------------------------------------------------------------------
-# Achats nets d'insiders
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Signaux de SURVIE (Epic 3 S2) — la queue gauche que le prix ne voit pas
 # ---------------------------------------------------------------------------
 
@@ -248,7 +179,7 @@ _CATALYST_PREFIX = "8-K"
 def _doc_text(cik: int, accession: str, doc: str) -> str | None:
     """Texte du document primaire d'un filing (IMMUABLE → cache permanent). Générique.
 
-    Comme pour le Form 4, `primaryDocument` peut porter un préfixe de rendu XSL : on vise le
+    `primaryDocument` peut porter un préfixe de rendu XSL (« xslF345X06/… ») : on vise le
     nom nu (dernier segment). Jamais fatal ; None si indisponible.
     """
     raw = doc.split("/")[-1]
@@ -286,37 +217,6 @@ def _recent(cik10: str) -> tuple | None:
     with _pit_lock:
         _subs_memo[cik10] = out
     return out
-
-
-def _form4_transactions(cik: int, cik10: str) -> list[dict] | None:
-    """
-    TOUTES les transactions Form 4 (P/S) d'un émetteur, parsées UNE fois et mémoïsées (chacune
-    porte sa `date` de transaction ET sa `filed` de dépôt). Le point-in-time (filed ≤ as_of) et la
-    fenêtre (date ≥ cutoff) sont appliqués APRÈS, en mémoire, par `net_insider_buying`.
-    """
-    with _pit_lock:
-        if cik10 in _tx_memo:
-            return _tx_memo[cik10]
-    rec = _recent(cik10)
-    txs: list[dict] | None = None
-    if rec is not None:
-        forms, accs, fdates, docs, _ = rec
-        txs = []
-        parsed = 0
-        for form, acc, fdate, doc in zip(forms, accs, fdates, docs):
-            if form != "4":
-                continue
-            if parsed >= FILTERS["edgar_max_filings"]:
-                break
-            xml = _filing_xml(cik, acc, doc)
-            parsed += 1
-            if xml is not None:
-                for t in _parse_form4(xml):
-                    t["filed"] = fdate
-                    txs.append(t)
-    with _pit_lock:
-        _tx_memo[cik10] = txs
-    return txs
 
 
 def _facts(cik10: str) -> dict:
@@ -423,7 +323,7 @@ def survival_signals(ticker: str, now: datetime | None = None,
 
     Booléens : filing absent → False (pas de mauvaise nouvelle), jamais None pour « donnée
     manquante ». None UNIQUEMENT si EDGAR est indisponible / désactivé / ticker inconnu
-    (neutre, ne pénalise pas — même contrat que `net_insider_buying`).
+    (neutre, ne pénalise pas).
     """
     if not _USER_AGENT:
         return None
@@ -498,49 +398,4 @@ def survival_signals(ticker: str, now: datetime | None = None,
         "catalyst_8k_date": catalyst_date,
         "cash_runway": _cash_runway(cik10, as_of),   # mois de trésorerie restants (XBRL, point-in-time)
         "window_days": window_days, "cutoff": cutoff, "as_of": as_of,
-    }
-
-
-def net_insider_buying(ticker: str, window_days: int | None = None,
-                       now: datetime | None = None) -> dict | None:
-    """
-    Somme nette des achats en marché ouvert (Σ P − Σ S, en $) sur `window_days`, filtrée par
-    transactionDate (daté → réutilisable point-in-time au Sprint 6).
-
-    Retourne un dict daté OU None si EDGAR est indisponible / désactivé / le ticker est inconnu
-    (None = neutre, ne pénalise pas). Un ticker CONNU sans transaction dans la fenêtre renvoie
-    net_buying=0.0 (signal réel « pas d'achat »), pas None.
-    """
-    if not _USER_AGENT:
-        return None
-    window_days = window_days or FILTERS["insider_window_days"]
-    now = now or datetime.now(tz=timezone.utc)
-    as_of = now.date().isoformat()
-    cutoff = (now - timedelta(days=window_days)).date().isoformat()
-
-    cik_map = _load_cik_map()
-    if not cik_map:
-        return None
-    cik = cik_map.get(ticker.upper())
-    if cik is None:
-        return None  # ticker absent d'EDGAR → neutre
-
-    cik10 = f"{cik:010d}"
-    txs = _form4_transactions(cik, cik10)   # TOUTES les transactions, parsées 1× et mémoïsées
-    if txs is None:
-        return None
-
-    # Point-in-time + fenêtre appliqués EN MÉMOIRE : dépôt ≤ as_of (pas de look-ahead) ET
-    # transactionDate ≥ cutoff (dans la fenêtre).
-    inwin = [t for t in txs
-             if t.get("filed", "") <= as_of and t["date"] and t["date"] >= cutoff]
-    buys = sum(t["value"] for t in inwin if t["code"] == "P")
-    sells = sum(t["value"] for t in inwin if t["code"] == "S")
-    return {
-        "ticker": ticker.upper(), "cik": cik,
-        "net_buying": buys - sells, "buy_dollars": buys, "sell_dollars": sells,
-        "n_buys": sum(1 for t in inwin if t["code"] == "P"),
-        "n_sells": sum(1 for t in inwin if t["code"] == "S"),
-        "window_days": window_days, "cutoff": cutoff, "as_of": now.isoformat(),
-        "transactions": inwin,  # datées → point-in-time (Sprint 6)
     }
