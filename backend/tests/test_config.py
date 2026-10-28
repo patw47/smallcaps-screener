@@ -116,10 +116,13 @@ def test_les_sections_supprimees_sont_refusees(tmp_path):
             sb.load_local_config(path=f, filters=_fresh_filters())
 
 
-def test_la_config_locale_reelle_se_charge():
+def test_la_config_locale_reelle_se_charge(monkeypatch):
     """Le config/local.yml réel passe la config du code (sinon le backend ne démarre pas,
     incident du S1). Lancé avec CONFIG_FILE=$PWD/config/local.yml ; sauté sans lui."""
     path = sb.CONFIG_FILE
     if not path.exists():
         pytest.skip(f"{path} absent")
     sb.load_local_config(path=path, filters=_fresh_filters())
+    import earnings
+    monkeypatch.setitem(earnings.CFG, "tiers", [])
+    earnings.load_config(path)          # section `earnings:` lue par son module (tiers connus)

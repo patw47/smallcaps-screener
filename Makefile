@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge i18n-parity check-i18n check-jargon build-frontend docs-build docs-check check-runtime check-secrets test-frontend study-earnings study-earnings-verdict
+.PHONY: test test-config check-edge i18n-parity check-i18n check-jargon build-frontend docs-build docs-check check-runtime check-secrets test-frontend study-earnings study-earnings-verdict earnings earnings-parity
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -78,3 +78,18 @@ study-earnings:
 # Verdict seul, depuis les sorties de study-earnings (aucune mesure relancée).
 study-earnings-verdict:
 	cd backend && $(PY) -B -u -m study.earnings --config ../config/local.yml --step verdict
+
+# Détection live (Epic 15 S3) : publications d'une séance (défaut : la précédente) avec SUE,
+# quintile et date d'entrée. SESSION=AAAA-MM-JJ pour une autre séance. Réseau EDGAR
+# (EDGAR_USER_AGENT lu dans .env) et export Finviz (config/local.yml).
+EDGAR_UA = $(shell sed -n 's/^EDGAR_USER_AGENT=//p' .env 2>/dev/null | tr -d '"')
+earnings:
+	cd backend && EDGAR_USER_AGENT="$(EDGAR_UA)" CONFIG_FILE=$(CURDIR)/config/local.yml \
+		DATA_DIR=$(CURDIR)/data python3 earnings.py $(if $(SESSION),--session $(SESSION))
+
+# Parité avec ta-patterns (Epic 15 S3) : SUE et quintile de backend/earnings.py contre
+# events.parquet du lac, publications de YEAR (défaut 2025). Venv Windows (pyarrow) ;
+# WSLENV transmet l'agent EDGAR et le répertoire de données (bornes en cache).
+earnings-parity:
+	cd backend && EDGAR_USER_AGENT="$(EDGAR_UA)" DATA_DIR=$(CURDIR)/data \
+		WSLENV=EDGAR_USER_AGENT:DATA_DIR/p $(PY) -B -u -m study.sue_parity --config ../config/local.yml $(if $(YEAR),--year $(YEAR))
