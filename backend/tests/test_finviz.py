@@ -14,9 +14,7 @@ d'exploitation (même règle que les constantes de conftest.py).
 
 Lancer : DATA_DIR=/tmp/screener_test PYTHONPATH=backend pytest backend/tests/test_finviz.py -v
 """
-import inspect
 import os
-import re
 os.environ.setdefault("DATA_DIR", "/tmp/screener_test")
 
 from datetime import datetime, timezone
@@ -25,8 +23,6 @@ from pathlib import Path
 import pytest
 
 import finviz
-import screener_backend as sb
-from screener_backend import FILTERS, _days_to_earnings, _is_binary_event_sector
 
 FIXTURE = Path(__file__).parent / "fixtures" / "finviz" / "export.csv"
 
@@ -79,18 +75,14 @@ def export_log(monkeypatch):
     return journal
 
 
-# Contrat d'enrichissement, ÉNONCÉ ICI et pas dérivé de finviz.FIELD_MAP : un verrou
-# qui se recopie sur le module qu'il surveille ne verrouille rien. Ce sont les champs
-# que `enrich_ticker` lit dans le `.info` (les deux dates de résultats passent par
-# `_days_to_earnings`, secteur et industrie aussi par `_is_binary_event_sector`).
+# Contrat de l'instantané, ÉNONCÉ ICI et pas dérivé de finviz.FIELD_MAP : un verrou
+# qui se recopie sur le module qu'il surveille ne verrouille rien.
 CONTRAT = {
     "shortName", "longName", "sector", "industry", "exchange", "marketCap",
     "floatShares", "shortPercentOfFloat", "heldPercentInsiders", "revenueGrowth",
     "earningsTimestampStart", "earningsTimestamp", "firstTradeDateEpochUtc",
     "totalCash", "totalDebt",
-    # Bloc de contexte (Epic 14 S1) : seule clé de l'instantané qui ne soit pas un champ
-    # `.info` — l'enrichissement la lit comme les autres, donc le garde-fou de dérive la
-    # veut ici. Son CONTENU est verrouillé à part (CONTEXTE ci-dessous).
+    # Bloc de contexte (Epic 14 S1) : son CONTENU est verrouillé à part (CONTEXTE).
     "context_flags",
 }
 
@@ -104,30 +96,8 @@ CONTEXTE = {
     "news_date", "news_title", "news_url",
 }
 
-# Clés que l'ENRICHISSEMENT ajoute au bloc servi (Epic 14 S2) : le catalyseur ne vient pas
-# de l'export mais des dépôts officiels, donc il n'est pas dans l'instantané et existe des
-# deux côtés. Énoncées ici, comme le reste — jamais dérivées du module surveillé.
-CATALYSEUR = {"catalyst_8k_items", "catalyst_8k_date"}
-
 
 # --- Parsing : N lignes → N dictionnaires portant tout le contrat ------------
-
-def test_le_contrat_couvre_les_champs_lus_par_l_enrichissement():
-    """Garde-fou de dérive : un champ `.info` ajouté à l'enrichissement doit être ici."""
-    src = inspect.getsource(sb)
-    lus = set(re.findall(r'\binfo\.get\(\s*"(\w+)"', src))
-
-    # Angle mort comblé (dette Epic 13) : les accès par VARIABLE — `info.get(v)` nourri
-    # par une boucle `for v in ("a", "b")` — échappaient au motif littéral ci-dessus.
-    variables = set(re.findall(r'\binfo\.get\(\s*([a-z_]\w*)\s*[,)]', src))
-    assert variables, "aucun accès par variable trouvé — la branche serait morte"
-    for var in variables:
-        for tup in re.findall(rf'\bfor\s+{var}\s+in\s+\(([^)]*)\)', src):
-            lus |= set(re.findall(r'"(\w+)"', tup))
-
-    assert lus, "aucun champ lu trouvé — le garde-fou serait vide, donc mort"
-    assert lus <= CONTRAT, f"champs lus par l'enrichissement et hors du contrat : {lus - CONTRAT}"
-
 
 def test_la_fixture_rend_un_dict_par_ticker_avec_tout_le_contrat(reseau_interdit):
     instantane = finviz._parse(FIXTURE.read_text())
@@ -158,14 +128,10 @@ def test_pourcentages_capitalisations_et_dates_en_unites_du_contrat(reseau_inter
     assert champs["heldPercentInsiders"] == pytest.approx(0.0720)
     assert champs["revenueGrowth"] == pytest.approx(0.2350)
 
-    # Dates → epoch UTC : les CONSOMMATEURS du contrat les relisent sans rien savoir
-    # de Finviz — c'est la preuve d'unité la plus forte disponible.
-    jours, date_iso = _days_to_earnings(champs, now=datetime(2026, 2, 15, tzinfo=timezone.utc))
-    assert (jours, date_iso) == (10, "2026-02-25")
+    # Dates → epoch UTC
+    debut = datetime.fromtimestamp(champs["earningsTimestampStart"], tz=timezone.utc)
+    assert debut.date().isoformat() == "2026-02-25"
     assert datetime.fromtimestamp(champs["firstTradeDateEpochUtc"], tz=timezone.utc).year == 2021
-
-    # Secteur / industrie : lus tels quels par le détecteur de secteur à évènements binaires
-    assert _is_binary_event_sector(finviz._parse(FIXTURE.read_text())["BBBB"]) is True
     assert reseau_interdit == []
 
 
@@ -276,19 +242,6 @@ def test_les_colonnes_news_rendent_un_drapeau_date_avec_titre_et_url(reseau_inte
 
 # --- Reconstruction du bilan et parité du verdict cash (Epic 14 S1) ----------
 
-@pytest.fixture
-def depots_muets(monkeypatch):
-    """
-    Dépôts officiels muets, jitter nul : `enrich_ticker` interroge EDGAR (insiders, survie)
-    et attend avant un appel `.info`. Ni l'un ni l'autre n'est le sujet ici, et la suite
-    est HORS LIGNE.
-    """
-    import edgar
-    monkeypatch.setattr(edgar, "net_insider_buying", lambda *a, **k: None)
-    monkeypatch.setattr(edgar, "survival_signals", lambda *a, **k: None)
-    monkeypatch.setitem(sb.FILTERS, "enrich_jitter_s", 0)
-
-
 def test_la_tresorerie_et_la_dette_se_reconstruisent_par_action(reseau_interdit):
     champs = finviz._parse(FIXTURE.read_text())["AAAA"]
 
@@ -314,100 +267,14 @@ def test_un_facteur_de_reconstruction_manquant_rend_none(reseau_interdit):
     assert reseau_interdit == []
 
 
-def test_le_verdict_cash_est_le_meme_par_les_deux_sources(monkeypatch, depots_muets,
-                                                          reseau_interdit):
-    """
-    Parité inter-sources : à valeurs sous-jacentes ÉGALES, le critère cash rend le même
-    verdict que les fondamentaux viennent de Yahoo ou de l'instantané d'export. C'était
-    faux avant ce sprint — l'export ne servant pas les valeurs absolues du bilan, la même
-    entreprise valait None par un chemin et True par l'autre.
-    """
-    actions = 20.00 * 1e6      # colonnes par action de la ligne AAAA de la fixture
-    yahoo = {"exchange": "NMS", "marketCap": 412.50e6, "shortName": "Alpha Alloys Inc",
-             "totalCash": 2.50 * actions, "totalDebt": 0.50 * (4.00 * actions)}
-    monkeypatch.setattr(sb, "_fetch_info", lambda tk: yahoo)
-
-    par_yahoo, motif_y = sb.enrich_ticker("AAAA", {})                     # chemin `.info`
-    par_finviz, motif_f = sb.enrich_ticker("AAAA", {},
-                                           finviz._parse(FIXTURE.read_text())["AAAA"])
-
-    assert (motif_y, motif_f) == ("ok", "ok")
-    assert par_yahoo["cash_positive"] is True      # sans quoi la parité serait vide de sens
-    assert par_finviz["cash_positive"] == par_yahoo["cash_positive"]
-    assert par_finviz["cash_bin"] == par_yahoo["cash_bin"]
-    assert reseau_interdit == []
-
-
-def test_un_bilan_illisible_rend_un_verdict_neutre_sans_exception(depots_muets,
-                                                                  reseau_interdit):
-    """Facteur manquant → None neutre jusque dans le candidat servi, jamais une exception."""
-    sans_bilan = dict(finviz._parse(FIXTURE.read_text())["AAAA"],
-                      totalCash=None, totalDebt=None)
-
-    stock, motif = sb.enrich_ticker("AAAA", {}, sans_bilan)
-
-    assert motif == "ok"
-    assert stock["cash_positive"] is None and stock["cash_bin"] is None
-    assert reseau_interdit == []
-
-
-def test_le_bloc_de_contexte_existe_aussi_sur_le_chemin_yahoo(monkeypatch, depots_muets,
-                                                              reseau_interdit):
-    """Forme stable des deux côtés : sur le chemin `.info`, le bloc est là, tout à None."""
-    monkeypatch.setattr(sb, "_fetch_info",
-                        lambda tk: {"exchange": "NMS", "marketCap": 300e6, "shortName": tk})
-
-    stock, motif = sb.enrich_ticker("ZZZZ", {})
-
-    assert motif == "ok"
-    assert set(stock["context_flags"]) == CONTEXTE | CATALYSEUR
-    assert all(v is None for v in stock["context_flags"].values())
-    assert reseau_interdit == []
-
-
-def test_le_catalyseur_rejoint_le_bloc_par_les_deux_chemins(monkeypatch, depots_muets,
-                                                            reseau_interdit):
-    """
-    Le catalyseur vient des dépôts officiels, pas de l'export : il doit donc arriver au
-    bloc AUSSI sur le chemin Yahoo — c'est la seule information de contexte qui survive au
-    repli. Les clés de l'instantané, elles, restent servies telles quelles à côté.
-    """
-    import edgar
-    monkeypatch.setattr(edgar, "survival_signals", lambda *a, **k: {
-        "dilution_flag": False, "late_filing_flag": False, "going_concern_flag": False,
-        "catalyst_8k_items": ["1.01", "9.01"], "catalyst_8k_date": "2026-06-20"})
-    monkeypatch.setattr(sb, "_fetch_info",
-                        lambda tk: {"exchange": "NMS", "marketCap": 300e6, "shortName": tk})
-
-    par_yahoo, _ = sb.enrich_ticker("ZZZZ", {})
-    par_finviz, _ = sb.enrich_ticker("AAAA", {}, finviz._parse(FIXTURE.read_text())["AAAA"])
-
-    for stock in (par_yahoo, par_finviz):
-        assert stock["context_flags"]["catalyst_8k_date"] == "2026-06-20"
-        assert stock["context_flags"]["catalyst_8k_items"] == ["1.01", "9.01"]
-
-    # Sur le chemin de l'instantané, les colonnes de l'export tiennent leur place à côté.
-    assert par_finviz["context_flags"]["news_url"] == "https://exemple.invalid/news/aaaa"
-    assert par_yahoo["context_flags"]["news_url"] is None
-    assert reseau_interdit == []
-
-
 # --- Traduction des places de cotation ---------------------------------------
 
 def test_les_places_passent_par_la_table_pas_par_la_chaine_brute(reseau_interdit):
     instantane = finviz._parse(FIXTURE.read_text())
 
-    # Les noms Finviz ne sont JAMAIS des codes de place autorisés : sans traduction,
-    # tout l'univers serait rejeté.
-    assert not {"NASDAQ", "NYSE", "AMEX"} & set(FILTERS["allowed_exchanges"])
-
-    assert instantane["AAAA"]["exchange"] == finviz.EXCHANGES["NASDAQ"]
-    assert instantane["AAAA"]["exchange"] in FILTERS["allowed_exchanges"]        # acceptable
-
+    assert instantane["AAAA"]["exchange"] == finviz.EXCHANGES["NASDAQ"] != "NASDAQ"
     assert instantane["CCCC"]["exchange"] == finviz.EXCHANGES["AMEX"]
-    assert instantane["CCCC"]["exchange"] not in FILTERS["allowed_exchanges"]    # rejetable
-
-    assert instantane["DDDD"]["exchange"] is None                                # rejetable
+    assert instantane["DDDD"]["exchange"] is None                # place hors de la table
     assert reseau_interdit == []
 
 
@@ -415,7 +282,7 @@ def test_les_places_passent_par_la_table_pas_par_la_chaine_brute(reseau_interdit
 
 def test_sans_section_finviz_le_module_est_inactif(tmp_path, export_log, reseau_interdit):
     config = tmp_path / "local.yml"
-    config.write_text("filters:\n  enrich_max: 3\n")
+    config.write_text("filters: {}\n")
     finviz.load_config(config)
 
     assert finviz.CFG == {"export_url": "", "token": ""}

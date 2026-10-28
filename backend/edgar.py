@@ -1,5 +1,6 @@
 """
-SEC EDGAR — achats nets d'insiders via les formulaires Form 4 (Sprint 5).
+SEC EDGAR — dépôts officiels : dilution, retard de dépôt, continuité d'exploitation, cash
+runway, catalyseurs 8-K (`survival_signals`) et achats nets d'insiders (Form 4, Sprint 5).
 
 Remplace le « % de détention d'insiders » (statique, non daté, non backtestable) par les
 « achats nets en marché ouvert sur les 3-6 derniers mois » (vrai signal « l'argent informé

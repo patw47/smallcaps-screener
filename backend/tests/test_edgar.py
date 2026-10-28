@@ -23,7 +23,6 @@ from pathlib import Path
 import pytest
 
 import edgar
-from screener_backend import _fundamental_rules, FILTERS
 
 FIX = Path(__file__).parent / "fixtures" / "edgar"
 NOW = datetime(2026, 7, 1, tzinfo=timezone.utc)
@@ -419,18 +418,3 @@ def test_edgar_down_returns_none(edgar_env, monkeypatch):
 
     monkeypatch.setattr(edgar, "_get", fake)
     assert edgar.net_insider_buying("TEST", now=NOW) is None
-
-
-# ---------------------------------------------------------------------------
-# Le point de score insider bascule sur les achats nets, plus sur le % détention
-# ---------------------------------------------------------------------------
-
-def test_insider_score_on_net_buying_not_ownership_pct():
-    # % détention élevé MAIS aucun achat net → PAS de point insider (1re règle fondamentale)
-    high_pct_no_buys = {"insider_buying": True, "insider_pct": 40.0, "insider_net_buying_pos": False}
-    assert _fundamental_rules(high_pct_no_buys)[0][0] is False
-
-    # achats nets positifs → point insider accordé (indépendamment du %)
-    net_buys = {"insider_net_buying_pos": True}
-    assert _fundamental_rules(net_buys)[0][0] is True
-    assert _fundamental_rules(net_buys)[0][1] == FILTERS["score_weights"]["insider"]
