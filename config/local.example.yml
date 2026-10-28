@@ -80,3 +80,7 @@ v5: {}
 #       regles: ""
 #       research: ""
 #       # ... (mêmes clés que v5.CFG["display"]["gloss"])
+
+# Étude Epic 15 S1 (make study-earnings) : chemin du lac ta-patterns, lu en lecture seule.
+study: {}
+#   ta_patterns_dir: /home/<user>/ta-patterns

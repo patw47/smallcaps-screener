@@ -242,9 +242,12 @@ def load_local_config(path: Path | None = None, filters: dict | None = None) -> 
             # sans cela la section serait refusée comme inconnue.
             import finviz
             finviz.load_config(path)
+        elif key == "study":
+            # Étude hors ligne (Epic 15 S1) : lue par backend/study/lake.py, rien ici.
+            pass
         else:
             raise LocalConfigError(
-                f"config locale : section inconnue '{key}' (attendu : filters, v4, v5, finviz)"
+                f"config locale : section inconnue '{key}' (attendu : filters, v4, v5, finviz, study)"
             )
 
 

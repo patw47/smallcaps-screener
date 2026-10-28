@@ -2,7 +2,7 @@
 
 TEST_ENV = DATA_DIR=/tmp/screener_test PYTHONPATH=backend
 
-.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort flag-prevalence check-snapshot-keys check-backup check-secrets proof-export test-frontend
+.PHONY: test test-config check-edge test-invariance i18n-parity check-i18n check-jargon check-criteria-coverage check-thresholds build-frontend docs-build docs-check check-runtime check-cohort flag-prevalence check-snapshot-keys check-backup check-secrets proof-export test-frontend study-earnings study-earnings-verdict
 
 test:
 	$(TEST_ENV) pytest backend/tests/
@@ -119,3 +119,16 @@ docs-build:
 
 # Gate anti-fuite rejouée sur le rendu site/ (nécessite docs-build avant).
 docs-check: check-edge
+
+# Étude SUE Q5 réalisable (Epic 15 S1) sur le lac ta-patterns, en LECTURE SEULE : chemin
+# dans config/local.yml (study.ta_patterns_dir), sorties dans data/study/ (gitignoré).
+# PY = interpréteur du venv Windows de ta-patterns (variable PY de son Makefile) : le lac
+# n'est lisible que par lui (pyarrow, norgatedata). -B : aucun __pycache__ écrit dans le lac.
+# STEP=cases|net|measure|placebo|verdict pour une étape seule (défaut : toutes, ~1 h).
+PY ?= /mnt/c/Users/ACER/ta-venv/Scripts/python.exe
+study-earnings:
+	cd backend && $(PY) -B -u -m study.earnings --config ../config/local.yml --step $(or $(STEP),all)
+
+# Verdict seul, depuis les sorties de study-earnings (aucune mesure relancée).
+study-earnings-verdict:
+	cd backend && $(PY) -B -u -m study.earnings --config ../config/local.yml --step verdict
