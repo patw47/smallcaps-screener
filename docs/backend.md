@@ -3,6 +3,8 @@
 ## Files
 
 - `backend/api.py`: FastAPI application and HTTP routes.
+- `backend/earnings.py`: live earnings releases of one session with their seasonal surprise (SUE), quintile and entry date (Epic 15 S3) — see *Earnings releases* below.
+- `backend/study/`: offline studies on the ta-patterns lake, read only (`earnings.py`: Epic 15 S1 study; `sue_parity.py`: parity of `backend/earnings.py` with the lake).
 - `backend/screener_backend.py`: market data discovery, two-pass filtering, scoring, and JSON output.
 - `backend/profiles.py`: tail-hunting profile detectors (Fusée / Phénix) — the single source of truth for the protocol v2 §3 definitions, shared by production and the study.
 - `backend/finviz.py`: Finviz Elite CSV export client — **optional Pass B source**, selected by `FILTERS["enrich_source"]` (Epic 13 S2; code default stays Yahoo, so a clone without an Elite account behaves exactly as before).
@@ -55,8 +57,7 @@ The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No m
 | `high_window` / `near_high_pct` | `252` / `0.75` | 52-week high position (informational). |
 | `float_max` | `50_000_000` | Float < 50M shares → `low_float` (score bonus). |
 | `insider_pct_min` / `revenue_growth_min` / `short_interest_high` | `5.0` / `0.10` / `15.0` | Fundamental thresholds. `insider_pct_min` is **display only** now (score uses net buying). |
-| `insider_window_days` | `180` | EDGAR Form 4: net-purchase aggregation window (3–6 months). |
-| `edgar_cache_ttl_hours` / `edgar_rate_limit_s` / `edgar_max_filings` | `24` / `0.12` / `40` | EDGAR submissions cache TTL, throttle (≤10 req/s), Form 4 parse cap per ticker. |
+| `edgar_cache_ttl_hours` / `edgar_rate_limit_s` | `24` / `0.12` | EDGAR submissions cache TTL, throttle (≤10 req/s). |
 | `scoring_mode` | `binary` | `binary` (default, ~0–8) or `continuous` (decile 0–10) — see Scoring. |
 | `score_weights` | dict | Weight of every score signal (tunable for backtesting). |
 | `allowed_exchanges` | `NMS`,`NYQ`,`NGM`,`NCM` | Accepted exchange codes (Pass B). |
@@ -393,33 +394,64 @@ decide what counts as "today's news"; that is a display call.
 > (`&t=`) and read the header row back: the export returns the requested codes **in ascending
 > order**, which is what pairs a code with its name.
 
-**Exchanges** are the one non-trivial translation: Finviz *names* markets, yfinance *codes* them and
-`FILTERS["allowed_exchanges"]` compares codes, so a raw string comparison would reject the whole
-universe. `EXCHANGES` maps `NASDAQ`/`NASD` → `NMS`, `NYSE` → `NYQ`, `AMEX`/`NYSE American` → `ASE`.
-The export does not distinguish the three NASDAQ tiers, so all of them map to the main-tier code,
-which is in the allowed set. An unknown market → `None` → rejected by the existing exchange filter,
-exactly like `AMEX` today.
+**Exchanges**: Finviz *names* markets; the `exchange` field of the contract serves short codes
+(format inherited from Pass B, removed in Epic 15 S2). `EXCHANGES` maps `NASDAQ`/`NASD` → `NMS`,
+`NYSE` → `NYQ`, `AMEX`/`NYSE American` → `ASE`. The export does not distinguish the three NASDAQ
+tiers, so all of them map to the main-tier code. An unknown market → `None`.
 
-## Insiders — net Form 4 purchases (`edgar.py`, Sprint 5)
+## EDGAR client (`edgar.py`)
 
-The scored insider signal is **net open-market purchases**, not ownership %. `net_insider_buying(ticker)`
-maps the ticker → CIK (SEC `company_tickers.json`), reads the recent filings list
-(`data.sec.gov/submissions/CIK…json`), parses each **Form 4** and sums the **open-market
-buys minus sells** (`insider_net_buying` = Σ code-`P` $ − Σ code-`S` $) over
-`insider_window_days`, filtered by **transaction date** (dated → point-in-time reusable by
-the Sprint 6 backtest). Award/option/tax codes (`A`/`M`/`F`/`G`…) are ignored.
-
-- **Score**: the insider point is awarded on `insider_net_buying_pos` (`net > 0`); the
-  continuous factor is `insider_net_buying` ($). The old `insider_pct` (`heldPercentInsiders`)
-  is **kept for display only** — no longer scored.
 - **SEC compliance**: identifying `User-Agent` from **`EDGAR_USER_AGENT` env** (email); without
-  it EDGAR is **disabled → signal `None`** (neutral, non-penalizing, scan still completes).
-  Global throttle ≤ 10 req/s. Local cache (`data/edgar_cache/`): submissions have a TTL,
-  **filings are immutable and never re-downloaded** → a second scan makes no repeat EDGAR call.
-- Called only on the enriched Pass B survivors, so cost stays bounded by the enrichment cap in
-  force (`enrich_max`, or `enrich_max_snapshot` on the snapshot path — where lifting the valve
-  multiplies EDGAR lookups accordingly; the throttle and the 24 h cache are what bound them).
-  Never fatal (wrapped in `enrich_ticker`).
+  it EDGAR is **disabled → signals `None`** (neutral). Global throttle ≤ 10 req/s
+  (`edgar_rate_limit_s`). Local cache (`data/edgar_cache/`): submissions have a TTL,
+  **filings are immutable and never re-downloaded**.
+- The net Form 4 insider purchases (`net_insider_buying`) were removed in Epic 15 S3: no net
+  advantage outside nano caps on the ta-patterns lake, and no caller left.
+
+## Earnings releases — live SUE (`earnings.py`, Epic 15 S3)
+
+`detect(session)` returns the earnings releases whose entry is decided by that session, with
+their seasonal surprise, its quintile and the entry date. `make earnings [SESSION=YYYY-MM-DD]`
+prints them (default: the previous session) with the duration.
+
+**Mechanism.** The market under-reacts to an earnings surprise and the price keeps drifting in
+the direction of the surprise for weeks (post-earnings announcement drift, Ball & Brown 1968,
+*Journal of Accounting Research* 6(2); Bernard & Thomas 1989, *JAR* 27). The surprise is
+measured without analyst estimates, against the company's own history (seasonal SUE, Bernard &
+Thomas 1990, *Journal of Accounting and Economics* 13(4)):
+
+    SUE = (EPS_q − EPS_q−4) / standard deviation of the 8 previous seasonal differences (4 at least)
+
+**Timing (variant B of the Epic 15 study).** The release (8-K item 2.02) is public first, but the
+quarter's EPS is read in XBRL, which arrives with the 10-Q / 10-K. So the trigger is the 10-Q /
+10-K that **first carries** the quarter's basic EPS (its accession is the first filing of that
+fact in companyfacts), linked to an 8-K 2.02 filed at most 90 days before (same link rule as
+the study, `study.earnings.link_eps`). Entry date = the open of the session after the first
+public close following the 10-Q acceptance (16:00 New York rule, `study.earnings.first_close`;
+NYSE calendar with fixed holidays). One event per (CIK, quarter end): a second 8-K 2.02 on a
+quarter already linked repeats a public surprise and is dropped.
+
+**Same numbers as ta-patterns.** Tags (`us-gaap:EarningsPerShareBasic`, USD/shares, durations
+80–100 days and 350–380 days), first-filed value per quarter, Q4 derived as year − Q1 − Q2 −
+Q3, and the SUE formula are ported from ta-patterns (`quarterly_eps`, `seasonal_sue`): the job
+runs without the lake.
+
+**Quintile.** Against the bounds (20/40/60/80 % quantiles) of the SUE of all 8-K 2.02 releases
+of the **previous calendar quarter** — the bounds of the quarter being published would read
+surprises published later. Releases are listed by the EDGAR full-text search (one query per
+day), EPS read in the bulk `companyfacts.zip` (one request, ~1.4 GB, deleted after use). The
+bounds are cached per quarter in `data/earnings/` (never in the repo) and recomputed weekly
+until 90 days after the previous quarter's end. The XBRL frames API was tried first: its
+values are the latest filed (not the first) and its population is every XBRL filer, not the
+releasing companies, which left too many quintiles different from the lake's.
+
+**Universe.** Capitalisation tiers listed in `config/local.yml` (`earnings.tiers`, Finviz bounds,
+nano refused; code default empty = nothing enters), market cap read in the Finviz export. No
+liquidity or price filter: none was measured.
+
+**Parity with the lake.** `make earnings-parity [YEAR=2025]` (Windows venv of ta-patterns,
+pyarrow) runs the lake's 8-K 2.02 releases and `companyfacts.zip` through this module and
+compares SUE and quintile with `events.parquet`; it exits 1 under 99 % agreement.
 
 ### 8-K catalysts, typed by item (Epic 14 S2)
 

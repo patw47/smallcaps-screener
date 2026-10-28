@@ -1,6 +1,7 @@
 """
 Vérifie que les defaults du code versionné sont NEUTRES : aucun jeton ni lien d'export
-Finviz. Plus fort qu'un grep — on importe les modules sans config
+Finviz, aucun tier dans l'univers de l'alerte (verdict privé, config locale seulement).
+Plus fort qu'un grep — on importe les modules sans config
 locale et on vérifie les valeurs effectives.
 
 Sort 0 si propre. Appelé par scripts/check_edge.sh.
@@ -16,11 +17,14 @@ os.environ.setdefault("DATA_DIR", "/tmp/screener_test")
 os.environ.pop("REQUIRE_LOCAL_CONFIG", None)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
+import earnings  # noqa: E402
 import finviz  # noqa: E402
 import screener_backend  # noqa: E402,F401  (la config du code s'importe sans overlay)
 
 errors = [f"finviz.CFG['{k}'] non vide — default non neutre"
           for k in ("export_url", "token") if finviz.CFG[k]]
+if earnings.CFG["tiers"]:
+    errors.append("earnings.CFG['tiers'] non vide — default non neutre")
 
 if errors:
     print("check-neutral-defaults ÉCHEC :")

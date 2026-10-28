@@ -17,11 +17,9 @@ import yaml
 # ---------------------------------------------------------------------------
 FILTERS = {
     # --- EDGAR : dépôts officiels (dilution, retard, continuité, cash runway) ---
-    "insider_window_days": 180,     # fenêtre d'agrégation des achats nets (Form 4)
     "survival_window_days": 180,    # fenêtre des signaux de survie EDGAR (dilution, NT)
     "edgar_cache_ttl_hours": 24,    # TTL cache des listes de filings (soumissions par CIK)
     "edgar_rate_limit_s": 0.12,     # ≥0.11 → ≤ ~9 req/s (SEC exige ≤ 10 req/s)
-    "edgar_max_filings": 12,        # garde-fou : nb max de Form 4 parsés par ticker
     # --- Marqueur « cours sous le plancher de cotation » : la règle de la place de
     # cotation ne mord qu'après une SÉRIE CONSÉCUTIVE sous le plancher.
     "sub_dollar_price": 1.0,        # plancher de cotation (USD)
@@ -79,12 +77,13 @@ def load_local_config(path: Path | None = None, filters: dict | None = None) -> 
             # inconnue y est IGNORÉE). Enregistrée ici, sinon refusée comme inconnue.
             import finviz
             finviz.load_config(path)
-        elif key == "study":
-            # Étude hors ligne (Epic 15 S1) : lue par backend/study/lake.py, rien ici.
+        elif key in ("study", "earnings"):
+            # Lues par leur module (backend/study/lake.py, backend/earnings.py) : `earnings`
+            # importe ce module, l'importer ici serait circulaire.
             pass
         else:
             raise LocalConfigError(
-                f"config locale : section inconnue '{key}' (attendu : filters, finviz, study)"
+                f"config locale : section inconnue '{key}' (attendu : filters, finviz, study, earnings)"
             )
 
 

@@ -155,7 +155,7 @@ def _timestamp(raw) -> float | None:
 
 
 def _exchange(raw) -> str | None:
-    """Nom de place Finviz → code de place yfinance, via EXCHANGES. Inconnue → None."""
+    """Nom de place Finviz → code court, via EXCHANGES. Inconnue → None."""
     txt = _text(raw)
     return None if txt is None else EXCHANGES.get(txt.upper())
 
@@ -170,14 +170,14 @@ def _bool(raw) -> bool | None:
 # Table de correspondance — SOURCE UNIQUE (documentée dans docs/backend.md)
 # ---------------------------------------------------------------------------
 
-# Finviz nomme les places de cotation, yfinance les code (`FILTERS["allowed_exchanges"]`
-# compare des codes). L'export ne distingue pas les trois compartiments NASDAQ : tous
-# rendent le code du compartiment principal, qui est celui des places autorisées.
+# Finviz nomme les places de cotation ; le champ `exchange` du contrat les sert en codes
+# courts (format hérité de la Passe B, supprimée à l'Epic 15 S2). L'export ne distingue pas
+# les trois compartiments NASDAQ : tous rendent le code du compartiment principal.
 EXCHANGES = {
     "NASDAQ": "NMS",
     "NASD": "NMS",
     "NYSE": "NYQ",
-    "AMEX": "ASE",            # NYSE American — hors places autorisées, comme aujourd'hui
+    "AMEX": "ASE",            # NYSE American
     "NYSE AMERICAN": "ASE",
 }
 

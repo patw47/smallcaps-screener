@@ -4,7 +4,7 @@
 #   cp config/local.example.yml config/local.yml
 #
 # Chargé au démarrage du backend s'il existe ; sans fichier, les defaults du code
-# s'appliquent. Sections autorisées : filters, finviz, study. Toute clé de `filters`
+# s'appliquent. Sections autorisées : filters, finviz, study, earnings. Toute clé de `filters`
 # absente des defaults fait échouer le démarrage (protection typo — une faute de
 # frappe ne doit jamais laisser silencieusement la valeur par défaut).
 #
@@ -22,3 +22,8 @@ finviz: {}
 # Étude Epic 15 S1 (make study-earnings) : chemin du lac ta-patterns, lu en lecture seule.
 study: {}
 #   ta_patterns_dir: /home/<user>/ta-patterns
+
+# Détection live (Epic 15 S3, backend/earnings.py) : tiers de capitalisation gardés par
+# l'étude (nano refusé). Liste vide (défaut) : aucune publication n'entre dans l'univers.
+earnings: {}
+#   tiers: []
