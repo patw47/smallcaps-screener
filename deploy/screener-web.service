@@ -1,0 +1,21 @@
+[Unit]
+Description=smallcaps-screener alerts page (read-only journal + built page, localhost only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=screener
+Group=apps
+WorkingDirectory=/opt/apps/smallcaps-screener/backend
+Environment=CONFIG_FILE=/opt/apps/smallcaps-screener/config/local.yml
+Environment=DATA_DIR=/opt/apps/smallcaps-screener/data
+# 127.0.0.1 only: the page shows the measured return (private); read it through an SSH
+# tunnel (docs/deployment.md). Nothing public until a DNS record + Traefik basicAuth exist.
+ExecStart=/opt/apps/smallcaps-screener/.venv/bin/uvicorn api:app --host 127.0.0.1 --port 8019
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

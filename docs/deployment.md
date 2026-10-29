@@ -9,6 +9,7 @@ the VPS (`ssh hetzner-vps`, UTC clock, schedules written in New York time).
 | --- | --- | --- |
 | `earnings-alert.timer` → `.service` | Mon–Fri 18:00 New York | `run_earnings.py`: releases of the last closed session (`earnings.detect`); each top-quintile release not yet in the journal → one Telegram message + one line of `data/earnings/alerts.jsonl`; journal lines whose 5 / 21 / 63-session horizon has closed get their realized return and IWM's. |
 | `earnings-bounds.timer` → `.service` | every day 03:00 New York | `run_earnings.py --bounds`: quintile bounds of the current and previous quarter, cached in `data/earnings/` (a new quarter takes 7–9 min, kept off the evening run). |
+| `screener-web.service` | always (restarted at each redeploy) | `uvicorn api:app` on `127.0.0.1:8019`: the alerts page (`frontend/dist`, built on the VPS) and its read-only route `GET /api/alerts`. |
 
 - **Why 18:00**: a 10-Q accepted before the 16:00 close has its first public close that
   day and its entry at the next open; 2 h leave the EDGAR full-text search time to index
@@ -49,15 +50,44 @@ sudo install -d -o screener -g apps -m 2770 data
 #   (same for config/local.yml, sections finviz + earnings only)
 sudo install -m 0644 deploy/earnings-*.service deploy/earnings-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now earnings-alert.timer earnings-bounds.timer
+# alerts page (Epic 15 S5)
+(cd frontend && npm install -s --no-audit --no-fund --no-package-lock && npx vite build)
+sudo install -m 0644 deploy/screener-web.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now screener-web
 ```
 
 ### Redeploy `main` (after each merge)
 
 ```bash
-ssh hetzner-vps 'cd /opt/apps/smallcaps-screener && git fetch -q origin && git checkout -q main && git reset -q --hard origin/main && .venv/bin/pip install -q -r requirements.txt && sudo install -m 0644 deploy/earnings-*.service deploy/earnings-*.timer /etc/systemd/system/ && sudo systemctl daemon-reload && git log --oneline -1 && systemctl list-timers "earnings-*" --no-pager'
+ssh hetzner-vps 'cd /opt/apps/smallcaps-screener && git fetch -q origin && git checkout -q main && git reset -q --hard origin/main && .venv/bin/pip install -q -r requirements.txt && (cd frontend && npm install -s --no-audit --no-fund --no-package-lock && npx vite build) && sudo install -m 0644 deploy/earnings-*.service deploy/earnings-*.timer deploy/screener-web.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart screener-web && git log --oneline -1 && systemctl list-timers "earnings-*" --no-pager && systemctl is-active screener-web'
 ```
 
-Nothing to restart: each timer starts a fresh process that reads the code on disk.
+The timers need no restart: each run starts a fresh process that reads the code on disk.
+`screener-web` keeps the code in memory, hence the `restart`.
+
+### Alerts page
+
+- **Source = read-only route, not a published file**: `GET /api/alerts` (`backend/api.py`)
+  reads `data/earnings/alerts.jsonl` at each request and adds, per line, the session of
+  each horizon (`exit`) so the page can tell "not yet due" from "due, no price"; `net`
+  (measured return, `config/local.yml`) comes in the same payload. A static file would
+  need a second write step in the job and still a process to serve it (Traefik serves no
+  files): no saving, one more thing to keep in sync.
+- **Who can see it**: nobody from the internet. `screener-web` listens on `127.0.0.1:8019`
+  only (no ufw rule, no Traefik router), because the page shows the measured return, which
+  is private. Read it from any machine holding the `hetzner-vps` SSH key:
+
+  ```bash
+  ssh -N -L 8019:127.0.0.1:8019 hetzner-vps    # then open http://localhost:8019
+  ```
+
+- **Public access later** (not done): the VPS Traefik (`/root/infra/traefik/dynamic/*.yml`,
+  file provider, Let's Encrypt) can route a host to `http://172.18.0.1:8019` behind a
+  `basicAuth` middleware, as `booking-concierge.yml` does. It needs an `A` record
+  (`*.code-art.ch` resolves to another host), `--host 172.18.0.1` in the unit and a ufw rule
+  `allow from 172.18.0.0/16 to any port 8019`.
+- On the workstation, `vite dev` serves the page and relays `/api` to the local backend,
+  whose journal is empty: the real journal lives only on the VPS.
 
 ### Checks
 
