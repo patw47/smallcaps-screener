@@ -38,3 +38,6 @@ data/
 
 # Double des instantanés hors du volume docker (Epic 11 S1) : des données, pas du code
 backups/
+
+# Page compilée (vite build) — construite sur le VPS, servie par backend/api.py
+frontend/dist/

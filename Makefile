@@ -57,7 +57,7 @@ build-frontend:
 # Logique JS sans DOM : `node --test`, aucune dépendance à installer — contrairement à
 # build-frontend, qui a besoin de Vite. Couvre la logique, pas le rendu de l'écran.
 test-frontend:
-	node --test frontend/i18n/fmt.test.js
+	node --test frontend/i18n/fmt.test.js frontend/journal.test.js
 
 # Docs publiques (S4) : build strict MkDocs Material.
 docs-build:
