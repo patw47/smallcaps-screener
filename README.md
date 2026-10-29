@@ -58,11 +58,12 @@ Studies* 29(1)), because testing many ideas makes t >= 2 too easy to reach by ch
   alert can earn.
 - **Entry delay**: the entry happens after the 10-Q / 10-K, days to weeks after the press
   release. Part of the drift is already gone; the measured return accounts for it.
-- **One tier**: only micro caps pass the decision rule with enough cases. Small caps are
-  not in the universe, and nano caps (illiquid, high spread) are excluded.
+- **One tier**: only micro caps pass the decision rule. Small caps have enough cases but
+  their t-statistic stays below the threshold ("not proven"), so they are not in the
+  universe; nano caps (illiquid, high spread) are excluded.
 - **Not stable over time**: variant B is negative over 2016-2020 at the 21-session horizon.
-  The decision rule does not judge by period, so there is no verdict per period: an edge
-  absent for 5 years out of 15 is accepted knowingly.
+  The decision rule does not judge by period, so there is no verdict per period. Whether an
+  edge absent for 5 years out of 15 is acceptable is an open owner decision.
 - **Realized returns are gross and short**: the journal shows simple returns from the entry
   open to the horizon close, against IWM. The "measured gain" shown beside them is another
   kind of number (gap to same-size, same-volatility stocks, net of spread); the two are not
