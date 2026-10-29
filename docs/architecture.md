@@ -2,131 +2,66 @@
 
 ## Overview
 
-SmallCaps Screener is split into two containers:
-
-- `backend`: FastAPI application and stock scanning engine.
-- `frontend`: React/Vite single-page application.
-
-Docker Compose starts both services and creates a persistent `data` volume used by the backend cache.
+SmallCaps Screener produces one alert: a top-quintile earnings surprise (SUE Q5) on micro
+caps, after the 10-Q / 10-K that carries the EPS (variant B of
+[backtest_protocol_v6.md](backtest_protocol_v6.md)). It runs on a VPS, independent of the
+workstation, and keeps a journal of what it alerted.
 
 ```text
-Browser
-  |
-  | GET /api/scan, /api/scan/force
-  v
-Frontend container :5173
-  |
-  | Vite dev proxy/runtime fetches /api/*
-  v
-Backend container :8000
-  |
-  | NASDAQ screener API (NASDAQ+NYSE+AMEX), yfinance
-  v
-External market data sources
+EDGAR (8-K 2.02, 10-Q / 10-K, companyfacts)      Finviz export (market cap)
+            \                                        /
+             v                                      v
+         backend/earnings.py  detect(session) -> SUE, quintile, entry date
+                         |
+                         v
+         backend/run_earnings.py  (systemd timer, VPS)
+            |-> Telegram message (one per new Q5 release)
+            |-> data/earnings/alerts.jsonl  (journal)
+            '-> realized return + IWM at 5 / 21 / 63 sessions (Yahoo chart API)
+                         |
+                         v
+         backend/api.py  GET /api/alerts (read only)  ->  frontend page
+                         127.0.0.1:8019, SSH tunnel only
 ```
 
-## Repository Layout
+## Repository layout
 
 ```text
-.
-├── backend/
-│   ├── api.py
-│   ├── screener_backend.py
-│   ├── backtest.py            # forward-return validation harness (control run)
-│   ├── track.py               # live performance tracking of past selections
-│   ├── tests/                 # offline unit tests
-│   ├── Dockerfile
-│   └── requirements.txt
-├── frontend/
-│   ├── src/main.jsx
-│   ├── smallcap-screener.jsx
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.js
-│   └── Dockerfile
-├── docs/
-├── docker-compose.yml
-├── requirements.txt
-├── .env.example
-└── README.md
+backend/       earnings.py, run_earnings.py, api.py, edgar.py, finviz.py, lifecycle.py,
+               alerts.py, screener_backend.py (config), study/ (lake studies), tests/
+frontend/      the alerts page (React / Vite), i18n/, journal.js
+deploy/        systemd units of the VPS (earnings-alert, earnings-bounds, screener-web)
+scripts/       gates: check-edge, check-secrets, check-jargon, i18n
+config/        local.example.yml (the real local.yml is gitignored)
+docs/          this documentation
 ```
 
-## Runtime Components
+## Components
 
-### Backend API
+- **Detection** (`earnings.py`): the 10-Q / 10-K that first carries the quarter's EPS, linked to an
+  8-K item 2.02 of the previous 90 days, one event per (CIK, period end); SUE; quintile against
+  the bounds of the previous calendar quarter; entry date. Details: [backend.md](backend.md).
+- **Job** (`run_earnings.py`): alert, dedup, journal, realized returns. One run per session.
+- **Page** (`api.py` + `frontend/`): the journal read at each request, plus the measured gain
+  from `config/local.yml`.
+- **Study** (`backend/study/`): the decision study on the ta-patterns lake, read only, run on
+  the workstation with the Windows venv of ta-patterns. It is not part of the runtime.
 
-File: `backend/api.py`
+## Data
 
-Responsibilities:
+Runtime files live in `DATA_DIR` (`/opt/apps/smallcaps-screener/data` on the VPS): the journal
+`earnings/alerts.jsonl`, the cached bounds `earnings/bounds_<quarter>.json`, `edgar_cache/`.
+Study outputs go to `data/study/`. All gitignored.
 
-- Expose the HTTP API under `/api/*`.
-- Serve cached scan results when valid.
-- Start scans in the background for force-scan requests.
-- Serialize scan status for polling.
-- Manage an in-memory custom watchlist.
+## Edge outside the repo
 
-### Screener Engine
+The kept tiers, the measured gain, the Finviz link and the lake path are in `config/local.yml`
+(gitignored); the code ships neutral defaults and `make check-edge` guards the repo.
 
-File: `backend/screener_backend.py`
+## Known trade-offs
 
-A **two-pass funnel** (see `docs/backend.md` for detail):
-
-- Discover the **complete** eligible universe dynamically (NASDAQ+NYSE+AMEX, Small+Micro cap via the NASDAQ screener API) — identical every scan, no random sampling (`max_tickers` is an optional safety cap, `None` by default).
-- **Pass A** (`analyze_prices`): batch-download OHLCV (`yf.download`) and apply **minimal** price/volume hard filters (price 2–25, 1-month perf, liquidity, and a falling-knife guard = MA50 slope ≥ 0). Compute technical signals (accumulation/OBV, ATR compression, near recent-base pivot, low extension, RS turning). RS and price>MA50 are **scoring**, not hard filters — so early setups aren't eliminated.
-- Rank survivors by a technical score (`_select_scores`, **accumulation weighted highest**) and keep the top `enrich_max` — this decides which names get the expensive `.info` call.
-- **Pass B** (`enrich_ticker`): `.info` on the top-scored survivors only (small thread pool + backoff — Yahoo rate-limits `.info`), apply market-cap/exchange filters, add fundamentals.
-- Score the whole candidate set (`_score_candidates`, 0–10, per `FILTERS["scoring_mode"]` — see `docs/backend.md`) and write results to `/app/data/screener_data.json`, sorted by `(score, rs_strength)`.
-
-`backend/backtest.py` is a separate offline harness that replays `analyze_prices` at a past as-of date and measures forward returns of survivors vs the universe (validates the price/volume signals; not wired into the live API).
-
-### Frontend App
-
-Files:
-
-- `frontend/src/main.jsx`
-- `frontend/smallcap-screener.jsx`
-
-Responsibilities:
-
-- Fetch scan results from the backend.
-- Normalize backend snake_case fields into frontend camelCase fields.
-- Score and filter stocks in the UI.
-- Render stock cards, scan statistics, filters, and optional Claude analysis.
-
-## Data Persistence
-
-The backend writes cache data to:
-
-```text
-/app/data/screener_data.json
-```
-
-In Docker Compose this path is backed by the named volume:
-
-```yaml
-volumes:
-  data:
-```
-
-The cache is valid for `FILTERS["cache_minutes"]`, currently 12 hours. A shorter window would not
-make prices fresher (the scan is daily) — it would only make every restart or page visit kick a
-full background scan through the stale-while-revalidate path.
-
-## Concurrency Model
-
-Scans **never block a request**. `GET /api/scan` is non-blocking (stale-while-revalidate): it returns a fresh cache immediately, or a stale result while kicking a background refresh, or an empty `{"stocks": [], "scanning": true}` payload on a cold start — then a background scan runs. A FastAPI startup hook warms the cache if none exists.
-
-A single background scan runs at a time, guarded by an in-flight flag (`_bg_scan_inflight`) whose check-and-set is atomic on the single-threaded event loop, plus `scan_state["scanning"]`. `POST /api/scan/force` starts a background scan **without** clearing the cache (previous results stay served meanwhile), returning `409` if one is already running. Clients poll `GET /api/scan/status` for `phase`/`progress`.
-
-A startup hook warms the cache, and a scheduler task re-scans every `SCAN_EVERY_HOURS` (default 24) — on trading days only (`SCAN_TRADING_DAYS_ONLY`, weekends skipped) — so each scan's picks are snapshotted to `data/history/` (retention: keep everything, files are tiny). `GET /api/performance` reads those snapshots to track how past selections have performed since first flagged; it is hardened to never fail (delisted tickers / data outages degrade to a well-formed empty payload).
-
-## Configuration Sources
-
-Most screener behavior is configured in the `FILTERS` dictionary in `backend/screener_backend.py`. Deployment configuration is in `docker-compose.yml`.
-
-## Known Design Tradeoffs
-
-- The custom watchlist is stored in backend memory, so it resets when the backend container restarts.
-- The frontend renders the backend `score`/`positives`/`flags` directly (the old browser-side scoring was removed).
-- The scoring mode (`binary` vs `continuous`) is not yet validated by a large backtest — it is a config flag, default `binary`.
-- Claude analysis is called directly from the browser. This should be moved behind the backend before production use.
+- The page is readable only through an SSH tunnel; public access would need DNS, Traefik and
+  basic auth ([deployment.md](deployment.md)).
+- A session whose job did not run at all (VPS down more than a day) is not replayed: the timer
+  restarts one missed run only.
+- CORS allows all origins; the API listens on loopback only, which is what protects it.

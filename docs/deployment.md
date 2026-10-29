@@ -98,167 +98,56 @@ ssh hetzner-vps 'sudo systemctl start earnings-alert.service'                   
 ssh hetzner-vps 'sudo tail -n 3 /opt/apps/smallcaps-screener/data/earnings/alerts.jsonl'
 ```
 
-## Local Docker Run
+## Local Docker run (workstation)
+
+The workstation runs only the page and an empty local API (its journal is empty: the real
+journal lives on the VPS). Ports are published on `127.0.0.1` only: the route `/api/alerts`
+serves the measured gain, which is private.
 
 ```bash
 cp .env.example .env
-docker-compose up --build
+docker compose up --build
 ```
 
-The Compose stack starts:
+| Service | Address | Description |
+| --- | --- | --- |
+| `backend` | `127.0.0.1:8000` | FastAPI (`/api/health`, `/api/alerts`), `uvicorn --reload`. |
+| `frontend` | `127.0.0.1:5173` | Vite dev server, relays `/api` to `backend`. |
 
-| Service | Port | Description |
-| --- | ---: | --- |
-| `backend` | `8000` | FastAPI API and screener engine. |
-| `frontend` | `5173` | Vite React app. |
+The backend image (`backend/Dockerfile`, `python:3.11-slim`) copies `backend/` and runs
+`uvicorn api:app`; the frontend image (`frontend/Dockerfile`, `node:20-alpine`) runs
+`npm run dev -- --host`. `docker-compose.yml` mounts the named volume `data` at `/app/data`
+and `./config` at `/app/config`.
 
-## Docker Compose
+## Private config overlay
 
-File: `docker-compose.yml`
-
-Backend:
-
-- Builds from the repository root.
-- Uses `backend/Dockerfile`.
-- Exposes port `8000`.
-- Mounts named volume `data` at `/app/data`.
-- Restarts automatically.
-
-Frontend:
-
-- Builds from `./frontend`.
-- Uses `frontend/Dockerfile`.
-- Exposes port `5173`.
-- Receives `ANTHROPIC_API_KEY` as `VITE_ANTHROPIC_API_KEY`.
-- Depends on the backend service.
-- Restarts automatically.
-
-## Backend Container
-
-File: `backend/Dockerfile`
-
-The backend image:
-
-1. Starts from `python:3.11-slim`.
-2. Sets `/app` as the working directory.
-3. Copies `requirements.txt`.
-4. Installs Python dependencies.
-5. Copies `backend/`.
-6. Runs Uvicorn with reload enabled:
-
-```bash
-uvicorn api:app --host 0.0.0.0 --port 8000 --reload
-```
-
-## Frontend Container
-
-File: `frontend/Dockerfile`
-
-The frontend image:
-
-1. Starts from `node:20-alpine`.
-2. Sets `/app` as the working directory.
-3. Copies `package.json`.
-4. Runs `npm install`.
-5. Copies the frontend source.
-6. Runs Vite dev server with host binding:
-
-```bash
-npm run dev -- --host
-```
-
-## Private config overlay (required in production)
-
-The edge values (v4/v5 frozen constants, scoring weights, display stats) are **not in
-the repo**: the backend loads them at startup from `config/local.yml` (gitignored,
-mounted via the `./config` volume — template in `config/local.example.yml`).
-
-Deployment order matters: **copy a complete `config/local.yml` onto the host BEFORE
-deploying code**, and set `REQUIRE_LOCAL_CONFIG=1` in the backend environment so a scan
-refuses to start without it — otherwise the daily scan would run on neutral values and
-pollute the live tracker's cohorts. Verify on the host: `test -f config/local.yml`.
-
-## Cache and history
-
-The scanner writes the latest results to `/app/data/screener_data.json`, and a dated
-snapshot of each scan's picks to `/app/data/history/*.json` (used by `GET /api/performance`
-to track past selections over time). Both live on the Compose named volume `data`, so they
-survive container restarts. The scheduler runs one scan per **trading day**
-(`SCAN_TRADING_DAYS_ONLY`, weekends skipped). **Retention policy: keep everything** —
-snapshots are a few KB each and a longer history makes the tracker more meaningful.
-
-Remove everything (cache + history) by deleting the volume:
-
-```bash
-docker-compose down -v
-```
-
-Or force a fresh scan without removing the volume (previous results stay served meanwhile):
-
-```bash
-curl -X POST http://localhost:8000/api/scan/force
-```
-
-## Backtest and performance tooling (offline)
-
-```bash
-# Forward-return backtest (single window; continuous vs binary score)
-docker-compose exec backend python backtest.py --n 200 --forward 63 --seed 42
-
-# Performance of past selections since first flagged
-curl http://localhost:8000/api/performance
-```
+The edge values (kept tiers, measured gain, Finviz link and token, lake path) are **not in the
+repo**: they load at startup from `config/local.yml` (gitignored, template
+`config/local.example.yml`). Copy a complete file onto the host before starting the code, and
+set `REQUIRE_LOCAL_CONFIG=1` so a start without it is refused. On the VPS the file holds the
+sections `finviz` and `earnings` only (`0600`, user `screener`).
 
 ## Environment
 
-`.env.example`:
+`.env.example` carries the variable names, never values.
 
-```text
-ANTHROPIC_API_KEY=sk-ant-your-key-here
-```
-
-| Variable | Required | Description |
+| Variable | Used by | Description |
 | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | Only for the frontend Claude button | Passed to the frontend as `VITE_ANTHROPIC_API_KEY`. The screener and API run without it. |
-| `SCAN_EVERY_HOURS` | No (default 24) | Interval between automatic background scans (history accumulation). |
-| `SCAN_TRADING_DAYS_ONLY` | No (default `true`) | Only auto-scan on trading days (Mon–Fri); skip weekends. |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | No | Breakout alerts (Sprint 3). Absent → alerting silently disabled. |
-| `EDGAR_USER_AGENT` | No | SEC Form 4 insider data (Sprint 5). Identifying UA (name + email). Absent → EDGAR disabled (neutral). |
-| `DATA_DIR` | No (default `/app/data`) | Where cache + history are written (used by tests outside the container). |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Job | Alert and failure messages. Absent: sending disabled. |
+| `EDGAR_USER_AGENT` | Job, study | SEC identifying UA (name + email). Absent: EDGAR disabled. |
+| `REQUIRE_LOCAL_CONFIG` | Backend | `1`: refuse to start without `config/local.yml`. |
+| `DATA_DIR` | Backend | Journal, bounds and caches (default `/app/data`). |
 
-## Operational Checks
-
-Health check:
+## Operational checks (workstation)
 
 ```bash
-curl http://localhost:8000/api/health
+curl http://127.0.0.1:8000/api/health
+docker compose logs -f backend
+make check-secrets     # no secret value in a versioned file
 ```
 
-Scan status:
+## Hardening checklist
 
-```bash
-curl http://localhost:8000/api/scan/status
-```
-
-Backend logs:
-
-```bash
-docker-compose logs -f backend
-```
-
-Frontend logs:
-
-```bash
-docker-compose logs -f frontend
-```
-
-## Production Hardening Checklist
-
-- Move Anthropic API calls from the browser to a backend endpoint.
-- Restrict CORS origins in `backend/api.py`.
-- Disable Uvicorn `--reload`.
-- Use a production frontend build instead of the Vite dev server.
-- Add authentication if exposing watchlist or scan controls publicly.
-- Add request timeouts and retries around external market data calls where needed.
-- Add structured logging for scan progress and rejection statistics.
-- Add tests for filter boundaries, scoring, cache behavior, and API routes.
+- Restrict CORS origins in `backend/api.py` before any public exposure.
+- Disable Uvicorn `--reload` outside development.
+- Public access to the page needs DNS, a Traefik router and basic auth (see *Alerts page*).
