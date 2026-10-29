@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL (workstation, Docker Compose, published on loopback): `http://127.0.0.1:8000`; on the
+Base URL (workstation, Docker Compose, published on loopback): `http://127.0.0.1:8010`; on the
 VPS, `http://127.0.0.1:8019` through an SSH tunnel ([deployment.md](deployment.md)). All routes
 are under `/api`. The former scan, watchlist, stock and performance routes were removed in
 Epic 15 S2.
@@ -39,5 +39,5 @@ Response:
 ## CORS
 
 The FastAPI app allows all origins, methods and headers. This is acceptable because the API
-listens on loopback only (VPS: `127.0.0.1:8019`; workstation: `127.0.0.1:8000`). Restrict it
+listens on loopback only (VPS: `127.0.0.1:8019`; workstation: `127.0.0.1:8010`). Restrict it
 before any public exposure.

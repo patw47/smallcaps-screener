@@ -111,7 +111,7 @@ docker compose up --build
 
 | Service | Address | Description |
 | --- | --- | --- |
-| `backend` | `127.0.0.1:8000` | FastAPI (`/api/health`, `/api/alerts`), `uvicorn --reload`. |
+| `backend` | `127.0.0.1:8010` (container 8000) | FastAPI (`/api/health`, `/api/alerts`), `uvicorn --reload`. |
 | `frontend` | `127.0.0.1:5173` | Vite dev server, relays `/api` to `backend`. |
 
 The backend image (`backend/Dockerfile`, `python:3.11-slim`) copies `backend/` and runs
@@ -141,7 +141,7 @@ sections `finviz` and `earnings` only (`0600`, user `screener`).
 ## Operational checks (workstation)
 
 ```bash
-curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8010/api/health
 docker compose logs -f backend
 make check-secrets     # no secret value in a versioned file
 ```
