@@ -10,8 +10,9 @@ const td = { padding: "7px 10px", borderBottom: `1px solid ${C.line}`, fontSize:
 const h2 = { fontSize: 15, margin: "0 0 10px", fontWeight: 650, textTransform: "uppercase", letterSpacing: 1.2 };
 const note = { color: C.dim, fontSize: 12, lineHeight: 1.6, margin: "8px 0 0" };
 
-const pct = (lang, v) => v == null ? "—"
-  : new Intl.NumberFormat(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2, signDisplay: "exceptZero" }).format(v) + " %";
+const num = (lang, v, sign = false) => v == null ? "—"
+  : new Intl.NumberFormat(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2, signDisplay: sign ? "exceptZero" : "auto" }).format(v);
+const pct = (lang, v) => v == null ? "—" : num(lang, v, true) + " %";
 const tone = (v) => (v == null ? undefined : v > 0 ? C.up : v < 0 ? C.down : undefined);
 
 function Risk({ risk }) {
@@ -49,7 +50,7 @@ function AlertTable({ rows, horizons, lang }) {
           <tr key={`${r.cik}-${r.period_end}`}>
             <td style={td}><a href={`https://finviz.com/quote.ashx?t=${encodeURIComponent(r.ticker)}`} target="_blank" rel="noreferrer" style={{ color: "#8fa8ff", fontWeight: 700 }}>{r.ticker}</a></td>
             <td style={td}>{r.session}</td><td style={td}>{r.entry}</td>
-            <td style={td}>{r.sue?.toFixed(2)}</td>
+            <td style={td}>{num(lang, r.sue)}</td>
             {horizons.map((h) => <td key={h} style={td}><Cell row={r} h={h} lang={lang} /></td>)}
             <td style={td}><Risk risk={r.risk} /></td>
           </tr>
