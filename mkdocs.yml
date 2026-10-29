@@ -1,5 +1,5 @@
 site_name: SmallCaps Screener
-site_description: Research dashboard for US small/micro-cap stocks — descriptive stats, no trading edge claimed.
+site_description: Post-earnings alert (SUE Q5) on US micro caps and its forward journal.
 repo_url: https://github.com/patw47/smallcaps-screener
 docs_dir: docs
 site_dir: site
@@ -24,25 +24,18 @@ markdown_extensions:
   - pymdownx.highlight
   - pymdownx.superfences
 
-# Epic 8 S6 : l'index de couverture reste versionné (il sert `make check-criteria-coverage`)
-# mais n'est pas publié. Absent de la nav, il restait atteignable à son URL directe, ce qui
-# rendait publique l'adresse de la page de référence privée qu'il cite. Il ne contient que
-# des noms de clés — c'est l'URL, pas le contenu, qui motive l'exclusion.
-exclude_docs: |
-  criteria-index.md
-
-# Allowlist explicite (Epic 6 S4) — les protocoles v4/v5 n'existent plus dans le
-# repo (Epic 6 S2), mais cette liste protège contre tout futur document sensible
-# ajouté par erreur : seuls les fichiers ci-dessous sont publiés.
+# Allowlist explicite (Epic 6 S4) : cette liste protège contre tout futur document
+# sensible ajouté par erreur ; seuls les fichiers ci-dessous sont publiés.
 nav:
   - Accueil: index.md
   - Architecture: architecture.md
-  - Backend screener & scoring: backend.md
+  - Backend: backend.md
   - API: api.md
   - Frontend: frontend.md
   - Déploiement: deployment.md
   - Glossaire: glossaire.md
   - Guide d'interface: guide_interface.md
+  - Protocole de décision v6: backtest_protocol_v6.md
   - Post-mortems:
       - Protocole v2: backtest_protocol_v2.md
       - Protocole v3: backtest_protocol_v3.md

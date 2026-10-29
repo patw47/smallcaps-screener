@@ -1,403 +1,77 @@
-# Backend Screener
+# Backend
+
+The backend has one job: the post-earnings alert (Epic 15). The former scan (two-pass
+funnel, score, Fusée / Phénix profiles, washout cohorts, performance tracker) was removed
+in Epic 15 S2; its theses and verdicts stay in
+[backtest_protocol_v2.md](backtest_protocol_v2.md) / [backtest_protocol_v3.md](backtest_protocol_v3.md).
 
 ## Files
 
-- `backend/api.py`: FastAPI application and HTTP routes.
-- `backend/earnings.py`: live earnings releases of one session with their seasonal surprise (SUE), quintile and entry date (Epic 15 S3) — see *Earnings releases* below.
-- `backend/study/`: offline studies on the ta-patterns lake, read only (`earnings.py`: Epic 15 S1 study; `sue_parity.py`: parity of `backend/earnings.py` with the lake).
-- `backend/screener_backend.py`: market data discovery, two-pass filtering, scoring, and JSON output.
-- `backend/profiles.py`: tail-hunting profile detectors (Fusée / Phénix) — the single source of truth for the protocol v2 §3 definitions, shared by production and the study.
-- `backend/finviz.py`: Finviz Elite CSV export client — **optional Pass B source**, selected by `FILTERS["enrich_source"]` (Epic 13 S2; code default stays Yahoo, so a clone without an Elite account behaves exactly as before).
-- `backend/backtest.py`: forward-return validation harness (offline analysis, not part of the live API).
-- `backend/tests/`: offline deterministic unit tests (`test_screener.py`, `test_backtest.py`).
-- `requirements.txt`: Python runtime dependencies used by the backend image.
-- `backend/Dockerfile`: backend container definition.
+- `backend/earnings.py`: live earnings releases of one session with their seasonal surprise (SUE), quintile and entry date — see *Earnings releases* below.
+- `backend/run_earnings.py`: the job (Telegram, journal, realized returns) — see *Alert job* below.
+- `backend/api.py`: FastAPI app, `GET /api/health`, `GET /api/alerts`, and the compiled page when `frontend/dist` exists.
+- `backend/finviz.py`: Finviz Elite CSV export client; the alert reads the market cap from it (universe).
+- `backend/edgar.py`: SEC/EDGAR client and the risk-file signals (dilution, late filing, going-concern doubt, cash runway).
+- `backend/lifecycle.py`: the current risk file of a ticker (`current_risk_markers`) and the once-a-day EDGAR sweep (`scan_filings`).
+- `backend/alerts.py`: `send_telegram`.
+- `backend/screener_backend.py`: `FILTERS` (EDGAR and price-marker thresholds), `DATA_DIR`, loader of `config/local.yml`.
+- `backend/study/`: offline studies on the ta-patterns lake, read only (`earnings.py`: the decision study, `lake.py`: access to the lake, `sue_parity.py`: parity of `earnings.py` with the lake) — see [backtest_protocol_v6.md](backtest_protocol_v6.md).
+- `backend/tests/`: offline deterministic tests; tests marked `lake` are skipped without the lake.
 
-## Design in one line
+## Configuration
 
-**Minimal hard filters (tradable + not a falling knife) → rank by a technical score led by accumulation → enrich the top-scored names with fundamentals.** The thesis is to catch small caps *early* (quiet accumulation / tight base, before the move), so selection is driven by **scoring**, not by strict elimination.
+`FILTERS` (`backend/screener_backend.py`) holds the thresholds of the risk file: `survival_window_days`, `edgar_cache_ttl_hours`, `edgar_rate_limit_s` (≤ 10 requests/s, SEC rule), `sub_dollar_*`, `reverse_split_window`. No magic number in the logic.
 
-> **Epic 2 — tail-hunting pivot (FAILED).** The v1 thesis above failed its pre-registered study;
-> the project pivoted to two frozen profiles (**Fusée**, **Phénix**) in
-> [backtest_protocol_v2.md](backtest_protocol_v2.md). Both FAILED Validation A (§9-§10 there).
->
-> **Epic 3 — survival-conditioned right-tail scoring (in progress).** The next thesis replaces the
-> hand-drawn profiles with an interpretable, calibrated `P(fwd63 ≥ +100 %)` model over frozen
-> price features **plus EDGAR survival signals**, validated by purged walk-forward. Binding spec:
-> [backtest_protocol_v3.md](backtest_protocol_v3.md). The v1 screener documented here stays in
-> production until v3 lands.
+`config/local.yml` (gitignored, template `config/local.example.yml`) is merged at startup over **neutral code defaults**. Allowed sections: `filters`, `finviz`, `study`, `earnings`; an unknown key or section refuses to start (typo guard). `REQUIRE_LOCAL_CONFIG=1` refuses to start without the file.
 
-## Screener Configuration
+| Section | Key | Meaning |
+| --- | --- | --- |
+| `study` | `ta_patterns_dir` | Path of the ta-patterns lake, read only. Empty: study tests are skipped. |
+| `earnings` | `tiers` | Market-cap tiers kept by the study (micro / small, nano refused). Empty (code default): nobody enters. |
+| `earnings` | `net` | Measured net return per horizon, shown in the Telegram message and on the page. Empty by default. |
+| `earnings` | `notify_empty` | `true`: a "no release" message on sessions without alert. Default `false`. |
+| `finviz` | `export_url`, `token` | Export link and token. Without a token the module is inactive. |
 
-The main configuration lives in `FILTERS` in `backend/screener_backend.py`. No magic numbers in the logic.
+`make check-edge` fails if the code, tests, docs, `scripts/`, `deploy/` or the page carry a value of `config/local.yml` or a non-neutral default.
 
-| Key | Default | Purpose |
-| --- | ---: | --- |
-| `market_cap_min_m` / `market_cap_max_m` | `50` / `2000` | Market-cap band (USD millions), Pass B hard filter. |
-| `price_min` / `price_max` | `2.0` / `25.0` | Price band (Pass A hard filter). |
-| `perf_1m_min` / `perf_1m_max` | `-0.35` / `0.25` | 1-month perf band — light "not already exploded" guard. |
-| `vol_window_short` / `vol_window_long` | `10` / `50` | Volume-ratio windows (display only; scoring uses OBV). |
-| `compression_window` / `compression_baseline` | `20` / `90` | ATR compression windows (ATR20 / ATR90). |
-| `compression_threshold` / `use_atr_compression` | `0.70` / `True` | **v1 only** raw-ratio threshold `ATR20 < 0.70 × ATR90`. |
-| `sensors_version` | `v2` | `v2` (default) or `v1` — selects compression + accumulation sensors (see Sensors v2). |
-| `compression_pct_lookback` / `compression_pct_threshold` / `compression_pct_min_obs` | `252` / `0.25` / `60` | **v2 compression**: self-percentile of ATR20/ATR90 over the stock's own history; `< 0.25` → compressed; needs ≥60 obs else neutral. |
-| `cmf_window` / `updown_vol_window` | `20` / `50` | **v2 accumulation**: Chaikin Money Flow window + up/down volume-ratio window. |
-| `cmf_pos_threshold` / `updown_ratio_min` | `0.0` / `1.0` | v2 accumulation booleans: `CMF > 0` AND up/down volume ratio `> 1`. |
-| `ma_trend_window` / `ma_slope_lookback` | `50` / `10` | Trend MA + slope lookback. |
-| `trend_require_above_ma` | `False` | Price > MA50 is **scoring**, not a hard filter (catch the start of the move). |
-| `rs_benchmark` | `IWM` | Relative-strength benchmark (Russell 2000 ETF). |
-| `rs_return_window` / `rs_line_lookback` | `63` / `21` | RS return window and RS-line slope lookback. |
-| `rs_require` | `False` | RS is **scoring**, not a hard filter (don't require "already strong"). |
-| `dollar_vol_window` / `dollar_vol_min` | `20` / `1_000_000` | Median dollar-volume liquidity floor (hard). |
-| `obv_lookback` | `21` | **v1 only** OBV-rising window → `accumulation`. |
-| `pivot_window` / `near_pivot_pct` | `50` / `0.85` | Near the high of the **recent** base → about to break out. |
-| `low_ext_pct` | `0.12` | Price ≤ MA50 × 1.12 → not extended (still early). |
-| `trigger_vol_window` / `trigger_vol_mult` | `50` / `1.5` | Breakout: today's volume > `1.5 ×` the 50-day average. |
-| `alert_dedup_days` | `5` | Telegram: no re-alert of a ticker within N days. |
-| `high_window` / `near_high_pct` | `252` / `0.75` | 52-week high position (informational). |
-| `float_max` | `50_000_000` | Float < 50M shares → `low_float` (score bonus). |
-| `insider_pct_min` / `revenue_growth_min` / `short_interest_high` | `5.0` / `0.10` / `15.0` | Fundamental thresholds. `insider_pct_min` is **display only** now (score uses net buying). |
-| `edgar_cache_ttl_hours` / `edgar_rate_limit_s` | `24` / `0.12` | EDGAR submissions cache TTL, throttle (≤10 req/s). |
-| `scoring_mode` | `binary` | `binary` (default, ~0–8) or `continuous` (decile 0–10) — see Scoring. |
-| `score_weights` | dict | Weight of every score signal (tunable for backtesting). |
-| `allowed_exchanges` | `NMS`,`NYQ`,`NGM`,`NCM` | Accepted exchange codes (Pass B). |
-| `discovery_exchanges` | `nasdaq`,`nyse`,`amex` | US exchanges queried on the NASDAQ screener API. |
-| `discovery_marketcaps` | `Small`,`Micro` | Market-cap buckets pulled per exchange. |
-| `max_tickers` | `None` | `None` → **full universe** (no sampling); `int` → optional safety cap (tests/debug). |
-| `history_period` | `1y` | OHLCV depth (needs 252 for 52w + ATR90). |
-| `enrich_max` | `150` | Cap on `.info` calls — the **top-scored** survivors are enriched. Also the bound the Finviz→Yahoo fallback reverts to. |
-| `enrich_source` | `yahoo` | Pass B fundamentals: `yahoo` (one `.info` per ticker — code default, the only path of a plain clone) or `finviz` (one export call for the whole universe, **local config only**). |
-| `enrich_max_snapshot` | `150` | Cap on the **snapshot** path. One request covers the universe, so this is a **valve** (`max_tickers` pattern): `null` in local config lifts it and every name above the cutoff is examined. The code default stays the guard. |
-| `enrich_workers` / `enrich_jitter_s` / `enrich_retries` / `enrich_backoff_s` | `2` / `0.5` / `4` / `3.0` | Pass B pool + anti-throttle backoff (Yahoo bans the IP if hammered). |
-| `cache_minutes` | `720` | Cache lifetime (12 h). Shorter buys no freshness — the scan is daily — and costs a full rescan per restart/visit. |
-| `shuffle_seed` | `None` | `int` → reproducible **download order**; `None` → random order. Never changes universe membership. |
-| `pool_mode` | `tradability` | **Epic 2**: `tradability` (default) → hard path = price ≥ `price_min` + dollar-volume ≥ `dollar_vol_min`, selection by **profile detectors**; `legacy` → the v1 funnel (`price_max`, `perf_1m` band, MA50-slope gate) for backtest reproducibility. |
-| `profiles` | dict | Cross-sectional **percentile** thresholds for Fusée / Phénix, **verbatim** from protocol v2 §3: Fusée `rs63/perf_1m ≥ P80`; Phénix `pct_52w ≤ P20`, `atr_ratio ≤ P40`, `close ≥ SMA20` (`phenix_sma_window`). Single source of truth (prod ↔ study). |
+## Alert job (`run_earnings.py`)
 
-## Ticker Discovery
+`run(session)`: takes `earnings.detect(session)`, keeps `sue_q` = 5, sends one Telegram message per release never alerted (dedup on CIK + period end, read from the journal) and appends one line to `data/earnings/alerts.jsonl`. `update_returns` fills, when 5 / 21 / 63 sessions have passed, the realized return of the stock (open of the entry day to close of the horizon day, split- and dividend-adjusted, Yahoo chart API, no key) and IWM's over the same dates. `--bounds` precomputes the quintile bounds. Any error sends a Telegram message "job failed" and exits 1. Schedule and install: [deployment.md](deployment.md).
 
-`discover_tickers()` queries the **NASDAQ screener API** across the three US exchanges
-(`nasdaq` + `nyse` + `amex`), each for the `Small` and `Micro` cap buckets, then
-deduplicates into the **complete eligible universe** (~2,000–3,000 names). The result is
-**stable from one scan to the next** — there is no random sampling. `shuffle_seed`/shuffle
-only set the *download order*, never which tickers are in the universe. `max_tickers` is
-`None` by default (no truncation); an `int` is an optional safety cap for tests/debug. A
-custom watchlist bypasses discovery.
-
-**Finviz was removed** (Sprint 1): without pagination it contributed only ~20 tickers from
-a single exchange (NASDAQ), now fully covered by the NASDAQ screener API. Discovery stays
-**dynamic** — no static ticker list.
-
-## Pass A — price/volume (`analyze_prices`)
-
-Pure function on a batch-downloaded OHLCV DataFrame (no network). The **hard filters depend on `pool_mode`** (Epic 2):
-
-| Filter | `tradability` (default) | `legacy` (v1 funnel) | Reason |
-| --- | --- | --- | --- |
-| Price floor | `close ≥ price_min` (2) | `close ≥ price_min` | `price:…` |
-| Price ceiling | — (kept as value only) | `close ≤ price_max` (25) | `price:…` |
-| 1-month perf | — (informational) | within `perf_1m_min..max` | `change_1m:…` |
-| Liquidity | median 20d dollar-volume ≥ `dollar_vol_min` | same | `liquidity:…` |
-| Falling-knife guard | — (informational) | **MA50 slope ≥ 0** | `trend:down` |
-
-In `tradability` the pool is **everything tradable** (price floor + liquidity, protocol v2 §2) and **selection is done by the profile detectors** (below), not by the funnel. `legacy` reproduces the v1 hard path for backtest regression. RS, price > MA50 and near-high are never hard filters (scoring signals); optional legacy-only gates live behind `rs_require` / `trend_require_above_ma`.
-
-Signals computed: `accumulation`, `compressed` (see Sensors v2), `near_pivot` / `pct_recent_high` (recent base), `low_ext` (near MA50), `rs_turning` / `rs_strength` / `rs_signal`, `price_above_ma50`, **`sma20`** (Phénix `close ≥ SMA20` gate), `pct_52w_high` / `near_high` (informational), `dollar_volume`, `vol_ratio`, `change_1d` / `change_1m`, the v2 diagnostics `compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`, and the **trigger** fields below.
-
-## Sensors v2 — compression & accumulation (`FILTERS["sensors_version"]`)
-
-The two pillar sensors were reworked (Sprint 4) to fix v1 defects, **without touching the
-score's weights or philosophy**. The old versions stay behind the `sensors_version` flag
-(`v2` default, `v1` for the Sprint 6 backtest comparison).
-
-- **Compression v2** (`_compression_self_pct`) — v1's raw `ATR20/ATR90 < 0.70` fired on
-  ~0.8 % of names (dead). v2 asks *"is this stock unusually quiet **relative to itself**?"*:
-  the **self-percentile** of today's ATR20/ATR90 against that ratio's own last
-  `compression_pct_lookback` (252) days — a per-stock **time series**, **not** the
-  cross-sectional percentile the continuous score already uses. `compressed` =
-  `compression_pct < 0.25`. Needs ≥ `compression_pct_min_obs` (60) observations, else neutral
-  (`None`) — recent IPOs with a near-empty distribution never raise. On a real scan it fires
-  on a non-degenerate fraction (~18 % of the price-eligible pool; lower on momentum survivors,
-  which are structurally less compressed) vs v1's ~0.8 %.
-- **Accumulation v2** (`_cmf` + `_updown_vol_ratio`) — v1's binary OBV-rising is fragile on
-  gappy names. v2 = **20-day Chaikin Money Flow** (close location within each day's range ×
-  volume) **AND** the **50-day up-day/down-day volume ratio**. Boolean `accumulation` =
-  `CMF > 0` AND `ratio > 1`; the continuous **CMF** feeds the percentile score.
-
-Continuous factors follow the active version: in v2, `f_atr_ratio` carries the compression
-**self-percentile** (lower better) and `f_accum` carries **CMF** (higher better); in v1 they
-carry the raw ATR20/ATR90 and the net directional-volume fraction. The factor **keys and
-weights are unchanged** — only the values feeding them change.
-
-## Tail-hunting profiles — Fusée & Phénix (`profiles.py`, Epic 2)
-
-`profiles.py` is the **single source of truth** for the protocol v2 §3 definitions, shared by
-production (`run_scan`, badges, alerts) and the study (Sprint 5). Thresholds live only in
-`FILTERS["profiles"]`; a dedicated test asserts they equal the protocol values verbatim.
-
-Memberships are **cross-sectional percentiles** computed per scan over the whole tradable pool
-(all Pass A survivors), so the detector needs the full population — not a per-ticker rule:
-
-- **Fusée** (momentum extreme): `rs63 ≥ P80` **AND** `perf_1m ≥ P80` (mapped to the existing
-  `rs_strength` and `change_1m` signals). Event variant `fusee_event` = member **AND** a
-  breakout `triggered` that day.
-- **Phénix** (massacred, coiling, stabilizing): `pct_52w_high ≤ P20` **AND** `atr_ratio ≤ P40`
-  **AND** `close ≥ SMA20` (the `sma20` stabilization gate).
-
-`detect_profiles(signals)` mutates each signal in place, adding `is_fusee` / `is_phenix`
-(bool), `fusee_strength` / `phenix_strength` (float | `None`, members only — the mean of the
-member percentiles, oriented so *deeper = stronger*; the boolean SMA gate is excluded per §3),
-`fusee_event`, `profiles` (list), `profile` (`"fusee"` | `"phenix"` | `"both"` | `None`) and
-`profile_strength` (max, used for ranking display). Robust to an **empty universe** and to
-**missing values** (a required field `None` → non-member). `rank_members` keeps only members,
-sorted by `profile_strength`. Membership is boolean; strength is display-only, never part of
-the pass/fail judgment.
-
-## Setup vs trigger (`_breakout`)
-
-Two distinct notions, so the screener can *watch beforehand* and *ping at departure*:
-
-- **`setup_score`** — the current score (technical + fundamental), **logic unchanged**; a
-  canonical alias of `score`. It says *"the spring is coiled"* (watchlist candidate). The
-  original `score` field is kept as-is (the current UI reads it); `setup_score` equals it.
-- **`triggered`** (bool) — the breakout is happening **now**: `close > pivot`
-  (pivot = highest High of the last `pivot_window` days, **current session excluded**)
-  **AND** today's volume `> trigger_vol_mult ×` the `trigger_vol_window`-day average volume.
-- **`days_since_trigger`** — sessions since price crossed the pivot (breakout day = `0`);
-  `None` when price is not above the pivot. `pivot_level` carries the pivot price.
-
-`_breakout` is a pure function (offline-testable). These fields ride on every Pass A signal
-set, so every candidate in the JSON/snapshots carries them.
-
-## Distress markers — measured, never applied (Epic 9 S2)
-
-Five markers, **two layers, two denominators**. They colour the dashboard
-(`scoring.RISK_FLAGS` → `survival_risk`) and are archived in the dated snapshots; **none of
-them enters selection, ranking or score** — a dedicated test fails if one ever does.
-
-| Marker | Layer | Where computed | Available on |
-|---|---|---|---|
-| `sub_dollar_flag` / `sub_dollar_days` | price | Pass A (`sub_dollar_marker`) | whole universe |
-| `reverse_split_flag` / `reverse_split_date` | price | Pass A (`_reverse_split_marker`) | whole universe |
-| `dilution_flag`, `late_filing_flag`, `going_concern_flag` | filings | Pass B (`edgar.survival_signals`) | funnel survivors |
-
-`sub_dollar_flag` is a **consecutive run**, not a touch: it needs `sub_dollar_min_days`
-uninterrupted closes below `sub_dollar_price` within `sub_dollar_window`, mirroring the
-listing rule. `sub_dollar_days` carries the run length — a raw boolean throws away the
-gravity, counting one panic afternoon like six months of drifting below the floor.
-
-Since Epic 10 S1 each served stock also carries **`risk_markers`**: the detail of the
-markers actually raised, as `{code, level, date?, days?}` entries — codes and variables
-only, translated by the frontend, never a display string built in the backend. Levels are
-data (`scoring.MARKER_LEVELS`): `high` for going concern and share consolidation, `medium`
-for upcoming issuance, `low` for late filing and sub-dollar price. A stock with no marker
-carries an **empty list**, and the aggregate `survival_risk` boolean stays served unchanged
-next to it. Dates come from data already fetched (filing dates, split date) — no extra
-network call is ever made for them.
-
-Filing markers are `None` when EDGAR is silent (unknown ticker, no User-Agent): a mute
-sensor is never counted as a healthy name. `make flag-prevalence` reports prevalence per
-layer, with a per-sector breakdown isolating biotechnology.
-
-## Telegram alerts (`alerts.py`)
-
-On each scan, `notify_new_v4_entries` and `notify_new_v5_entries` ping the names **newly
-entering the v4 / v5 cohorts**. The original Fusée-breakout alert was removed in Epic 7 S2
-(its trigger measured non-predictive; the v4 cohort alert replaced it). **Dedup**: a ticker
-is not re-notified within `alert_dedup_days` (state persisted in `data/alerts_state.json`;
-recorded **only on successful send**, so a failure/absent token retries next scan; the `v4:`
-/ `v5:` state prefixes keep the two cohorts independent). Secrets come from env only
-(`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) — **without them, alerting is silently disabled
-and the scan runs normally**. Never fatal (wrapped in `run_scan`).
-
-## Scoring — two modes (`FILTERS["scoring_mode"]`)
-
-The scoring approach is **not settled** — it is a config flag, and a larger rolling
-backtest is meant to decide it (the current small-sample backtest cannot). Both modes
-use the same weights (`FILTERS["score_weights"]`) and are computed in `_score_candidates`.
-
-- **`"binary"` (default)** — the original "checkbox" score (`_binary_score`): each signal
-  adds fixed points, normalized to 0–10. Known and conservative, but historically **caps
-  around 8** (v1 compression fired on ~1/146 names; **sensors v2 relaxes this** — compression
-  now fires on a non-degenerate fraction).
-- **`"continuous"`** — standard quant factor scoring: each factor is a **continuous** value,
-  **percentile-ranked across the candidate set** (`_rank_pct`), combined into a weighted
-  average (`_factor_composite`), then mapped to a **decile 0–10** so the best of the day's
-  pool = 10. Fixes the scale and loses no information, but its edge is **not yet validated**.
-
-Selection of which survivors get enriched follows the same mode (`_select_scores`).
-
-**Technical factors** (Pass A; `TECH_FACTORS`; used to rank which survivors get enriched):
-
-| Factor (continuous) | Weight | Direction |
-| --- | ---: | --- |
-| `f_accum` — v2: **CMF** (∈[-1,1]); v1: net directional volume fraction | 4 | higher better |
-| `f_atr_ratio` — v2: compression **self-percentile**; v1: ATR20 / ATR90 | 2 | lower better |
-| `f_pct_recent` — proximity to recent-base high | 2 | higher better |
-| `f_ext` — price/MA50 − 1 (extension) | 2 | lower better |
-| `f_rs` — relative-strength magnitude vs IWM | 2 | higher better |
-
-**Fundamental factors** (Pass B; `FUND_FACTORS`): **`insider_net_buying`** (2 — net Form 4
-purchases $, see Insiders), `cash_bin` (1), `revenue_growth` (1), `float_shares` (1, lower
-better), `short_interest_pct` (1).
-
-The two factor tables above are the **continuous-mode** factors. In continuous mode the
-final `score` is computed **cross-sectionally over the candidate set** in `run_scan` (a
-percentile needs the population). In **binary mode** (the default) the score instead comes
-from `_binary_score` (`_tech_rules` + `_fundamental_rules`, the boolean signals). Selection
-(`_select_scores`) follows the active mode. Candidates are sorted by `(score, rs_strength)`.
-
-> The backtest (`backend/backtest.py`) scores the same survivors **both ways** and prints
-> the two quartile tables side by side, so the mode can be chosen on evidence once the
-> sample is large enough. At small survivor counts the two are statistically indistinguishable.
-
-## Pass B — fundamentals (`enrich_ticker`)
-
-Hard filters: exchange, market-cap band. Fundamentals: `cash_positive` (`None` when missing — not penalized), insider net buying (see below), short interest, revenue growth, `float_shares`/`low_float`, `ipo_year`. The EDGAR layer is unchanged whatever the source: same functions, same 24 h cache, same SEC throttle — it just now applies to every enriched candidate.
-
-**Two sources, one switch (`enrich_source`, Epic 13 S2).** `enrich_ticker(ticker, signals, info=None)` does the same work either way — only where `info` comes from changes:
-
-- **`yahoo` (code default)** — `info=None` → `_fetch_info` per ticker: retries + exponential backoff on `YFRateLimitError`, small `enrich_workers` pool and per-call jitter (Yahoo rate-limits `.info` and **bans the IP** if hammered). That per-ticker cost is what `enrich_max` bounds, and what made the funnel drop everything past the cutoff as `below_cutoff` without examining it.
-- **`finviz` (local config)** — **one** export call at the start of Pass B (`finviz.snapshot()`), then each candidate reads its dict from the snapshot: **zero Yahoo fundamental call**, no jitter. Cost no longer scales with the number of candidates, so `enrich_max_snapshot` becomes a valve — `null` lifts it and `below_cutoff` disappears from this path.
-- **Fallback, never fatal** — export unreachable or snapshot empty ⇒ logged switch back to the Yahoo path **within the same scan**, back under `enrich_max` (the fallback must never fire hundreds of `.info` calls). A candidate **missing from the snapshot** gets an empty dict, i.e. the existing missing-data path (no exchange → rejected), never an exception.
-
-Logging is console-only (source, snapshot size, fallback) — none of it reaches the payload, and the served contract is identical on both paths.
+The message carries ticker, release and filing times, SUE, quintile, entry date, measured net return (from `config/local.yml`), the EDGAR risk flags and a Finviz quote link.
 
 ## Finviz export client (`finviz.py`, Epic 13)
 
 `snapshot()` fetches the Finviz Elite screener CSV export in **one authenticated request** and
-parses it into `{TICKER: {…}}` whose keys are **the yfinance `.info` keys `enrich_ticker` reads**.
-Pass B therefore reads a snapshot instead of calling Yahoo per ticker without a single line of the
-enrichment body changing (Sprint 2 wired it — see the switch above).
+parses it into `{TICKER: {…}}`. The alert reads the **market cap** (`marketCap`) from it to place
+a company in a tier (`earnings.universe`); the other mapped columns (`FIELD_MAP`, `CONTEXT_MAP`,
+`_balance_sheet`) were built for the removed scan and are no longer consumed.
 
 - **Never fatal**: missing token, dead network, unreadable CSV, empty cell → `None` (or a `None`
-  field), never an exception. The Sprint 2 fallback to the Yahoo path leans on exactly that.
-- **Token**: `finviz:` section of `config/local.yml` (gitignored), read by the module itself.
-  Code defaults are neutral (`export_url: ""`, `token: ""`) → module inactive, no request attempted.
-  The token is never printed: a network error logs the exception **type** only, because `requests`
-  copies the whole URL — hence the token — into its own message.
-- **Enabling it** (Sprint 2 registered the section, so `load_local_config` no longer rejects it):
-  add `finviz: {export_url, token}` **and** `filters: {enrich_source: finviz, enrich_max_snapshot: null}`
-  to `config/local.yml`. **Verify one known market cap against any live export before trusting a
-  new export URL** — the suffix assumption was exactly what the first real call invalidated
-  (2026-09-05): the export **API** serves `Market Cap` and `Shares Float` **in millions, without
-  suffix**, and the pre-fix parser would have read 412.5M$ as 412$, silently emptying the
-  market-cap band. `_millions` now handles both shapes (bare value → ×1e6, explicit suffix wins).
-  The check command, which never prints the token:
+  field), never an exception.
+- **Token**: `finviz:` section of `config/local.yml` (gitignored). Code defaults are neutral
+  (`export_url: ""`, `token: ""`) → module inactive, no request attempted. The token is never
+  printed: a network error logs the exception **type** only, because `requests` copies the whole
+  URL — hence the token — into its own message.
+- **Units**: the export **API** serves `Market Cap` and shares **in millions, without suffix**
+  (`_millions`: bare value × 1e6, an explicit `K`/`M`/`B`/`T` suffix wins). Percentages arrive as
+  text with `%` and become fractions; an empty cell or `-` yields `None`.
+- **Column headers** are the export API's (longer than the screen's). A header may be a tuple of
+  candidates (`_cell`): the first present in the CSV wins. A column absent from the `c=` codes of
+  `export_url` reads `None`, exactly as a wrong header would.
+- **Check a new export URL against one known market cap before trusting it** (command never prints
+  the token); a small / micro-cap universe must show a median in the **hundreds of millions** — a
+  median in the hundreds means the unit is wrong and no company would land in its tier:
 
   ```bash
-  docker compose exec -T backend python -c "import finviz, statistics; s = finviz.snapshot(); \
-    caps = [d['marketCap'] for d in (s or {}).values() if d['marketCap']]; \
-    print(len(s or {}), 'rows · median cap', f'{statistics.median(caps):,.0f}')"
+  cd backend && CONFIG_FILE=../config/local.yml DATA_DIR=/tmp/screener_test python3 -c \
+    "import finviz, statistics; s = finviz.snapshot(); \
+     caps = [d['marketCap'] for d in (s or {}).values() if d['marketCap']]; \
+     print(len(s or {}), 'rows · median cap', f'{statistics.median(caps):,.0f}')"
   ```
 
-  A small/micro-cap universe must show a median in the **hundreds of millions**. A median in the
-  hundreds means the suffix is missing and the switch must not be enabled.
-
-### Correspondence table — export column → enrichment contract
-
-Single source: `FIELD_MAP` in `backend/finviz.py`. Column headers are the **export API's** (longer
-than the screener screen's — verified live 2026-09-05). Percentages arrive as text with a `%` sign
-and become **fractions** (the contract's unit); market caps and share counts arrive **in millions
-without suffix** and become **absolute values** (an explicit `K`/`M`/`B`/`T` suffix, if ever
-present, wins); dates — earnings dates carry a session time, dropped — become **epoch seconds
-UTC** (midnight). An empty cell or `-` yields `None`.
-
-| Finviz column | Contract key (`.info`) | Normalisation |
-|---|---|---|
-| `Company` | `shortName` | text |
-| `Sector` | `sector` | text |
-| `Industry` | `industry` | text |
-| `Exchange` | `exchange` | market name → yfinance code (see below) |
-| `Market Cap` | `marketCap` | millions (or suffix) → absolute USD |
-| `Shares Float` | `floatShares` | millions (or suffix) → absolute share count |
-| `Short Float` | `shortPercentOfFloat` | `%` text → fraction |
-| `Insider Ownership` | `heldPercentInsiders` | `%` text → fraction |
-| `Sales Growth Quarter Over Quarter` | `revenueGrowth` | `%` text → fraction (quarterly YoY sales growth) |
-| `Earnings Date` | `earningsTimestampStart` | date → epoch s UTC |
-| `IPO Date` | `firstTradeDateEpochUtc` | date → epoch s UTC |
-
-Contract fields with **no direct equivalent** in the export are always present and `None` —
-neutral, never penalising (`UNMAPPED`): `longName` (the export has a single name column, served as
-`shortName`) and `earningsTimestamp` (the contract's fallback key; the primary one is enough).
-
-A column header may be given as a **tuple of candidates** (`_cell`): the first one present in the
-CSV header wins. The export API and the screener screen do not name columns alike — that mismatch
-is exactly what the first real call invalidated in Epic 13 — and an unknown header yields `None`,
-never an exception.
-
-### Balance-sheet reconstruction — cross-source cash parity (Epic 14 S1)
-
-The export carries no absolute balance-sheet values, so `totalCash` / `totalDebt` used to be
-`UNMAPPED`: `cash_positive` was `None` on the Finviz path while the Yahoo path served a verdict —
-the same company answered differently depending on the source. `_balance_sheet` rebuilds both from
-the per-share columns, restoring **parity**. This is not a flag: it can move scores, exactly as the
-Yahoo path would have.
-
-| Derived contract key | Formula | Export columns (first header present wins) |
-|---|---|---|
-| `totalCash` | cash per share × shares outstanding | `Cash Per Share` \| `Cash/sh`, `Shares Outstanding` \| `Outstanding` |
-| `totalDebt` | debt/equity × (book value per share × shares outstanding) | `Total Debt/Equity` \| `Debt/Eq`, `Book Value Per Share` \| `Book/sh`, plus the shares column |
-
-Share counts go through `_millions` (same family as `Market Cap`), the other three through
-`_number` (plain decimals). **Any missing or unreadable factor → `None`**, the module's existing
-absence pattern — `cash_positive` stays neutral, never penalising. One guard: a **negative book
-value per share** (≤ 0) yields `totalDebt = None` rather than a negative debt, which would read as
-a spotlessly healthy balance sheet.
-
-### Context flags — description only (Epic 14 S1)
-
-Extra columns of the **same request** (zero new network call), parsed into a `context_flags` block
-kept **separate from the enrichment contract** because none of them enters the score, the served
-order or list membership — the descriptive-marker pattern. `enrich_ticker` copies the block onto
-every candidate; on the Yahoo path (or for a ticker missing from the snapshot) the export-sourced
-keys are present and **`None`**, so the UI reads one stable shape on both paths. Since Epic 14 S2
-the block also carries `catalyst_8k_items` / `catalyst_8k_date`, which come from the filings rather
-than the export and are therefore populated on both paths (see the 8-K section below).
-
-| Export column (first header present wins) | `context_flags` key | Normalisation |
-|---|---|---|
-| `Insider Transactions` \| `Insider Trans` | `insider_transactions` | signed `%` → fraction |
-| `Institutional Ownership` \| `Inst Own` | `institutional_ownership` | `%` → fraction |
-| `Institutional Transactions` \| `Inst Trans` | `institutional_transactions` | signed `%` → fraction |
-| `Short Float` | `short_float` | `%` → fraction (mirrors the contract's `shortPercentOfFloat`, so the squeeze picture reads from one block) |
-| `Short Ratio` \| `Short Interest Ratio` | `short_ratio` | decimal ratio, unchanged (days to cover) |
-| `EPS Surprise` | `eps_surprise` | signed `%` → fraction |
-| `Revenue Surprise` \| `Sales Surprise` | `revenue_surprise` | signed `%` → fraction |
-| `Optionable` | `optionable` | `Yes`/`No` → bool |
-| `Shortable` | `shortable` | `Yes`/`No` → bool |
-| `News Time` \| `Latest News Date` \| `News Date` | `news_date` | timestamp → epoch s UTC, **time kept** (Epic 14 S2) |
-| `Latest News Title` \| `News Title` \| `Headline` | `news_title` | text |
-| `Latest News URL` \| `News URL` \| `News Link` | `news_url` | text |
-
-An empty cell or `-` yields `None` everywhere, and `0` stays `0` — absence and zero are not the
-same answer.
-
-News is the one date that keeps its **time of day** (`_timestamp`, i.e. `_epoch(minuit=False)`):
-a headline before the open and one at the close do not describe the same session, whereas an
-earnings date is only ever dated to the day. The backend serves the timestamp raw — it does not
-decide what counts as "today's news"; that is a display call.
-
-> **Headers verified against a live export (2026-09-05, Epic 14 close).** Thirteen of the fifteen
-> headers added by the epic matched on the first or second candidate. Two did not, both on the same
-> column: the API serves **`News Time`**, never `Latest News Date`/`News Date`, and serves it as
-> `YYYY-MM-DD HH:MM:SS`, a shape `_DATE_FORMATS` did not accept — so `news_date` was `None` twice
-> over. Both are fixed and locked by `test_les_intitules_de_l_export_api_reel_sont_lus`, whose CSV
-> carries the **API's own headers and formats**, unlike the screen-named fixture.
->
-> **A column absent from `c=` is not a wrong header.** The export only returns the columns the URL
-> asks for, so widening `FIELD_MAP`/`CONTEXT_MAP` does nothing until `export_url` in
-> `config/local.yml` asks for the matching column codes — until then every new key reads `None`
-> exactly as a typo would. The epic's columns are codes `24, 27, 28, 29, 31, 38, 73, 74, 80, 83,
-> 127, 128, 135, 136, 137` (on top of Epic 13's `1, 2, 3, 4, 6, 23, 25, 26, 30, 68, 70, 129`).
-> To re-derive them after a Finviz change, request a block of codes with a single-ticker filter
-> (`&t=`) and read the header row back: the export returns the requested codes **in ascending
-> order**, which is what pairs a code with its name.
-
-**Exchanges**: Finviz *names* markets; the `exchange` field of the contract serves short codes
-(format inherited from Pass B, removed in Epic 15 S2). `EXCHANGES` maps `NASDAQ`/`NASD` → `NMS`,
-`NYSE` → `NYQ`, `AMEX`/`NYSE American` → `ASE`. The export does not distinguish the three NASDAQ
-tiers, so all of them map to the main-tier code. An unknown market → `None`.
+**Exchanges**: `EXCHANGES` maps `NASDAQ`/`NASD` → `NMS`, `NYSE` → `NYQ`, `AMEX`/`NYSE American` →
+`ASE`; an unknown market → `None`.
 
 ## EDGAR client (`edgar.py`)
 
@@ -455,51 +129,9 @@ liquidity or price filter: none was measured.
 pyarrow) runs the lake's 8-K 2.02 releases and `companyfacts.zip` through this module and
 compares SUE and quintile with `events.parquet`; it exits 1 under 99 % agreement.
 
-### 8-K catalysts, typed by item (Epic 14 S2)
+## Risk file (`lifecycle.py`, `edgar.py`)
 
-The **8-K** is the material-event form, due within four business days — the filing that carries
-the catalysts small caps move on. `survival_signals` now also reports the most recent one in the
-window, as `catalyst_8k_date` (its filing date) and `catalyst_8k_items` (the event types, e.g.
-`["1.01", "9.01"]`). Both reach the served candidate inside `context_flags`, and neither ever
-enters the score, the served order or list membership.
-
-**Zero new request.** The event type is already in the `items` column of the recent-submissions
-list the loop walks for dilution, late filings and going concern — reading it downloads nothing,
-not even the 8-K document itself. `_recent` therefore returns `items` alongside the existing four
-columns, padded if the SEC serves it shorter than `form` (an uneven `zip` would silently truncate
-the list and lose filings). `8-K/A` amendments count as the same event (prefix match). No 8-K in
-the window → both keys `None`; an 8-K with no items → an **empty list** with its date, since a
-dated catalyst is still a catalyst.
-
-This is the one context flag that survives the Yahoo fallback: it comes from the filings, not from
-the export, so `enrich_ticker` merges it into `context_flags` on **both** paths.
-
-## Orchestration — `run_scan(tickers=None)`
-
-Discover (full universe, no sampling) → `_download_prices` → **Pass A** (tradability hard path + signals + trigger) → **`detect_profiles` over the whole tradable pool → keep profile members only, ranked by `profile_strength`** (in `legacy`: rank the whole pool by technical composite instead) → keep top `enrich_max` (on the snapshot path: `enrich_max_snapshot`, `null` = all of them) → **Pass B** (`.info` per ticker, or one export snapshot) → **`_score_candidates` (decile 0–10)** → set `setup_score` alias (kept for continuity, no longer drives selection) → sort by profile strength → write `/app/data/screener_data.json` → **`notify_new_v4_entries` / `notify_new_v5_entries`** (Telegram, best-effort). `scan_state` (`scanning`/`progress`/`total`/`phase`) is shared with `api.py`.
-
-## Output JSON
-
-Top-level: `scanned_at`, `universe_size`, `total_scanned`, `survivors_price_filter` (tradable pool), **`profile_members`**, **`pool_mode`**, `enriched`, `candidates`, `stocks`, `rejection_stats`. Each stock carries the Pass A signals plus `ticker`, `name`, `sector`, `industry`, `exchange`, `market_cap_m`, fundamentals, `score`, **`setup_score`, `triggered`, `days_since_trigger`, `pivot_level`**, the **profile fields `profile` / `is_fusee` / `is_phenix` / `fusee_event` / `fusee_strength` / `phenix_strength` / `profile_strength`**, the v2 sensor diagnostics **`compression_pct` / `atr_ratio` / `cmf` / `updown_vol_ratio`** (plus `sma20`), the insider fields **`insider_net_buying` / `insider_net_buying_pos`** (net Form 4 $, scored) and `insider_pct` / `insider_buying` (display only), `positives`, `flags`, the **context fields `binary_event` / `days_to_earnings` / `earnings_date`** (Epic 1 S7 — information only), and `catalyst_type`/`catalyst_date` (`null`). In `tradability` mode every stock is a **profile member**; non-members are absent. Snapshots (`data/history/`) also carry `setup_score` / `triggered` / `days_since_trigger` and the profile fields (for the Sprint 4 two-sleeve tracker).
-
-## Backtest harness — `backend/backtest.py`
-
-Replays `analyze_prices` at a past as-of date and compares forward returns of survivors vs
-the tested universe vs IWM, **bucketed by score quartile**, showing the continuous and the
-binary score side by side (does a higher score predict a higher forward return, and does
-one scoring beat the other?).
-
-```bash
-DATA_DIR=/tmp/bt PYTHONPATH=backend python backtest.py --n 200 --forward 63 --seed 42
-```
-
-**Honest limitations:** survivorship bias, no point-in-time fundamentals (validates
-price/volume signals only), a single as-of window. At ~14 survivors this is a control
-run, not a verdict: the backtest cannot confirm an edge or that continuous beats binary.
-
-The v1/v2/v3 study harnesses and the weight sweep were removed (Epic 7 S1) — the three
-theses failed their pre-registered studies and re-fitting is forbidden. Their verdicts
-live in `backtest_protocol_v2.md` / `_v3.md`, their code in git history.
+`edgar.survival_signals(ticker)` reads the recent submissions of the company (cache `data/edgar_cache/`, filings immutable and never re-downloaded): dilution filing (S-1 / S-3 / F-1 / F-3 / 424B), late filing (NT 10-K / 10-Q), going-concern doubt (ASC 205-40 wording), cash runway (XBRL companyfacts) and the most recent 8-K with its items. `lifecycle.current_risk_markers` turns them into **codes + level + variables** (`going_concern`, `reverse_split`, `dilution`, `late_filing`, `sub_dollar`), never display text: the page translates (`risk.*` keys). The alert passes no price series, so only the filing-based markers can appear. Information only: no marker filters an alert.
 
 ## Tests
 
@@ -508,23 +140,3 @@ DATA_DIR=/tmp/screener_test PYTHONPATH=backend python -m pytest backend/tests/
 ```
 
 Deterministic, offline. The module honors `DATA_DIR` so it imports outside the container.
-
-## Context flags (Epic 1 S7)
-
-Two flags tell the reader that a technical signal reads differently on this name. They are
-**information only** — never an exclusion, never a scoring input, never a change to the
-ordering. Both are read from the `.info` payload already fetched, so they cost **no extra
-network call** (Yahoo bans the IP on bursts — see `enrich_workers`).
-
-| Flag | Source | Meaning |
-| --- | --- | --- |
-| `binary_event` | `industry` then `sector` matched against `FILTERS["binary_event_industries"]` | Biotech / pharma: a regulatory decision or trial result moves the price tens of percent in one session, whatever the chart says. A stock-specific fall means something else here. |
-| `days_to_earnings` / `earnings_date` | `earningsTimestampStart`, then `earningsTimestamp` | Days until the next earnings date **and that date (ISO)**, both `None` when absent or past. Flagged under `FILTERS["earnings_soon_days"]`; the flag carries both — the countdown goes stale the day after the scan, the date does not. |
-
-`days_to_earnings` is **best effort**: yfinance only carries the date for part of the
-micro-cap universe. A missing date is silent — never an error, just one flag fewer. The
-count is a difference of **calendar dates**, so "three days minus two hours" reads as 3.
-
-Both flags are emitted as **codes plus variables** (`{"code": "earnings_soon", "d": 3}`) and
-translated by the frontend, like notes and statuses since Epic 8 S1. Legacy flags are still
-French sentences built here; the JSX accepts both shapes during the transition.
